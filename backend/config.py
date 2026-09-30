@@ -31,6 +31,13 @@ BENCHMARK_FILE = HOME / "benchmarks.json"
 PLANS_DIR = HOME / "plans"
 CHECKPOINT_DIR = HOME / "checkpoints"
 PID_FILE = HOME / "tacit.pid"
+PLUGINS_FILE = HOME / "plugins.json"
+PLUGINS_USER_DIR = HOME / "plugins"
+MCP_FILE = HOME / "mcp.json"
+MEMORY_DB = HOME / "memory.db"
+ADAPTERS_DIR = HOME / "adapters"
+BRIDGES_DIR = ROOT / "bridges"
+BUNDLED_PLUGINS_DIR = BACKEND_DIR / "plugins"
 
 HOST = os.environ.get("TACIT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TACIT_PORT", "8550"))
@@ -107,7 +114,8 @@ def load_env() -> None:
 
 
 def ensure_home() -> None:
-    for d in (HOME, SESSIONS_DIR, SKILLS_DIR, KNOWLEDGE_DIR, PLANS_DIR, CHECKPOINT_DIR):
+    for d in (HOME, SESSIONS_DIR, SKILLS_DIR, KNOWLEDGE_DIR, PLANS_DIR, CHECKPOINT_DIR,
+              PLUGINS_USER_DIR, ADAPTERS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     if not MODELS_FILE.exists():
         MODELS_FILE.write_text(json.dumps({"default": "", "providers": {}}, indent=2), encoding="utf-8")

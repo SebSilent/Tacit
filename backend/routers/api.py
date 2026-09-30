@@ -3,8 +3,9 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, config, hosting, skills, store, vcs
-from ..ai import engine
+from .. import agent, config, hosting, mcp_registry, memory_store, metrics, plugin_manager, skills, store, vcs
+from .. import tokens as token_mod
+from ..ai import engine, prompts
 
 router = APIRouter()
 
@@ -290,6 +291,81 @@ async def fs_mkdir(request: Request):
     except Exception as e:
         return _fail(str(e))
     return _ok(path=str(target))
+
+
+@router.get("/api/tokens/dashboard")
+async def token_dashboard(sid: str = "", project: str = ""):
+    """Local token accounting: what Tacit injects, and what it avoided.
+
+    The baseline is *our own* full-context estimate (every discovered MCP schema
+    and every enabled memory injected directly). No competitor numbers are
+    guessed — the two figures compared are both Tacit's.
+    """
+    rec = store.get(sid) if sid else None
+    base_prompt = token_mod.estimate_tokens(prompts.system_prompt(project or None, False, chat=False))
+    tools = agent.tools_for()
+    tool_tokens = token_mod.estimate_tools_tokens(tools)
+
+    mcp = mcp_registry.injection_report()
+    mem_stats = memory_store.stats(project)
+    mem_block = memory_store.startup_selection(project)
+    mem_on = plugin_manager.is_enabled("memory_vault")
+
+    dash = metrics.dashboard(
+        rec or {},
+        base_prompt_tokens=base_prompt,
+        tools=tool_tokens,
+        mcp_discovered=mcp["discovered_tokens"],
+        memory_total=mem_stats["total_tokens"],
+        mcp_injected=mcp["injected_tokens"],
+    )
+    dash["memory_enabled"] = mem_on
+    dash["memory_injected_tokens"] = mem_block["tokens"] if mem_on else 0
+    if not mem_on:
+        dash["actual_startup"] -= dash["memory_tokens"]
+        dash["memory_tokens"] = 0
+        dash["saved_by_discipline"] = max(0, dash["full_context_baseline"] - dash["actual_startup"])
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "base_prompt_tokens",
+                "tool_schema_tokens", "mcp_discovered_tokens", "mcp_injected_tokens",
+                "memory_tokens", "saved_lazy_tools", "saved_memory_budget",
+                "saved_compaction", "saved_subagent", "saved_total",
+                "full_context_baseline", "actual_startup", "saved_by_discipline"):
+        dash[key + "_display"] = token_mod.label(dash.get(key) or 0)
+    dash["exact"] = token_mod.exact()
+    dash["mcp"] = mcp
+    dash["memory"] = mem_stats
+    dash["plugins"] = plugin_manager.token_impact()
+    dash["tool_count"] = len(tools)
+    return {"ok": True, **dash}
+
+
+@router.get("/api/snapshots")
+async def snapshots(limit: int = 200):
+    from .. import extras
+    rows = extras.snapshot_index(limit)
+    total = sum(int(r.get("bytes") or 0) for r in rows)
+    return {"ok": True, "snapshots": rows, "count": len(rows), "bytes": total}
+
+
+@router.post("/api/snapshots/compare")
+async def snapshot_compare(request: Request):
+    from .. import extras
+    body = await request.json()
+    res = extras.snapshot_compare(body.get("name") or "", body.get("project") or "")
+    return res if res.get("ok") else _fail(res.get("error") or "could not compare")
+
+
+@router.post("/api/snapshots/restore")
+async def snapshot_restore(request: Request):
+    from .. import extras
+    body = await request.json()
+    name, project = body.get("name") or "", body.get("project") or ""
+    if not name or not project:
+        return _fail("name and project are required")
+    out = extras.restore(name, project)
+    if isinstance(out, str) and out.startswith("ERROR"):
+        return _fail(out)
+    return _ok(message=out, name=name, project=project)
 
 
 @router.get("/api/sessions")

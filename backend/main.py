@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, store
-from .routers import api, chat, hosting, vcs
+from . import config, mcp_registry, store
+from .routers import api, chat, dsh, hosting, mcp, memory, plugins, vcs
 
 
 @asynccontextmanager
@@ -20,6 +20,10 @@ async def lifespan(app: FastAPI):
         pass
     yield
     try:
+        mcp_registry.stop_all()
+    except Exception:
+        pass
+    try:
         if config.PID_FILE.read_text(encoding="utf-8").strip() == str(os.getpid()):
             config.PID_FILE.unlink(missing_ok=True)
     except Exception:
@@ -31,6 +35,10 @@ app.include_router(api.router)
 app.include_router(chat.router)
 app.include_router(vcs.router)
 app.include_router(hosting.router)
+app.include_router(mcp.router)
+app.include_router(plugins.router)
+app.include_router(memory.router)
+app.include_router(dsh.router)
 
 
 @app.get("/health")

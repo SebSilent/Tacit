@@ -6,7 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import benchmarks, config, extras, skills
+from . import benchmarks, config, extras, mcp_registry, metrics, plugin_manager, skills
+from . import tokens as token_mod
 from .ai import engine, prompts
 
 DENY_NAMES = {".env", "models.json"}
@@ -308,6 +309,67 @@ def run_terminal(command: str, project: str | None = None, timeout: int | None =
             "cwd": str(cwd), "shell": config.SHELL}
 
 
+# ── MCP helper tools ──────────────────────────────────────────────────────
+# These four are always available but tiny. The real MCP tool schemas are only
+# injected when the agent activates them (or the user pins them), which is what
+# keeps a busy MCP server from inflating the always-on prompt.
+
+def t_mcp_list_servers() -> str:
+    rows = mcp_registry.list_servers()
+    if not rows:
+        return ("No MCP servers configured. Add one in Settings → MCP. Its tools are "
+                "discovered but stay out of your prompt until activated.")
+    lines = []
+    for s in rows:
+        state = s["state"] + ("" if s["enabled"] else ", disabled")
+        cost = token_mod.label(s["tools_tokens"])
+        lines.append(f"- {s['id']}: {s['name']} [{state}] {s['tool_count']} tool(s), "
+                     f"{cost} tokens if all injected")
+        if s.get("error"):
+            lines.append(f"    error: {s['error']}")
+    return "\n".join(lines)
+
+
+def t_mcp_search_tools(query: str = "", limit: int = 8) -> str:
+    hits = mcp_registry.search(query, limit)
+    if not hits:
+        return "No MCP tools match that. Call mcp_list_servers to see what is connected."
+    lines = []
+    for e in hits:
+        lines.append(f"- {e['name']} [{e['server_id']}] {token_mod.label(e['tokens'])} tokens, "
+                     f"{e['danger']} risk\n  key: {e['key']}\n  {(e['description'] or '')[:200]}")
+    lines.append("\nCall mcp_call(server_id, tool_name, arguments) to use one, or "
+                 "mcp_activate_tools([key]) to make its schema callable for a few turns.")
+    return "\n".join(lines)
+
+
+def t_mcp_activate_tools(tool_keys=None, ttl_turns: int = 3) -> str:
+    if isinstance(tool_keys, str):
+        tool_keys = [tool_keys]
+    res = mcp_registry.activate(list(tool_keys or []), ttl_turns)
+    parts = [f"activated {len(res['activated'])} tool(s) for {ttl_turns} turn(s): "
+             f"{', '.join(res['activated']) or 'none'}"]
+    if res.get("unknown"):
+        parts.append(f"unknown keys: {', '.join(map(str, res['unknown']))}")
+    report = mcp_registry.injection_report()
+    parts.append(f"MCP schemas now cost {token_mod.label(report['injected_tokens'])} tokens "
+                 f"instead of {token_mod.label(report['discovered_tokens'])}.")
+    return "\n".join(parts)
+
+
+def t_mcp_call(server_id: str = "", tool_name: str = "", arguments=None,
+               confirm: bool = False) -> str:
+    if not server_id or not tool_name:
+        return "ERROR: server_id and tool_name are required"
+    res = mcp_registry.call(server_id, tool_name, arguments or {}, confirmed=bool(confirm))
+    if not res.get("ok"):
+        return f"ERROR: {res.get('error')}"
+    return _clip(res.get("result") or "", config.TOOL_OUTPUT_LIMIT)
+
+
+MCP_HELPER_NAMES = ("mcp_list_servers", "mcp_search_tools", "mcp_activate_tools", "mcp_call")
+
+
 EXECS = {
     "list_files": t_list_files,
     "read_file": t_read_file,
@@ -328,6 +390,10 @@ EXECS = {
     "benchmark": t_benchmark,
     "research": t_research,
     "skill": t_skill,
+    "mcp_list_servers": t_mcp_list_servers,
+    "mcp_search_tools": t_mcp_search_tools,
+    "mcp_activate_tools": t_mcp_activate_tools,
+    "mcp_call": t_mcp_call,
 }
 
 READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop", "restore"}
@@ -387,13 +453,26 @@ TOOLS = [
     _fn("task", "Delegate a focused investigation to a sub-agent with its own fresh context. "
                 "Use it to map or search a codebase without filling your own context — only "
                 "its report comes back.", {"prompt": _S}, ["prompt"]),
+    _fn("mcp_list_servers", "List configured MCP servers: state, tool count and what their "
+        "tools would cost if injected. Nothing is injected by default.", {}, []),
+    _fn("mcp_search_tools", "Search the tool catalogue of every connected MCP server by "
+        "intent, e.g. 'open a github issue'. Returns matches with an activation key.",
+        {"query": _S, "limit": _I}, ["query"]),
+    _fn("mcp_activate_tools", "Make MCP tools callable for a few turns by injecting their "
+        "schemas. Pass keys from mcp_search_tools. They deactivate on their own.",
+        {"tool_keys": {"type": "array", "items": _S}, "ttl_turns": _I}, ["tool_keys"]),
+    _fn("mcp_call", "Call an MCP tool. Prefer this when you already know what you need — it "
+        "costs no schema tokens. Destructive tools require confirm=true.",
+        {"server_id": _S, "tool_name": _S,
+         "arguments": {"type": "object"}, "confirm": {"type": "boolean"}},
+        ["server_id", "tool_name"]),
 ]
 
 SUBTASK = "task"
 
 
 def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
-    rows = TOOLS
+    rows = list(TOOLS)
     disabled = set(config.prefs().get("disabledTools") or [])
     if disabled:
         rows = [t for t in rows if t["function"]["name"] not in disabled]
@@ -401,6 +480,19 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
         rows = [t for t in rows if t["function"]["name"] not in READONLY_BLOCKED]
     if depth >= config.SUBAGENT_MAX_DEPTH:
         rows = [t for t in rows if t["function"]["name"] != SUBTASK]
+
+    # Extra capabilities are *appended*, never baked into the base list:
+    # plugin tools only from enabled plugins, MCP schemas only when activated or
+    # pinned (unless the user turned on direct mode). Failures here must never
+    # break an ordinary turn.
+    try:
+        rows.extend(plugin_manager.collect_tools())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        rows.extend(mcp_registry.schemas_for_prompt())
+    except Exception:  # noqa: BLE001
+        pass
     return rows
 
 
@@ -517,8 +609,20 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict):
     if name == SUBTASK:
         yield from run_subagent(args.get("prompt", ""), ctx, out)
         return
+    if name.startswith("mcp__"):
+        entry = next((e for e in mcp_registry.all_tools() if e["fn_name"] == name), None)
+        if entry is None:
+            out["result"] = f"ERROR: unknown MCP tool '{name}' — it may have deactivated"
+            return
+        res = mcp_registry.call(entry["server_id"], entry["name"], args or {})
+        out["result"] = res.get("result") if res.get("ok") else f"ERROR: {res.get('error')}"
+        return
     fn = EXECS.get(name)
     if not fn:
+        plugin_result = plugin_manager.call_tool(name, args, ctx)
+        if plugin_result is not None:
+            out["result"] = str(plugin_result)
+            return
         out["result"] = f"ERROR: unknown tool '{name}'"
         return
     if "project" not in args and "project" in inspect.signature(fn).parameters:

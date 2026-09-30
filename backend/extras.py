@@ -122,7 +122,14 @@ def snapshot(root: str, label: str = "") -> str:
         for path in src.rglob("*"):
             if not path.is_file():
                 continue
-            if any(part in config.SNAPSHOT_SKIP for part in path.parts):
+            try:
+                rel_parts = path.relative_to(src).parts
+            except ValueError:
+                continue
+            # Only the path *inside* the project counts. Testing absolute parts
+            # would skip everything whenever the project itself sat in a folder
+            # named build/ dist/ checkpoints/ …
+            if any(part in config.SNAPSHOT_SKIP for part in rel_parts):
                 continue
             if path.stat().st_size > config.SNAPSHOT_MAX_FILE:
                 continue
@@ -160,6 +167,117 @@ def list_snapshots() -> str:
         n = sum(1 for f in p.rglob("*") if f.is_file())
         out.append(f"{p.name}  {n} file(s)" + (f"  - {label}" if label else ""))
     return "\n".join(out)
+
+
+def snapshot_index(limit: int = 200) -> list[dict]:
+    """Structured snapshots for the UI timeline (the string helpers below stay
+    for the agent tools).
+
+    Each row carries what the timeline needs without re-stat'ing the tree: the
+    id, when it was taken, its label, and the files it holds.
+    """
+    root = config.CHECKPOINT_DIR
+    if not root.is_dir():
+        return []
+    dirs = sorted([p for p in root.iterdir() if p.is_dir()], reverse=True)
+    rows = []
+    for path in dirs[:max(1, min(int(limit or 200), 1000))]:
+        label = ""
+        try:
+            label = (path / ".label").read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001
+            label = ""
+        files, total = [], 0
+        for f in path.rglob("*"):
+            if f.is_file() and f.name != ".label":
+                files.append(str(f.relative_to(path)))
+                try:
+                    total += f.stat().st_size
+                except Exception:  # noqa: BLE001
+                    pass
+        created = ""
+        m = re.match(r"^(\d{8})-(\d{6})-", path.name)
+        if m:
+            d, t = m.group(1), m.group(2)
+            created = (f"{d[0:4]}-{d[4:6]}-{d[6:8]} "
+                       f"{t[0:2]}:{t[2:4]}:{t[4:6]}")
+        rows.append({
+            "name": path.name,
+            "label": label,
+            "created": created,
+            "file_count": len(files),
+            "files": sorted(files)[:200],
+            "truncated": len(files) > 200,
+            "bytes": total,
+        })
+    return rows
+
+
+def snapshot_detail(name: str) -> dict | None:
+    return next((s for s in snapshot_index(1000) if s["name"] == str(name or "").strip()), None)
+
+
+def snapshot_compare(name: str, root: str, limit: int = 500) -> dict:
+    """Compare a snapshot with the project as it stands now.
+
+    Uses size-then-content so a cheap comparison answers most of the time and a
+    full read only happens on a size match. Capped so a huge tree cannot stall
+    the UI.
+    """
+    src = config.CHECKPOINT_DIR / str(name or "").strip()
+    if not src.is_dir():
+        return {"ok": False, "error": f"no snapshot '{name}'"}
+    dest = Path(str(root or "")).expanduser()
+    if not dest.is_dir():
+        return {"ok": False, "error": f"{root} is not a directory"}
+
+    def collect(base: Path) -> dict:
+        out = {}
+        for path in base.rglob("*"):
+            if not path.is_file() or path.name == ".label":
+                continue
+            try:
+                rel = path.relative_to(base)
+            except ValueError:
+                continue
+            # relative parts only — see the note in snapshot()
+            if any(part in config.SNAPSHOT_SKIP for part in rel.parts):
+                continue
+            rel_str = str(rel)
+            try:
+                out[rel_str] = path.stat().st_size
+            except OSError:
+                continue
+            if len(out) >= limit:
+                break
+        return out
+
+    old, new = collect(src), collect(dest)
+    changed, added, removed = [], [], []
+    for rel, size in old.items():
+        if rel not in new:
+            removed.append(rel)
+        elif new[rel] != size:
+            changed.append(rel)
+        else:
+            try:
+                if (src / rel).read_bytes() != (dest / rel).read_bytes():
+                    changed.append(rel)
+            except OSError:
+                changed.append(rel)
+    for rel in new:
+        if rel not in old:
+            added.append(rel)
+    return {
+        "ok": True,
+        "name": src.name,
+        "project": str(dest),
+        "changed": sorted(changed),
+        "added": sorted(added),
+        "removed": sorted(removed),
+        "count": len(changed) + len(added) + len(removed),
+        "truncated": len(old) >= limit or len(new) >= limit,
+    }
 
 
 def restore(name: str, root: str) -> str:

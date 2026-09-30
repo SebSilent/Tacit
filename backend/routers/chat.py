@@ -4,7 +4,8 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import agent, config, plan, store
+from .. import agent, config, mcp_registry, memory_store, metrics, plan, plugin_manager, store
+from .. import tokens as token_mod
 from ..ai import prompts
 
 router = APIRouter()
@@ -92,6 +93,7 @@ def _usage_event(rec: dict, usage: dict) -> dict:
     u["context"] = ctx
     u["compacting"] = False
     u["speed"] = 0
+    metrics.bump(rec, prompt_tokens=in_tok, completion_tokens=out_tok)
     return {"type": "usage", "tokens": tok, "context": ctx, "compacting": False, "speed": 0}
 
 
@@ -138,6 +140,32 @@ def _content_parts(text: str, images) -> list:
             parts.append({"type": "image_url",
                           "image_url": {"url": f"data:{mime};base64,{data}"}})
     return parts
+
+
+def _memory_block(project: str | None) -> str:
+    """The budgeted memory block, or '' when the vault is off.
+
+    Memory only ever enters as its own system block, capped by the configured
+    budget — it never merges into the base prompt.
+    """
+    try:
+        if not plugin_manager.is_enabled("memory_vault"):
+            return ""
+        return memory_store.startup_selection(project or "").get("text") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _account_context(rec: dict) -> None:
+    """Record what this turn is about to inject, and what it avoided."""
+    try:
+        report = mcp_registry.injection_report()
+        tools = agent.tools_for()
+        metrics.bump(rec, tool_schema_tokens=token_mod.estimate_tools_tokens(tools),
+                     mcp_tool_tokens=report.get("injected_tokens") or 0,
+                     saved_lazy_tools=report.get("saved_tokens") or 0)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _title(text: str) -> str:
@@ -245,6 +273,9 @@ async def ws_session(ws: WebSocket, sid: str):
             info = agent.compact_history(rec, ref=rec.get("model") or None)
             if info and info.get("compacted"):
                 store.save(rec)
+                saved = token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0)) \
+                    - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0))
+                metrics.bump(rec, saved_compaction=max(0, saved))
                 await ws.send_text(_json({
                     "type": "notify", "level": "info", "sid": rec["id"],
                     "message": (f"compacted {info['compacted']} earlier messages "
@@ -264,6 +295,14 @@ async def ws_session(ws: WebSocket, sid: str):
         messages = [{"role": "system",
                      "content": prompts.system_prompt(rec.get("project"), False, chat=chat)}]
         messages.extend(_history(rec))
+
+        block = "" if chat else _memory_block(rec.get("project"))
+        if block:
+            messages.append({"role": "system", "content": block})
+            metrics.bump(rec, memory_tokens=token_mod.estimate_tokens(block))
+
+        if not chat:
+            _account_context(rec)
 
         if images:
             if config.accepts_images(rec.get("model")):
