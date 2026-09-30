@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Tacit bootstrap installer (macOS, Linux, WSL).
 #
-#   curl -fsSL https://raw.githubusercontent.com/Silent/tacit/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/SebSilent/Tacit/HEAD/install.sh | bash
 #
 # Clones the source, builds a private virtualenv, and writes a `tacit` launcher.
 # Safe to re-run: it updates the checkout instead of replacing it.
 set -eu
 
-REPO_URL="${TACIT_REPO_URL:-https://github.com/Silent/tacit.git}"
-BRANCH="${TACIT_BRANCH:-main}"
+REPO_URL="${TACIT_REPO_URL:-https://github.com/SebSilent/Tacit.git}"
+BRANCH="${TACIT_BRANCH:-}"
 USER_HOME="${HOME:-$USERPROFILE}"
 TACIT_HOME="${TACIT_HOME:-$USER_HOME/.tacit}"
 APP_DIR="${TACIT_APP_DIR:-$USER_HOME/.local/share/tacit}"
@@ -29,7 +29,7 @@ Usage: install.sh [options]
   --dir PATH         where to put the source checkout
   --tacit-home PATH  where Tacit keeps your data       (default ~/.tacit)
   --bin-dir PATH     where to write the tacit launcher (default ~/.local/bin)
-  --branch NAME      git branch to install             (default main)
+  --branch NAME      git branch to install   (default: the repo's default branch)
   --no-browser       skip the optional Playwright install
   --help             this text
 
@@ -79,14 +79,24 @@ if [ -f "$APP_DIR/backend/main.py" ] && [ ! -d "$APP_DIR/.git" ]; then
     warn "$APP_DIR already holds the source but is not a checkout - using it as-is"
 elif [ -d "$APP_DIR/.git" ]; then
     say "updating $APP_DIR"
-    git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH" >/dev/null 2>&1 || die "could not fetch $BRANCH"
-    git -C "$APP_DIR" checkout -q "$BRANCH" 2>/dev/null || true
-    git -C "$APP_DIR" reset -q --hard "origin/$BRANCH" 2>/dev/null || true
+    if [ -n "$BRANCH" ]; then
+        git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH" >/dev/null 2>&1 || die "could not fetch $BRANCH"
+        git -C "$APP_DIR" checkout -q "$BRANCH" 2>/dev/null || true
+        git -C "$APP_DIR" reset -q --hard "origin/$BRANCH" 2>/dev/null || true
+    else
+        git -C "$APP_DIR" fetch --depth 1 >/dev/null 2>&1 || true
+        git -C "$APP_DIR" reset -q --hard FETCH_HEAD 2>/dev/null || true
+    fi
 else
     say "downloading into $APP_DIR"
     mkdir -p "$(dirname "$APP_DIR")"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
-        || die "could not clone $REPO_URL (branch $BRANCH)"
+    if [ -n "$BRANCH" ]; then
+        git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
+            || die "could not clone $REPO_URL (branch $BRANCH)"
+    else
+        git clone --depth 1 "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
+            || die "could not clone $REPO_URL"
+    fi
 fi
 [ -f "$APP_DIR/backend/main.py" ] || die "$APP_DIR does not look like Tacit"
 ok "source ready"

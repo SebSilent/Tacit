@@ -24,10 +24,10 @@ const esc = t => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function workdir() {
-  return wdOverride || (window.LC && window.LC.getWorkdir && window.LC.getWorkdir()) || '';
+  return wdOverride || (window.Tacit && window.Tacit.getWorkdir && window.Tacit.getWorkdir()) || '';
 }
 function sid() {
-  return (window.LC && window.LC.getSid && window.LC.getSid()) || '';
+  return (window.Tacit && window.Tacit.getSid && window.Tacit.getSid()) || '';
 }
 function qs(extra = {}) {
   const p = new URLSearchParams();
@@ -318,7 +318,7 @@ async function createRepo() {
  * it, dropping the previous history — the case where a past agent committed
  * non-stop and the operator wants a clean re-publish. Files are preserved. */
 async function freshHistoryPush(branch) {
-  const tmp = 'lc-fresh-start';
+  const tmp = 'tacit-fresh-start';
   note('building a fresh single-commit history…');
   await runCommand(`git checkout --orphan ${tmp}`);
   await runCommand('git add -A');
@@ -538,5 +538,5 @@ document.addEventListener('keydown', (e) => {
 
 wireActions();
 wireGithub();
-window.LCGit = { open, close, refresh, run: runCommand };
+window.TacitGit = { open, close, refresh, run: runCommand };
 })();

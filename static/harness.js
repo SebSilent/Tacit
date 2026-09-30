@@ -62,11 +62,11 @@ function loadPanel(tab) {
 // ═══════════════════════════ APPEARANCE ═══════════════════════════
 function renderAppearancePanel() {
   const panel = $('#panel-appearance');
-  const T = window.LCTheme;
+  const T = window.TacitTheme;
   if (!T) { panel.innerHTML = '<div class="ho-empty">Theme engine unavailable.</div>'; return; }
   const cur = T.current();
   panel.innerHTML = `
-    <div class="ho-toolbar"><span class="ho-sub">Pick a look — applies instantly, stored per-browser (<code>lc.theme</code>).</span></div>
+    <div class="ho-toolbar"><span class="ho-sub">Pick a look — applies instantly, stored per-browser (<code>tacit.theme</code>).</span></div>
     <div class="theme-cards">` +
     T.themes.map(t => `
       <button class="theme-card ${t.id === cur ? 'active' : ''}" data-theme="${esc(t.id)}">
@@ -353,9 +353,9 @@ async function renderTools() {
 
 // ── keep the sidebar model dropdown in sync after registry edits ────
 function refreshSidebar() {
-  if (window.LC && window.LC.refreshInfo) window.LC.refreshInfo();
+  if (window.Tacit && window.Tacit.refreshInfo) window.Tacit.refreshInfo();
 }
 
 // expose for app.js if needed
-window.LCHarness = { open: openOverlay, close: closeOverlay };
+window.TacitHarness = { open: openOverlay, close: closeOverlay };
 })();

@@ -26,13 +26,13 @@ let info = { models: [], default: null, llm_online: false, llm_url: '' };
 // safe load: one corrupt/quota-truncated write must never nuke the whole app
 let sessions = [];
 try {
-  const parsed = JSON.parse(localStorage.getItem('tac.sessions') || '[]');
+  const parsed = JSON.parse(localStorage.getItem('tacit.sessions') || '[]');
   if (Array.isArray(parsed)) sessions = parsed.filter(s => s && s.id);
 } catch (e) {
-  try { localStorage.removeItem('tac.sessions'); } catch (e2) {}
+  try { localStorage.removeItem('tacit.sessions'); } catch (e2) {}
 }
 // sessions: [{id, title, model, mode, created, messages:[{role, content, tools?, reason?}]}]
-let activeId = localStorage.getItem('tac.active') || null;
+let activeId = localStorage.getItem('tacit.active') || null;
 let ws = null;
 let streaming = null;   // {msg, el} current assistant message being streamed
 let busy = false;
@@ -57,7 +57,7 @@ const THEMES = [
   { id: 'ocean',    name: 'Ocean',    hint: 'abyssal blue' },
   { id: 'ember',    name: 'Ember',    hint: 'warm forge' },
 ];
-let theme = localStorage.getItem('tac.theme') || 'midnight';
+let theme = localStorage.getItem('tacit.theme') || 'midnight';
 if (!THEMES.some(t => t.id === theme)) theme = 'midnight';
 document.documentElement.dataset.theme = theme;
 
@@ -65,10 +65,10 @@ function applyTheme(id) {
   if (!THEMES.some(t => t.id === id)) return;
   theme = id;
   document.documentElement.dataset.theme = id;
-  localStorage.setItem('tac.theme', id);
+  localStorage.setItem('tacit.theme', id);
 }
 // consumed by the harness "Appearance" panel
-window.LCTheme = { themes: THEMES, current: () => theme, apply: applyTheme };
+window.TacitTheme = { themes: THEMES, current: () => theme, apply: applyTheme };
 
 // NOTE: the "ensure at least one session" bootstrap deliberately does NOT run
 // here. newSession() -> renderTokMeter() touches `const tokMeter`, declared
@@ -82,10 +82,10 @@ function cur() { return sessions.find(s => s.id === activeId); }
 function persist(opts) {
   const localOnly = opts && opts.localOnly;
   try {
-    localStorage.setItem('tac.sessions', JSON.stringify(sessions.map(s => ({
+    localStorage.setItem('tacit.sessions', JSON.stringify(sessions.map(s => ({
       ...s, messages: s.messages.slice(-120)
     }))));
-    localStorage.setItem('tac.active', activeId);
+    localStorage.setItem('tacit.active', activeId);
   } catch (e) {
     // quota exceeded — the server registry sync below still carries the data
   }
@@ -176,13 +176,13 @@ async function initSessions() {
 function newSession(silent) {
   const s = {
     id: uuid(), title: 'New session',
-    model: localStorage.getItem('tac.model') || info.default || '',
-    mode: localStorage.getItem('tac.mode') || 'chat',
-    thinking: localStorage.getItem('tac.thinking') || info.default_thinking || 'medium',
+    model: localStorage.getItem('tacit.model') || info.default || '',
+    mode: localStorage.getItem('tacit.mode') || 'chat',
+    thinking: localStorage.getItem('tacit.thinking') || info.default_thinking || 'medium',
     // No project ⇒ no working directory at all. Nothing directory-related is
     // sent to the server or injected into the prompt; the model picks its own
     // paths. (localStorage holds a choice only if the user actually made one.)
-    workdir: localStorage.getItem('tac.workdir') || '',
+    workdir: localStorage.getItem('tacit.workdir') || '',
     created: Date.now(), messages: []
   };
   sessions.unshift(s);
@@ -1144,7 +1144,7 @@ function wdBase(p) {
 
 function renderWdChip() {
   const s = cur();
-  const wd = (s && s.workdir) || localStorage.getItem('tac.workdir') || '';
+  const wd = (s && s.workdir) || localStorage.getItem('tacit.workdir') || '';
   const el = $('#wdLabel');
   if (el) el.textContent = wd ? wdBase(wd) : 'no project';
   const chip = $('#wdChip');
@@ -1204,7 +1204,7 @@ async function openWdMenu() {
  *  because the working directory binds when the agent is created. */
 function chooseWorkdir(p) {
   const clearing = !p;
-  if (clearing) localStorage.removeItem('tac.workdir'); else localStorage.setItem('tac.workdir', p);
+  if (clearing) localStorage.removeItem('tacit.workdir'); else localStorage.setItem('tacit.workdir', p);
   const s = cur();
   if (s && (!s.messages || !s.messages.length)) {
     s.workdir = p || '';
@@ -1376,9 +1376,9 @@ async function loadInfo() {
     llmWarned = true;
     toast(`LLM unreachable · ${(info.llm_url || '').replace(/^https?:\/\//, '')}`, true);
   } else if (info.llm_online) llmWarned = false;
-  if (info.default && !localStorage.getItem('tac.seen')) {
+  if (info.default && !localStorage.getItem('tacit.seen')) {
     // first-ever load (or old registry): migrate legacy/default model picks
-    localStorage.setItem('tac.seen', '1');
+    localStorage.setItem('tacit.seen', '1');
     sessions.forEach(s => {
       if (!s.model || s.model === 'llamacpp/qwythos-mtp' || s.model === info.default) {
         s.model = info.default;
@@ -1405,7 +1405,7 @@ function applyModelSelection(id) {
   const s = cur();
   if (!s || !id || s.model === id) { renderModelChip(); return; }
   s.model = id;
-  localStorage.setItem('tac.model', s.model);
+  localStorage.setItem('tacit.model', s.model);
   persist(); renderModelChip();
   syncSessionMetadata(s);
   if (ws && ws.readyState === 1) {
@@ -1429,14 +1429,14 @@ modelSelect.addEventListener('change', () => applyModelSelection(modelSelect.val
 thinkSelect.addEventListener('change', () => {
   const s = cur();
   s.thinking = thinkSelect.value;
-  localStorage.setItem('tac.thinking', s.thinking);
+  localStorage.setItem('tacit.thinking', s.thinking);
   persist();
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'set_thinking_level', level: s.thinking }));
   toast(`Thinking level: ${s.thinking} (applies live)`);
 });
 
 // bridge for harness.js — it edits the registry, then asks us to refresh
-window.LC = {
+window.Tacit = {
   refreshInfo: async () => { await loadInfo(); renderModelChip(); },
   toast: (t, e) => toast(t, e),
 };
@@ -1446,7 +1446,7 @@ $('#modeSeg').addEventListener('click', e => {
   if (!btn) return;
   const s = cur();
   s.mode = btn.dataset.mode;
-  localStorage.setItem('tac.mode', s.mode);
+  localStorage.setItem('tacit.mode', s.mode);
   document.querySelectorAll('#modeSeg button').forEach(b =>
     b.classList.toggle('active', b === btn));
   persist(); renderModelChip(); syncSessionMetadata(s);
@@ -1818,7 +1818,7 @@ updateSteerHint();
 })();
 
 // Public surface for sibling panels (harness.js, git.js). Both load after this file.
-window.LC = Object.assign(window.LC || {}, {
+window.Tacit = Object.assign(window.Tacit || {}, {
   getSid: () => activeId,
   getWorkdir: () => { const s = cur(); return (s && s.workdir) || ''; },
   refreshInfo: () => loadInfo(),

@@ -1,6 +1,6 @@
 # Tacit bootstrap installer (Windows).
 #
-#   irm https://raw.githubusercontent.com/Silent/tacit/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/SebSilent/Tacit/HEAD/install.ps1 | iex
 #
 # Clones the source, builds a private virtualenv, and writes a `tacit` launcher.
 # Safe to re-run: it updates the checkout instead of replacing it.
@@ -10,8 +10,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-$RepoUrl  = if ($env:TACIT_REPO_URL)  { $env:TACIT_REPO_URL }  else { 'https://github.com/Silent/tacit.git' }
-$Branch   = if ($env:TACIT_BRANCH)    { $env:TACIT_BRANCH }    else { 'main' }
+$RepoUrl  = if ($env:TACIT_REPO_URL)  { $env:TACIT_REPO_URL }  else { 'https://github.com/SebSilent/Tacit.git' }
+$Branch   = if ($env:TACIT_BRANCH)    { $env:TACIT_BRANCH }    else { '' }
 $TacitHome = if ($env:TACIT_HOME)     { $env:TACIT_HOME }      else { Join-Path $env:USERPROFILE '.tacit' }
 $AppDir   = if ($env:TACIT_APP_DIR)   { $env:TACIT_APP_DIR }   else { Join-Path $env:LOCALAPPDATA 'Tacit\app' }
 $BinDir   = if ($env:TACIT_BIN_DIR)   { $env:TACIT_BIN_DIR }   else { Join-Path $env:LOCALAPPDATA 'Tacit\bin' }
@@ -78,9 +78,14 @@ if ((Test-Path (Join-Path $AppDir 'backend\main.py')) -and -not (Test-Path (Join
 } elseif (Test-Path (Join-Path $AppDir '.git')) {
     if ($HasGit) {
         Say "updating $AppDir"
-        [void](Invoke-Native 'git' @('-C', $AppDir, 'fetch', '--depth', '1', 'origin', $Branch))
-        [void](Invoke-Native 'git' @('-C', $AppDir, 'checkout', '-q', $Branch))
-        [void](Invoke-Native 'git' @('-C', $AppDir, 'reset', '-q', '--hard', "origin/$Branch"))
+        if ($Branch) {
+            [void](Invoke-Native 'git' @('-C', $AppDir, 'fetch', '--depth', '1', 'origin', $Branch))
+            [void](Invoke-Native 'git' @('-C', $AppDir, 'checkout', '-q', $Branch))
+            [void](Invoke-Native 'git' @('-C', $AppDir, 'reset', '-q', '--hard', "origin/$Branch"))
+        } else {
+            [void](Invoke-Native 'git' @('-C', $AppDir, 'fetch', '--depth', '1'))
+            [void](Invoke-Native 'git' @('-C', $AppDir, 'reset', '-q', '--hard', 'FETCH_HEAD'))
+        }
     } else {
         Warn 'git not found; leaving the existing checkout in place'
     }
@@ -88,8 +93,11 @@ if ((Test-Path (Join-Path $AppDir 'backend\main.py')) -and -not (Test-Path (Join
     New-Item -ItemType Directory -Force -Path (Split-Path $AppDir -Parent) | Out-Null
     if ($HasGit) {
         Say "downloading into $AppDir"
-        $clone = Invoke-Native 'git' @('clone', '--depth', '1', '--branch', $Branch, $RepoUrl, $AppDir)
-        if ($clone.Code -ne 0) { Die "could not clone $RepoUrl (branch $Branch)`n$($clone.Output)" }
+        $cloneArgs = @('clone', '--depth', '1')
+        if ($Branch) { $cloneArgs += @('--branch', $Branch) }
+        $cloneArgs += @($RepoUrl, $AppDir)
+        $clone = Invoke-Native 'git' $cloneArgs
+        if ($clone.Code -ne 0) { Die "could not clone $RepoUrl`n$($clone.Output)" }
     } else {
         $zipUrl = ($RepoUrl -replace '\.git$', '') + "/archive/refs/heads/$Branch.zip"
         Say "git not found - downloading the source archive instead"

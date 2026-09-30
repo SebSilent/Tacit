@@ -13,13 +13,13 @@ that keep exploration out of your context window.
 **macOS / Linux / WSL**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Silent/tacit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SebSilent/Tacit/HEAD/install.sh | bash
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/Silent/tacit/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/SebSilent/Tacit/HEAD/install.ps1 | iex
 ```
 
 The installer downloads the source, builds a private virtualenv in the checkout, and writes a
