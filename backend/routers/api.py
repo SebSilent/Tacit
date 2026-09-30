@@ -1,7 +1,9 @@
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, config, skills, store
+from .. import agent, config, hosting, skills, store, vcs
 from ..ai import engine
 
 router = APIRouter()
@@ -15,6 +17,13 @@ def _ok(**kw):
 
 def _fail(error: str):
     return JSONResponse({"ok": False, "error": error})
+
+
+def _int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 @router.get("/api/info")
@@ -68,11 +77,15 @@ async def add_provider(request: Request):
     config.save_registry(reg)
     found = []
     try:
-        ids = engine.remote_models(base, config.key_for(reg["providers"][name]))
+        details = engine.remote_model_details(base, config.key_for(reg["providers"][name]))
         have = {m.get("id") for m in reg["providers"][name]["models"]}
-        for mid in ids:
+        for d in details:
+            mid = d["id"]
             if mid not in have:
-                reg["providers"][name]["models"].append({"id": mid, "name": mid})
+                reg["providers"][name]["models"].append(
+                    {"id": mid, "name": mid,
+                     "contextWindow": d.get("contextWindow") or 0,
+                     "maxTokens": d.get("maxTokens") or 0})
                 found.append(mid)
         config.save_registry(reg)
     except engine.EngineError as e:
@@ -124,7 +137,9 @@ async def add_model(name: str, request: Request):
     if any(m.get("id") == mid for m in spec["models"]):
         return _fail("model already present")
     spec["models"].append({"id": mid, "name": body.get("name") or mid,
-                           "reasoning": bool(body.get("reasoning"))})
+                           "reasoning": bool(body.get("reasoning")),
+                           "contextWindow": _int(body.get("contextWindow")),
+                           "maxTokens": _int(body.get("maxTokens"))})
     config.save_registry(reg)
     return _ok(added=mid)
 
@@ -152,7 +167,8 @@ async def probe_provider(name: str):
         ids = engine.remote_models(spec.get("baseUrl", ""), config.key_for(spec))
     except engine.EngineError as e:
         return {"ok": False, "error": str(e), "ids": []}
-    return _ok(ids=ids)
+    have = {m.get("id") for m in (spec.get("models") or [])}
+    return _ok(ids=ids, models=ids, new=[i for i in ids if i not in have])
 
 
 @router.post("/api/providers/{name}/import")
@@ -165,10 +181,20 @@ async def import_models(name: str, request: Request):
         return _fail("provider not found")
     spec.setdefault("models", [])
     have = {m.get("id") for m in spec["models"]}
+    # enrich newly imported models with context windows if the endpoint exposes them
+    meta = {}
+    try:
+        meta = {d["id"]: d for d in engine.remote_model_details(
+            spec.get("baseUrl", ""), config.key_for(spec))}
+    except engine.EngineError:
+        meta = {}
     added = []
     for mid in ids:
         if mid and mid not in have:
-            spec["models"].append({"id": mid, "name": mid})
+            d = meta.get(mid) or {}
+            spec["models"].append({"id": mid, "name": mid,
+                                   "contextWindow": d.get("contextWindow") or 0,
+                                   "maxTokens": d.get("maxTokens") or 0})
             added.append(mid)
     config.save_registry(reg)
     return _ok(added=added)
@@ -193,10 +219,34 @@ async def terminal(request: Request):
                               body.get("timeout"))
 
 
+def _enrich_projects(items: list[dict]) -> list[dict]:
+    """Annotate projects with git state for the Git panel (full=1)."""
+    for p in items:
+        path = p.get("path") or ""
+        p["isRepo"] = False
+        p["branch"] = ""
+        p["github_full_name"] = ""
+        top = vcs.vc(path, ["rev-parse", "--show-toplevel"])
+        if not top.get("ok"):
+            continue
+        p["isRepo"] = True
+        root = (top.get("stdout") or "").strip() or path
+        st = vcs.vc(root, ["status", "--porcelain=v1", "--branch"])
+        if st.get("ok"):
+            p["branch"] = vcs.parse_status(st.get("stdout") or "").get("branch") or ""
+        for r in vcs.remotes(root):
+            parsed = hosting.parse_remote(r.get("url") or "")
+            if parsed:
+                p["github_full_name"] = parsed["full_name"]
+                break
+    return items
+
+
 @router.get("/api/projects")
-async def projects():
+async def projects(full: int = 0):
+    """Recent workspaces only — a folder is a workspace because the user
+    pointed at it, never because it sits under some guessed root."""
     rows = store.list_sessions()
-    roots = config.all_project_roots(rows)
     recent, seen = [], set()
     for s in rows:
         p = s.get("project")
@@ -204,10 +254,42 @@ async def projects():
             continue
         seen.add(p)
         recent.append({"name": config.Path(p).name, "path": p})
-        if len(recent) >= 8:
+        if len(recent) >= 12:
             break
-    return {"ok": True, "roots": roots, "root": roots[0] if roots else "",
-            "recent": recent, "projects": config.list_projects(roots)}
+    items = [{"name": r["name"], "path": r["path"], "root": ""} for r in recent]
+    if full:
+        # version-control probing spawns subprocesses, so keep it off the event
+        # loop and only pay for it when the panel explicitly asks (full=1).
+        items = await asyncio.to_thread(_enrich_projects, items)
+    return {"ok": True, "recent": recent, "projects": items,
+            "roots": config.project_roots()}
+
+
+@router.get("/api/fs/roots")
+async def fs_roots():
+    return _ok(roots=config.fs_roots(), home=str(config.USER_HOME))
+
+
+@router.get("/api/fs/list")
+async def fs_list(path: str = ""):
+    return config.fs_list(path)
+
+
+@router.post("/api/fs/mkdir")
+async def fs_mkdir(request: Request):
+    body = await request.json()
+    parent = str(body.get("path") or "").strip()
+    name = str(body.get("name") or "").strip()
+    if not parent or not name or any(ch in name for ch in "/\\"):
+        return _fail("a folder name is required")
+    target = config.Path(parent) / name
+    try:
+        target.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        return _fail("that folder already exists")
+    except Exception as e:
+        return _fail(str(e))
+    return _ok(path=str(target))
 
 
 @router.get("/api/sessions")
@@ -325,9 +407,15 @@ async def toggle_tool(request: Request):
 @router.get("/api/skills")
 async def skills_list():
     rows = skills.load()
-    return {"tool_skills": [], "knowledge": [],
-            "user_skills": [{"name": s["name"], "description": s["description"],
-                             "path": s["path"], "tokens": s["tokens"]} for s in rows],
+
+    def row(s):
+        return {"name": s["name"], "description": s["description"], "path": s["path"],
+                "body": s.get("body") or "", "kind": s.get("kind") or "skill",
+                "tokens": s.get("tokens") or 0}
+
+    return {"tool_skills": [],
+            "knowledge": [row(s) for s in rows if s.get("kind") == "knowledge"],
+            "user_skills": [row(s) for s in rows if s.get("kind") != "knowledge"],
             "user_skills_dir": str(config.SKILLS_DIR)}
 
 

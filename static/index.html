@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tacit</title>
-<link rel="stylesheet" href="/static/style.css?v=19">
+<link rel="stylesheet" href="/static/style.css?v=22">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
 </head>
 <body>
@@ -42,12 +42,12 @@
       <button class="icon-btn" id="sidebarToggle" title="Menu">
         <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
       </button>
-      <div class="top-title" id="topTitle" title="Double-click to rename">New session</div>
+      <div class="top-title" id="topTitle">New session</div>
       <div class="top-meta" id="topMeta"></div>
       <div class="wd-wrap">
-        <button class="wd-chip" id="wdChip" title="Working project — where the agent reads and writes files">
+        <button class="wd-chip" id="wdChip" title="Workspace">
           <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg>
-          <span id="wdLabel">pick a project</span>
+          <span id="wdLabel">pick a workspace</span>
         </button>
         <div class="wd-menu" id="wdMenu" hidden></div>
       </div>
@@ -59,7 +59,7 @@
         </span>
         <span class="tok-auto" id="tokAuto" hidden>auto</span>
       </div>
-      <button class="icon-btn" id="termBtn" title="Terminal — run commands directly">
+      <button class="icon-btn" id="termBtn" title="Terminal">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="sess-menu-wrap">
@@ -74,10 +74,10 @@
           <button data-act="clone">Clone session</button>
         </div>
       </div>
-      <button class="icon-btn" id="gitBtn" title="Git — status, commits, branches, push/pull, console">
+      <button class="icon-btn" id="gitBtn" title="Git">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="10" r="2.4"/><path d="M6 8.4v7.2M8.4 6h3.6a3 3 0 0 1 3 3v1" stroke-linecap="round"/></svg>
       </button>
-      <button class="icon-btn" id="harnessBtn" title="Settings — providers, skills, tools, extensions, appearance">
+      <button class="icon-btn" id="harnessBtn" title="Settings">
         <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.7V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
       </button>
     </header>
@@ -91,7 +91,7 @@
           <svg viewBox="0 0 24 24"><path d="M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z"/></svg>
         </div>
         <h2>Tacit</h2>
-        <p>A coding agent scaffold over your LAN model<br><code id="emptyModel">—</code></p>
+        <p>The silent harness for your local model — pick a workspace and say what you need.</p>
         <div class="suggestions" id="suggestions">
           <button class="chip" data-s="Explain what this folder contains and what each file does.">Explore a folder</button>
           <button class="chip" data-s="Write a python script that renames all files in the current directory to kebab-case.">Write a script</button>
@@ -106,7 +106,7 @@
     <footer class="composer-wrap">
       <div class="attach-row" id="attachRow" hidden></div>
       <div class="composer" id="composer">
-        <button class="icon-btn composer-side" id="planToggle" title="Plan mode — research the repo first, ask clarifying questions, then draft an implementation plan (no edits)">
+        <button class="icon-btn composer-side" id="planToggle" title="Plan mode">
           <svg viewBox="0 0 24 24"><path d="M9 3h6M12 3v4m0 0-5.5 3A4 4 0 0 0 4.5 13.5V17a4 4 0 0 0 4 4h7a4 4 0 0 0 4-4v-3.5A4 4 0 0 0 17.5 10L12 7z" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/></svg>
         </button>
         <button class="icon-btn composer-side" id="attachBtn" title="Attach images">
@@ -114,10 +114,10 @@
         </button>
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
         <textarea id="input" rows="1" placeholder="Message Tacit…" spellcheck="false"></textarea>
-        <button class="send-btn" id="sendBtn" title="Send (Enter)">
+        <button class="send-btn" id="sendBtn" title="Send">
           <svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
         </button>
-        <button class="send-btn stop" id="stopBtn" title="Stop the running turn" hidden>
+        <button class="send-btn stop" id="stopBtn" title="Stop" hidden>
           <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>
         </button>
       </div>
@@ -131,7 +131,7 @@
         <span class="term-title">Terminal</span>
         <span class="term-cwd" id="termCwd"></span>
         <span class="term-shell-name" id="termShellName"></span>
-        <button class="term-btn" id="termClear" title="Clear output">clear</button>
+        <button class="term-btn" id="termClear" title="Clear">clear</button>
         <button class="term-btn" id="termClose" title="Close">Close</button>
       </div>
       <div class="term-out" id="termOut"></div>
@@ -190,15 +190,15 @@
             <button class="ho-btn" id="gitFetchBtn">Fetch</button>
             <button class="ho-btn" id="gitPullBtn">Pull</button>
             <button class="ho-btn primary" id="gitPushBtn">Push</button>
-            <button class="ho-btn" id="gitSyncBtn" title="Pull the remote changes, then push yours">Sync</button>
+            <button class="ho-btn" id="gitSyncBtn">Sync</button>
           </div>
-          <div class="ho-section">Project</div>
+          <div class="ho-section">Workspace</div>
           <div class="git-projects">
-            <select id="gitProjectSelect" class="git-select"></select>
             <div class="git-project-status" id="gitProjectStatus"></div>
           </div>
           <div class="git-workdir">
-            <input id="gitWorkdir" placeholder="project folder — any repo path" spellcheck="false" autocomplete="off">
+            <input id="gitWorkdir" placeholder="workspace folder" spellcheck="false" autocomplete="off">
+            <button class="ho-btn small" id="gitWorkdirBrowse">Browse</button>
             <button class="ho-btn small" id="gitWorkdirOpen">Open</button>
           </div>
           <div class="git-branchbar" id="gitBranchBar"></div>
@@ -226,16 +226,17 @@
               <button class="ho-btn small primary" id="gitGhClone">Clone</button>
             </div>
             <div class="git-gh-row">
-              <input id="gitGhDir" placeholder="clone into… (default C:\Projects)" spellcheck="false" autocomplete="off">
+              <input id="gitGhDir" placeholder="clone into…" spellcheck="false" autocomplete="off">
+              <button class="ho-btn small" id="gitGhDirBrowse">Browse</button>
               <button class="ho-btn small" id="gitGhSignout">Sign out</button>
             </div>
             <div class="git-gh-row">
-              <input id="gitGhNewName" placeholder="create new repo from this project…" spellcheck="false" autocomplete="off">
+              <input id="gitGhNewName" placeholder="create new repo from this workspace…" spellcheck="false" autocomplete="off">
               <select id="gitGhNewVis" class="git-select" style="flex:0 0 92px"><option value="private">Private</option><option value="public">Public</option></select>
               <button class="ho-btn small primary" id="gitGhCreate">Create</button>
             </div>
             <div class="git-gh-row">
-              <label class="git-gh-fresh" title="Replace the local history with a single 'Initial commit' and force-push it — the old commits are dropped, the files are kept"><input type="checkbox" id="gitGhFresh"> Fresh start (drop old commits)</label>
+              <label class="git-gh-fresh"><input type="checkbox" id="gitGhFresh"> Fresh start (drop old commits)</label>
               <button class="ho-btn small danger" id="gitGhDelete">Delete repo</button>
             </div>
             <div class="git-gh-list" id="gitGhList"></div>
@@ -256,8 +257,8 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=26"></script>
-<script src="/static/git.js?v=7"></script>
-<script src="/static/harness.js?v=16"></script>
+<script src="/static/app.js?v=31"></script>
+<script src="/static/git.js?v=11"></script>
+<script src="/static/harness.js?v=18"></script>
 </body>
 </html>

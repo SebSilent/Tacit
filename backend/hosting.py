@@ -8,7 +8,7 @@ from . import config, vcs
 API = "https://api.github.com"
 TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0)
 REMOTE_RE = re.compile(
-    r"^(?:https?://)?(?:[^@/\s]+@)?github\.com[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", re.I)
+    r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?github\.com[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", re.I)
 PAIR_RE = re.compile(r"^([\w.-]+)/([\w.-]+)$")
 
 
@@ -54,6 +54,20 @@ async def credential_fill(host: str = "github.com"):
     return {"username": fields.get("username", ""), "token": fields["password"]}
 
 
+async def cli_token() -> dict:
+    root = config.project_roots()[0]
+    r = await asyncio.to_thread(vcs.run_argv, [vcs.HOST_BIN, "auth", "token"], root, None, 15)
+    token = (r.get("stdout") or "").strip() if r.get("ok") else ""
+    if len(token) < 20 or len(token.split()) != 1:
+        return {}
+    username = ""
+    u = await asyncio.to_thread(
+        vcs.run_argv, [vcs.HOST_BIN, "api", "user", "--jq", ".login"], root, None, 15)
+    if u.get("ok"):
+        username = (u.get("stdout") or "").strip().strip('"')
+    return {"token": token, "username": username}
+
+
 async def auth() -> dict:
     cfg = load_config()
     if cfg.get("token"):
@@ -62,6 +76,9 @@ async def auth() -> dict:
     if cred:
         return {"token": cred["token"], "source": "credential-manager",
                 "username": cred["username"]}
+    cli = await cli_token()
+    if cli:
+        return {"token": cli["token"], "source": "cli", "username": cli["username"]}
     return {"token": "", "source": "none", "username": ""}
 
 

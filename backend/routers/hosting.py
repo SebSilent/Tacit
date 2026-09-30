@@ -14,8 +14,8 @@ async def account():
     a = await hosting.auth()
     if not a["token"]:
         return {"ok": False, "connected": False, "source": "none",
-                "error": "no GitHub credentials found — sign in once from a terminal, "
-                         "or paste a token below"}
+                "error": "no GitHub credentials found — paste a token below, or sign in "
+                         "with the GitHub CLI (its session is picked up automatically)"}
     r = await hosting.api("/user", a["token"])
     if not r["ok"]:
         return {"ok": False, "connected": False, "source": a["source"],

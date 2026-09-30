@@ -38,14 +38,36 @@ def _usage_snapshot(rec: dict) -> dict:
     }
 
 
-def _meta(rec: dict) -> dict:
+def _meta(rec: dict, running: dict | None = None) -> dict:
+    busy = bool(running and running.get("busy"))
+    starting = bool(running and running.get("starting"))
     return {
         "sid": rec["id"], "model": rec.get("model") or "",
         "mode": rec.get("mode") or "agent", "thinking": rec.get("thinking") or "medium",
         "workdir": rec.get("project") or "", "name": rec.get("title") or "New session",
         "allowed_tools": "", "excluded_tools": "", "permission_mode": "accept-all",
-        "busy": False, "starting": False,
+        "busy": busy, "starting": starting,
         "usage": _usage_snapshot(rec),
+    }
+
+
+def _stats_payload(rec: dict) -> dict:
+    """The shape the client's stats toast/meter reads: totalMessages, toolCalls,
+    tokens, contextUsage{percent, contextWindow, tokens}."""
+    msgs = rec.get("messages") or []
+    chars = sum(len(m.get("content") or "") for m in msgs)
+    usage = _usage_snapshot(rec)
+    ctx = usage.get("context") or {}
+    return {
+        "messages": len(msgs),
+        "totalMessages": len(msgs),
+        "chars": chars,
+        "toolCalls": int(rec.get("tool_calls") or 0),
+        "tokens": usage.get("tokens") or {},
+        "contextUsage": {"tokens": ctx.get("tokens"),
+                         "contextWindow": ctx.get("window") or 0,
+                         "percent": ctx.get("percent")},
+        "model": rec.get("model"),
     }
 
 
@@ -84,6 +106,26 @@ def _history(rec: dict) -> list[dict]:
             out.append({"role": "system", "content": f"{prompts.SUMMARISED}\n{body}"})
         elif role in ("user", "assistant"):
             out.append({"role": role, "content": body})
+    return out
+
+
+def _clean_history(items) -> list[dict]:
+    """Normalise a client-supplied transcript to the stored message shape."""
+    out = []
+    for m in items or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role not in ("user", "assistant", "summary"):
+            continue
+        content = m.get("content")
+        if not isinstance(content, str):
+            content = "" if content is None else str(content)
+        row = {"role": role, "content": content}
+        ts = m.get("ts")
+        if isinstance(ts, (int, float)):
+            row["ts"] = ts
+        out.append(row)
     return out
 
 
@@ -135,10 +177,11 @@ async def ws_session(ws: WebSocket, sid: str):
                 changed = True
         if changed:
             store.save(rec)
-    running = {"thread": None, "stop": threading.Event(), "steer": [], "busy": False}
+    running = {"thread": None, "stop": threading.Event(), "steer": [], "busy": False,
+               "starting": False}
     plan_state = {"run": None}
 
-    await ws.send_text(_json({"type": "hello", **_meta(rec)}))
+    await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
     await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
                               "model": rec.get("model"), "mode": rec.get("mode"),
                               "thinking": rec.get("thinking"), "name": rec.get("title")}))
@@ -156,6 +199,7 @@ async def ws_session(ws: WebSocket, sid: str):
         def worker():
             try:
                 for ev in gen:
+                    running["starting"] = False
                     loop.call_soon_threadsafe(queue.put_nowait, {**ev, "sid": sid})
             except Exception as e:
                 loop.call_soon_threadsafe(queue.put_nowait,
@@ -173,6 +217,7 @@ async def ws_session(ws: WebSocket, sid: str):
         if not rec.get("model"):
             rec["model"] = config.registry().get("default") or ""
         running["busy"] = True
+        running["starting"] = True
         store.append(rec, "user", text)
         if (rec.get("title") or "New session") == "New session":
             rec["title"] = _title(text)
@@ -206,6 +251,7 @@ async def ws_session(ws: WebSocket, sid: str):
                                 f"({info['chars_before']} \u2192 {info['chars_after']} chars)")}))
 
         running["busy"] = True
+        running["starting"] = True
         running["stop"] = threading.Event()
         store.append(rec, "user", text)
         if (rec.get("title") or "New session") == "New session":
@@ -245,6 +291,10 @@ async def ws_session(ws: WebSocket, sid: str):
                         collected.append(ev["delta"])
                     elif kind == "usage":
                         ev = _usage_event(rec, ev.get("usage") or {})
+                    elif kind == "tool_start":
+                        rec["tool_calls"] = int(rec.get("tool_calls") or 0) + 1
+                    if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
+                        running["starting"] = False
                     loop.call_soon_threadsafe(queue.put_nowait, {**ev, "sid": rec["id"]})
             except Exception as e:
                 loop.call_soon_threadsafe(queue.put_nowait,
@@ -298,7 +348,7 @@ async def ws_session(ws: WebSocket, sid: str):
                     if msg.get(key):
                         rec[key] = msg[key]
                 store.save(rec)
-                await ws.send_text(_json({"type": "hello", **_meta(rec)}))
+                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
 
             elif kind == "set_model":
                 rec["model"] = msg.get("model") or rec.get("model")
@@ -325,33 +375,51 @@ async def ws_session(ws: WebSocket, sid: str):
                                      project=rec.get("project") or "")
                 rec = fresh
                 sid = rec["id"]
-                await ws.send_text(_json({"type": "hello", **_meta(rec)}))
+                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
                 await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
                                           "model": rec.get("model"), "mode": rec.get("mode"),
                                           "thinking": rec.get("thinking"),
                                           "name": rec.get("title")}))
 
             elif kind == "get_state":
-                await ws.send_text(_json({"type": "hello", **_meta(rec)}))
+                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
 
             elif kind == "get_session_stats":
-                msgs = rec.get("messages") or []
-                chars = sum(len(m.get("content") or "") for m in msgs)
                 await ws.send_text(_json({
                     "type": "rpc_response", "command": "get_session_stats", "ok": True,
-                    "data": {"messages": len(msgs), "chars": chars,
-                             "tokens": {"input": chars // 4, "output": 0, "total": chars // 4},
-                             "model": rec.get("model")}, "sid": rec["id"]}))
+                    "data": _stats_payload(rec), "sid": rec["id"]}))
 
             elif kind == "truncate_from":
-                idx = msg.get("index")
+                # The browser owns the visible transcript: it sends the full
+                # message list plus the 0-based index of the user turn being
+                # edited. Adopt that list, rewind to just before that turn, and
+                # echo userTurnIndex so the client can match the acknowledgement.
+                incoming = msg.get("messages")
+                if isinstance(incoming, list) and incoming:
+                    rec["messages"] = _clean_history(incoming)
                 msgs = rec.get("messages") or []
-                if isinstance(idx, int) and 0 <= idx <= len(msgs):
-                    rec["messages"] = msgs[:idx]
-                    store.save(rec)
-                    await ws.send_text(_json({"type": "truncated", "index": idx, "sid": rec["id"]}))
+                turn = msg.get("userTurnIndex")
+                idx = msg.get("index")
+                cut = None
+                if isinstance(turn, int) and turn >= 0:
+                    seen = -1
+                    for i, m in enumerate(msgs):
+                        if m.get("role") == "user":
+                            seen += 1
+                            if seen == turn:
+                                cut = i
+                                break
+                if cut is None and isinstance(idx, int) and 0 <= idx <= len(msgs):
+                    cut = idx
+                if cut is None:
+                    await ws.send_text(_json({"type": "truncate_failed", "sid": rec["id"],
+                                              "error": "could not find that user turn to rewind to"}))
                 else:
-                    await ws.send_text(_json({"type": "truncate_failed", "sid": rec["id"]}))
+                    rec["messages"] = msgs[:cut]
+                    store.save(rec)
+                    await ws.send_text(_json({"type": "truncated", "index": cut,
+                                              "userTurnIndex": turn if isinstance(turn, int) else cut,
+                                              "sid": rec["id"]}))
 
             elif kind == "bash":
                 res = agent.run_terminal(msg.get("command") or "", rec.get("project") or None)
@@ -380,6 +448,7 @@ async def ws_session(ws: WebSocket, sid: str):
                                               "sid": rec["id"]}))
                 else:
                     running["busy"] = True
+                    running["starting"] = True
                     await _drive(plan.synthesise(run, msg.get("answers") or {}), rec["id"])
                     running["busy"] = False
 
@@ -402,8 +471,23 @@ async def ws_session(ws: WebSocket, sid: str):
             elif kind == "plan_implement":
                 run = plan_state.get("run")
                 if run and run.text.strip():
+                    prompt = plan.implement_prompt(run)
                     plan_state["run"] = None
-                    asyncio.create_task(start_turn(plan.implement_prompt(run)))
+                    # The approval notice promises a fresh session: give the
+                    # implementation a clean context and leave the planning
+                    # discussion (and its explorers) behind.
+                    fresh = store.create(model=rec.get("model") or "",
+                                         mode=rec.get("mode") or "agent",
+                                         thinking=rec.get("thinking") or "medium",
+                                         project=rec.get("project") or "")
+                    rec = fresh
+                    sid = rec["id"]
+                    await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
+                    await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
+                                              "model": rec.get("model"), "mode": rec.get("mode"),
+                                              "thinking": rec.get("thinking"),
+                                              "name": rec.get("title")}))
+                    asyncio.create_task(start_turn(prompt))
                 else:
                     await ws.send_text(_json({"type": "notify", "level": "warn",
                                               "message": "approve a plan first",

@@ -163,12 +163,37 @@ def t_grep_files(pattern: str, path: str = ".", project: str | None = None) -> s
     return "\n".join(rows) or "(no matches)"
 
 
+_WRAPPERS = {"env", "sudo", "command", "nohup", "time", "nice", "xargs", "doas"}
+
+
+def _blocked_shell(command: str) -> bool:
+    """True if any command in the line invokes a version-control binary.
+
+    Checks every command position (the start of the line and of each `&&`,
+    `||`, `;`, `|` segment, after wrappers like sudo/env), so `<vcs>`, `x &&
+    <vcs>`, pipes, subshells and absolute paths are all caught — while ordinary
+    arguments that merely mention the word (e.g. `grep foo .`) are not.
+    A guardrail that keeps the model out of version control, not a jail.
+    """
+    for segment in re.split(r"[&|;\n]+", str(command or "")):
+        words = [w.strip().strip("'\"") for w in re.split(r"[\s()<>`]+", segment)]
+        words = [w for w in words if w]
+        i = 0
+        while i < len(words) and (words[i].lower() in _WRAPPERS or re.match(r"^\w+=", words[i])):
+            i += 1
+        if i >= len(words):
+            continue
+        base = os.path.basename(words[i]).lower()
+        if base in BLOCKED_BINARIES or base.rsplit(".", 1)[0] in BLOCKED_BINARIES:
+            return True
+    return False
+
+
 def t_run_shell(command: str, project: str | None = None, timeout: int | None = None) -> str:
     cmd = str(command or "").strip()
     if not cmd:
         return "ERROR: empty command"
-    first = re.split(r"[\s|&;]+", cmd)[0].strip().lower()
-    if os.path.basename(first).rsplit(".", 1)[0] in BLOCKED_BINARIES:
+    if _blocked_shell(cmd):
         return ("version control is a human action in this workspace — use the Git panel for "
                 "status, commits, branches, push and pull. Do not attempt it from a shell.")
     cwd = _root(project)

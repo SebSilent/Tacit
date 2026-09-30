@@ -395,7 +395,6 @@ svg { display: block; }
 .empty-mark svg { width: 30px; height: 30px; fill: var(--accent); }
 .empty h2 { color: var(--text); font-size: 22px; font-weight: 700; }
 .empty p { font-size: 13.5px; line-height: 1.6; }
-.empty code { font-family: var(--mono); font-size: 12px; color: var(--accent-2); }
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
 .chip {
   background: var(--bg-3); border: 1px solid var(--line-2); color: var(--text);
@@ -1120,9 +1119,49 @@ svg { display: block; }
 .wd-name { font-size: 13px; }
 .wd-dir { font-size: 10.5px; font-family: var(--mono); color: var(--fadetext); }
 .wd-empty { font-size: 12px; color: var(--muted); padding: 8px 4px; }
-.wd-foot { display: flex; gap: 6px; margin-top: 8px; }
-.wd-foot input {
-  flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px; font-family: var(--mono);
-  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm);
+
+/* ── workspace folder browser (our own explorer, same on every OS) ── */
+.fs-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, .55);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
 }
-.wd-foot input:focus { outline: none; border-color: var(--accent); }
+.fs-shell {
+  width: min(560px, 100%); max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--radius);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45); overflow: hidden;
+}
+.fs-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+.fs-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.fs-bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px; }
+.fs-bar .fs-path {
+  flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px; font-family: var(--mono);
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.fs-bar .fs-path:focus { outline: none; border-color: var(--accent); }
+.fs-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; }
+.fs-quick-btn {
+  padding: 5px 10px; font-size: 12px; border-radius: 999px; cursor: pointer;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--text);
+}
+.fs-quick-btn:hover { border-color: var(--accent); }
+.fs-list { flex: 1; overflow: auto; padding: 6px 14px; border-top: 1px solid var(--line); }
+.fs-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  padding: 7px 9px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text);
+}
+.fs-row:hover { background: var(--bg-3); border-color: var(--line); }
+.fs-ic { color: var(--accent-2); font-size: 12px; width: 12px; }
+.fs-nm { font-size: 13px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-empty { font-size: 12px; color: var(--muted); padding: 14px 6px; }
+.fs-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 11px 14px; border-top: 1px solid var(--line);
+}
+.fs-note { font-size: 11px; color: var(--fadetext); }
+.fs-foot-actions { display: flex; gap: 6px; }

@@ -565,11 +565,10 @@ function handle(m) {
       }
       break;
     case 'queue_update':
-      // get_session_stats sometimes comes back here; parse if it has stats fields
-      const stats = m;
-      if (stats.totalMessages != null || stats.toolCalls != null || (stats.tokens || {}).total != null) {
-        const tok = stats.tokens || {};
-        toast(`msgs ${stats.totalMessages ?? '?'} · tools ${stats.toolCalls ?? '?'} · tokens ${tok.total ?? tok.input ?? '?'} · ctx ${stats.contextUsage?.percent != null ? stats.contextUsage.percent.toFixed(0) + '%' : stats.contextUsage ?? '?'}`);
+      // no such message is emitted today, but if one ever carries stats fields
+      // it renders through the same path as get_session_stats
+      if (m.totalMessages != null || m.toolCalls != null || (m.tokens || {}).total != null) {
+        applySessionStats(m);
       }
       break;
     case 'rpc_response':
@@ -1129,7 +1128,6 @@ function renderModelChip() {
   const name = (info.models.find(m => m.id === s.model) || {}).name || sid.model;
   $('#topMeta').textContent =
     `${s.mode === 'agent' ? 'Agent' : 'Chat'} · ${sid.provider ? sid.provider + ' / ' : ''}${name}`;
-  $('#emptyModel').textContent = info.llm_url || '';
   renderWdChip();
 }
 
@@ -1146,12 +1144,12 @@ function renderWdChip() {
   const s = cur();
   const wd = (s && s.workdir) || localStorage.getItem('tacit.workdir') || '';
   const el = $('#wdLabel');
-  if (el) el.textContent = wd ? wdBase(wd) : 'no project';
+  if (el) el.textContent = wd ? wdBase(wd) : 'no workspace';
   const chip = $('#wdChip');
   if (chip) {
     chip.title = wd
-      ? `Working project: ${wd} — click to change`
-      : 'No project selected — the agent chooses its own paths. Click to scope it to a project.';
+      ? `Workspace: ${wd}`
+      : 'No workspace — the agent chooses its own paths';
   }
 }
 
@@ -1163,11 +1161,11 @@ function reconnect() {
 async function openWdMenu() {
   const menu = $('#wdMenu');
   const active = (cur() && cur().workdir) || '';
-  let data = { projects: [], recent: [], roots: [] };
+  let data = { recent: [] };
   try {
     const r = await fetch('/api/projects');
     data = await r.json();
-  } catch (e) { /* free-text only */ }
+  } catch (e) { /* recent + browse only */ }
   const item = (p, showDir) => {
     const isCur = p.path === active;
     return `<button class="wd-item${isCur ? ' active' : ''}" data-path="${esc(String(p.path))}">` +
@@ -1176,27 +1174,26 @@ async function openWdMenu() {
       `</button>`;
   };
   const recent = (data.recent || []).map(p => item(p, true)).join('');
-  const projects = (data.projects || []).map(p => item(p, false)).join('');
-  const roots = (data.roots || []).map(r => esc(String(r))).join('  ·  ');
-  // "No project" is a real state, not an error: the agent then behaves like a
-  // plain harness and picks its own paths.
+  // A workspace is any folder the user points at. There is deliberately no
+  // list of "found" folders, because nothing assumes where projects live.
   const none = `<button class="wd-item${active ? '' : ' active'}" data-path="">` +
-    `<span class="wd-name">No project</span>` +
+    `<span class="wd-name">No workspace</span>` +
     `<span class="wd-dir">the agent chooses its own paths</span></button>`;
+  const browse = `<button class="wd-item" id="wdBrowse">` +
+    `<span class="wd-name">Browse…</span>` +
+    `<span class="wd-dir">pick any folder on this machine</span></button>`;
   menu.innerHTML =
     `<div class="wd-list">${none}</div>` +
     (recent ? `<div class="wd-sec">Recent</div><div class="wd-list">${recent}</div>` : '') +
-    `<div class="wd-sec">Projects${roots ? ` <span class="wd-root">${roots}</span>` : ''}</div>` +
-    `<div class="wd-list">${projects || '<div class="wd-empty">no projects found — type a path below</div>'}</div>` +
-    `<div class="wd-foot"><input id="wdManual" placeholder="…or type any full path" spellcheck="false">` +
-    `<button id="wdGo" class="ho-btn primary">Use</button></div>`;
+    `<div class="wd-sec">Workspaces</div>` +
+    `<div class="wd-list">${browse}</div>`;
   menu.hidden = false;
   const pick = (p) => { menu.hidden = true; chooseWorkdir(p); };
-  menu.querySelectorAll('.wd-item').forEach(b => b.addEventListener('click', () => pick(b.dataset.path)));
-  const go = () => { const v = ($('#wdManual').value || '').trim(); if (v) pick(v); };
-  $('#wdGo').addEventListener('click', go);
-  $('#wdManual').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-  $('#wdManual').focus();
+  menu.querySelectorAll('.wd-item[data-path]').forEach(b => b.addEventListener('click', () => pick(b.dataset.path)));
+  $('#wdBrowse').addEventListener('click', () => {
+    menu.hidden = true;
+    openFsPicker('workspace', { start: active, title: 'Choose workspace', onPick: (p) => chooseWorkdir(p) });
+  });
 }
 
 /** Adopt `p` as the working project, or clear it with ''. An untouched session
@@ -1211,14 +1208,14 @@ function chooseWorkdir(p) {
     persist();
     renderWdChip();
     reconnect();
-    toast(clearing ? 'No project — the agent picks its own paths' : `Working project → ${wdBase(p)}`);
+    toast(clearing ? 'No workspace — the agent picks its own paths' : `Workspace → ${wdBase(p)}`);
     return;
   }
   newSession(true);
   renderTranscript(cur());
   renderModelChip();
   attachCurrent();
-  toast(clearing ? 'New session with no project' : `New session in ${wdBase(p)}`);
+  toast(clearing ? 'New session with no workspace' : `New session in ${wdBase(p)}`);
 }
 
 $('#wdChip').addEventListener('click', (e) => {
@@ -1231,6 +1228,146 @@ document.addEventListener('click', (e) => {
   const t = e.target;
   if (m && !m.hidden && !(t && t.closest && t.closest('.wd-wrap'))) m.hidden = true;
 });
+
+// ── folder browser ────────────────────────────────────────
+// We browse the real filesystem ourselves instead of raising a native dialog,
+// which would look and behave differently on Windows, macOS and Linux.
+//
+// Each *purpose* gets its own independent instance — its own element, its own
+// ids, its own cursor and selection. The workspace picker and the "clone into"
+// picker answer different questions, so they must not share one modal.
+const fsPickers = new Map();
+
+function fsInstance(key) {
+  if (fsPickers.has(key)) return fsPickers.get(key);
+  const el = document.createElement('div');
+  el.className = 'fs-overlay';
+  el.id = 'fsOverlay-' + key;
+  el.hidden = true;
+  el.innerHTML = `
+    <div class="fs-shell">
+      <header class="fs-head">
+        <span class="fs-title" data-fs="title">Choose folder</span>
+        <button class="icon-btn ho-close" data-fs="close" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="fs-bar">
+        <button class="ho-btn small" data-fs="up" title="Up one level">↑</button>
+        <input class="fs-path" data-fs="path" spellcheck="false" autocomplete="off" placeholder="path">
+        <button class="ho-btn small" data-fs="gopath">Go</button>
+      </div>
+      <div class="fs-quick" data-fs="quick"></div>
+      <div class="fs-list" data-fs="list"></div>
+      <footer class="fs-foot">
+        <span class="fs-note" data-fs="note"></span>
+        <div class="fs-foot-actions">
+          <button class="ho-btn small" data-fs="mkdir">New folder</button>
+          <button class="ho-btn primary" data-fs="pick">Use this folder</button>
+        </div>
+      </footer>
+    </div>`;
+  document.body.appendChild(el);
+  const inst = { key, el, path: '', parent: '', onPick: null };
+  inst.q = (name) => el.querySelector(`[data-fs="${name}"]`);
+  fsPickers.set(key, inst);
+  wireFsInstance(inst);
+  return inst;
+}
+
+function fsShowStale(inst) {
+  inst.q('list').innerHTML = '<div class="fs-empty">This backend has no /api/fs routes — it is an older build. Restart Tacit (stop and start the server), then reload this page.</div>';
+  inst.q('note').textContent = '';
+}
+
+async function openFsPicker(key, { start = '', title = 'Choose folder', onPick = null } = {}) {
+  const inst = fsInstance(key);
+  inst.onPick = onPick;
+  inst.q('title').textContent = title;
+  inst.el.hidden = false;
+  let data = { roots: [], home: '' };
+  let status = 0;
+  try {
+    const r = await fetch('/api/fs/roots');
+    status = r.status;
+    data = await r.json();
+  } catch (e) { /* fall through to the message below */ }
+  if (status === 404) { fsShowStale(inst); return; }
+  const quick = inst.q('quick');
+  quick.innerHTML = (data.roots || []).map(r =>
+    `<button class="fs-quick-btn" data-path="${esc(String(r.path))}">${esc(String(r.name))}</button>`).join('');
+  quick.querySelectorAll('.fs-quick-btn').forEach(b =>
+    b.addEventListener('click', () => fsNavigate(inst, b.dataset.path)));
+  const first = start || data.home || (data.roots && data.roots[0] && data.roots[0].path) || '';
+  await fsNavigate(inst, first);
+}
+
+async function fsNavigate(inst, path) {
+  const list = inst.q('list');
+  list.innerHTML = '<div class="fs-empty">loading…</div>';
+  let data, status = 0;
+  try {
+    const r = await fetch('/api/fs/list?path=' + encodeURIComponent(path || ''));
+    status = r.status;
+    data = await r.json();
+  } catch (e) {
+    list.innerHTML = '<div class="fs-empty">cannot reach the server</div>';
+    return;
+  }
+  if (status === 404) { fsShowStale(inst); return; }
+  if (!data || !data.ok) {
+    const why = (data && (data.error || data.detail)) || ('the server returned HTTP ' + status);
+    list.innerHTML = `<div class="fs-empty">${esc(String(why))}</div>`;
+    return;
+  }
+  inst.path = data.path;
+  inst.parent = data.parent || '';
+  inst.q('path').value = data.path;
+  inst.q('up').disabled = !data.parent;
+  const rows = [];
+  if (data.parent) {
+    rows.push(`<button class="fs-row" data-path="${esc(data.parent)}"><span class="fs-ic">↰</span><span class="fs-nm">..</span></button>`);
+  }
+  for (const d of (data.dirs || [])) {
+    rows.push(`<button class="fs-row" data-path="${esc(String(d.path))}"><span class="fs-ic">▸</span><span class="fs-nm">${esc(String(d.name))}</span></button>`);
+  }
+  list.innerHTML = rows.join('') || '<div class="fs-empty">no sub-folders here</div>';
+  list.querySelectorAll('.fs-row').forEach(b =>
+    b.addEventListener('click', () => fsNavigate(inst, b.dataset.path)));
+  inst.q('note').textContent = `${(data.dirs || []).length} folder(s)`;
+  list.scrollTop = 0;
+}
+
+function closeFsPicker(inst) { inst.el.hidden = true; }
+
+function wireFsInstance(inst) {
+  inst.q('close').addEventListener('click', () => closeFsPicker(inst));
+  inst.el.addEventListener('click', (e) => { if (e.target === inst.el) closeFsPicker(inst); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !inst.el.hidden) closeFsPicker(inst);
+  });
+  inst.q('up').addEventListener('click', () => { if (inst.parent) fsNavigate(inst, inst.parent); });
+  const goPath = () => { const v = (inst.q('path').value || '').trim(); if (v) fsNavigate(inst, v); };
+  inst.q('gopath').addEventListener('click', goPath);
+  inst.q('path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); goPath(); } });
+  inst.q('mkdir').addEventListener('click', async () => {
+    const name = (prompt('New folder name') || '').trim();
+    if (!name) return;
+    const r = await fetch('/api/fs/mkdir', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: inst.path, name }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) { toast(j.error || 'could not create the folder', true); return; }
+    await fsNavigate(inst, inst.path);
+  });
+  inst.q('pick').addEventListener('click', () => {
+    const chosen = inst.path;
+    const cb = inst.onPick;
+    closeFsPicker(inst);
+    if (chosen && cb) cb(chosen);
+  });
+}
 
 // ── token meter (topbar) ─────────────────────────────────────────────
 // Cumulative session tokens + a context
@@ -1379,8 +1516,9 @@ async function loadInfo() {
   if (info.default && !localStorage.getItem('tacit.seen')) {
     // first-ever load (or old registry): migrate legacy/default model picks
     localStorage.setItem('tacit.seen', '1');
+    const known = new Set((info.models || []).map(m => m.id));
     sessions.forEach(s => {
-      if (!s.model || s.model === 'llamacpp/qwythos-mtp' || s.model === info.default) {
+      if (!s.model || !known.has(s.model) || s.model === info.default) {
         s.model = info.default;
       }
     });
@@ -1653,25 +1791,31 @@ sessMenu.addEventListener('click', e => {
 $('#topTitle').addEventListener('dblclick', () => startRenameTop());
 
 
+// one renderer for session stats — used by the stats RPC and by any
+// queue_update carrying the same fields, so the two cannot drift apart
+function applySessionStats(d) {
+  if (!d) return;
+  const tok = d.tokens || {};
+  toast(`msgs ${d.totalMessages ?? '?'} · tools ${d.toolCalls ?? '?'} · tokens ${tok.total ?? '?'} · ctx ${d.contextUsage?.percent != null ? d.contextUsage.percent.toFixed(0) + '%' : '?'}`, false);
+  // reconcile the topbar meter with the agent's own counters
+  const s = cur();
+  if (s && d.tokens) {
+    s.usage = {
+      tokens: { input: tok.input || 0, output: tok.output || 0,
+                cacheRead: tok.cacheRead || 0, cacheWrite: tok.cacheWrite || 0,
+                total: tok.total || 0 },
+      context: { tokens: d.contextUsage?.tokens ?? null,
+                 window: d.contextUsage?.contextWindow || (s.usage && s.usage.context?.window) || 0,
+                 percent: d.contextUsage?.percent ?? null, reserve: 16384 },
+      compacting: false,
+    };
+    renderTokMeter();
+  }
+}
+
 function handleRpcResponse(m) {
   if (m.command === 'get_session_stats' && m.ok && m.data) {
-    const d = m.data;
-    const tok = d.tokens || {};
-    toast(`msgs ${d.totalMessages ?? '?'} · tools ${d.toolCalls ?? '?'} · tokens ${tok.total ?? '?'} · ctx ${d.contextUsage?.percent != null ? d.contextUsage.percent.toFixed(0) + '%' : '?'}`, false);
-    // reconcile the topbar meter with the agent's own counters
-    const s = cur();
-    if (s && d.tokens) {
-      s.usage = {
-        tokens: { input: tok.input || 0, output: tok.output || 0,
-                  cacheRead: tok.cacheRead || 0, cacheWrite: tok.cacheWrite || 0,
-                  total: tok.total || 0 },
-        context: { tokens: d.contextUsage?.tokens ?? null,
-                   window: d.contextUsage?.contextWindow || (s.usage && s.usage.context?.window) || 0,
-                   percent: d.contextUsage?.percent ?? null, reserve: 16384 },
-        compacting: false,
-      };
-      renderTokMeter();
-    }
+    applySessionStats(m.data);
   } else if (m.command === 'steer' || m.command === 'follow_up') {
     if (!m.ok) toast('Steer failed: ' + (m.error || ''), true);
   } else if (m.command === 'compact') {
@@ -1722,7 +1866,7 @@ function termPrint(text, cls) {
 function openTerminal() {
   termOverlay.hidden = false;
   if (!termOut.childElementCount) {
-    termPrint('Tacit terminal — commands run in the working project', 'term-note');
+    termPrint('Tacit terminal — commands run in the workspace', 'term-note');
   }
   const s = cur();
   termCwd.textContent = (s && s.workdir) || '';
@@ -1822,6 +1966,7 @@ window.Tacit = Object.assign(window.Tacit || {}, {
   getSid: () => activeId,
   getWorkdir: () => { const s = cur(); return (s && s.workdir) || ''; },
   refreshInfo: () => loadInfo(),
+  pickDir: ({ key = 'workspace', ...opts } = {}) => openFsPicker(key, opts),
   toast,
 });
 })();

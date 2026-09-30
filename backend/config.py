@@ -89,12 +89,6 @@ SNAPSHOT_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
 SNAPSHOT_MAX_FILE = int(os.environ.get("TACIT_SNAPSHOT_MAX_FILE", str(2 * 1024 * 1024)))
 SNAPSHOT_MAX_FILES = int(os.environ.get("TACIT_SNAPSHOT_MAX_FILES", "3000"))
 
-ROOT_CANDIDATES = [
-    "Projects", "projects", "Dev", "dev", "Code", "code", "src",
-    "Repos", "repos", "workspace", "Workspace", "Source/repos",
-    "Documents/Projects", "Documents/GitHub", "Documents/Code",
-    "Documents/Dev", "Developer",
-]
 
 
 def load_env() -> None:
@@ -214,14 +208,63 @@ def resolve_model(ref: str | None = None) -> dict | None:
 
 
 def project_roots() -> list[str]:
+    """Explicitly configured workspace roots only — never an assumed layout.
+
+    There is deliberately no auto-scan of ~/Projects, ~/Dev and friends: a
+    folder becomes a workspace only because the user pointed at it. With
+    nothing configured this is just the home directory, used as a neutral
+    fallback (a working directory for version-control credential lookups).
+    """
     env = (os.environ.get("TACIT_PROJECTS_ROOTS") or "").strip()
     if env:
         cands = [p.strip() for p in env.split(os.pathsep) if p.strip()]
     else:
         cands = [str(p) for p in (prefs().get("projectRoots") or []) if p]
-        if not cands:
-            cands = [str(USER_HOME / rel) for rel in ROOT_CANDIDATES]
     return [c for c in cands if Path(c).is_dir()] or [str(USER_HOME)]
+
+
+def fs_roots() -> list[dict]:
+    """Places to start browsing: drives on Windows, roots/mounts elsewhere."""
+    out: list[dict] = []
+    if os.name == "nt":
+        import string as _string
+        for letter in _string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if Path(drive).exists():
+                out.append({"name": drive, "path": drive})
+    else:
+        out.append({"name": "/", "path": "/"})
+        for base in ("/Volumes", "/mnt", "/media"):
+            if Path(base).is_dir():
+                out.append({"name": base, "path": base})
+    home = str(USER_HOME)
+    if not any(r["path"] == home for r in out):
+        out.append({"name": "Home", "path": home})
+    return out
+
+
+def fs_list(path: str | None = None) -> dict:
+    """List the sub-directories of `path` for the in-app folder browser."""
+    raw = str(path or "").strip() or str(USER_HOME)
+    try:
+        p = Path(raw).expanduser().resolve()
+    except Exception:
+        p = Path(raw)
+    if not p.is_dir():
+        return {"ok": False, "error": "not a directory", "path": str(p)}
+    dirs = []
+    try:
+        for entry in sorted(p.iterdir(), key=lambda e: e.name.lower()):
+            try:
+                if entry.is_dir():
+                    dirs.append({"name": entry.name, "path": str(entry)})
+            except OSError:
+                continue
+    except PermissionError:
+        return {"ok": False, "error": "permission denied", "path": str(p)}
+    parent = str(p.parent) if p.parent != p else ""
+    return {"ok": True, "path": str(p), "name": p.name or str(p),
+            "parent": parent, "dirs": dirs, "count": len(dirs)}
 
 
 def all_project_roots(sessions: list[dict]) -> list[str]:

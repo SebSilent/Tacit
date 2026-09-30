@@ -18,7 +18,7 @@ let consoleLines = [];
 const MAX_CONSOLE_LINES = 400;
 let busy = false;
 let wdOverride = '';   // panel-scoped project folder (any repo), blank = session folder
-let projects = [];      // every folder under the projects base (C:\Projects)
+let projects = [];      // recent workspaces only — no assumed project layout
 
 const esc = t => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -229,36 +229,42 @@ async function refresh() {
 
 // ── Projects: every folder under the discovered project roots ──────────────
 async function loadProjects() {
-  // full=1 adds branch / remote enrichment; the working-project picker in
-  // app.js uses the light list so it stays instant on large roots.
+  // Only used to enrich the workspace status badge (repo / branch / GitHub).
+  // There is no workspace *picker* here any more: the row below browses the
+  // filesystem directly instead of offering a guessed list.
   const r = await api('/api/projects?full=1');
   projects = (r.ok && r.projects) || [];
-  const sel = $('#gitProjectSelect');
-  if (!sel) return;
-  const cur = state.root || workdir();
-  sel.innerHTML = '<option value="">— select a project —</option>' + projects.map(p => {
-    const tag = p.isRepo ? 'repo' : 'not git';
-    const suffix = p.isRepo ? ` · ${p.branch || 'HEAD'}${p.github_full_name ? ' · ' + p.github_full_name : ''}` : '';
-    return `<option value="${esc(p.path)}">${esc(p.name)} [${tag}]${esc(suffix)}</option>`;
-  }).join('');
-  if (cur) sel.value = cur;
   renderProjectStatus();
+}
+
+/** GitHub owner/name for the current repo. The repo's own remotes are the
+ *  ground truth (they come back with the status call); the enriched recent
+ *  workspaces list is only a fallback, so the badge never depends on the
+ *  workspace happening to be in that list. */
+function ghFullName() {
+  const re = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i;
+  for (const r of (state.remotes || [])) {
+    const m = re.exec(String(r.url || '').trim());
+    if (m) return `${m[1]}/${m[2]}`;
+  }
+  const wd = workdir();
+  const proj = projects.find(x => x.path === wd) || projects.find(x => x.path === state.root);
+  return (proj && proj.github_full_name) || '';
 }
 
 function renderProjectStatus() {
   const el = $('#gitProjectStatus');
   if (!el) return;
-  const wd = workdir();
-  const proj = projects.find(x => x.path === wd) || projects.find(x => x.path === state.root);
   if (!state.isRepo) {
     el.innerHTML = `<span class="git-badge none">not a repository — Initialize to start version control</span>`;
     return;
   }
+  const gh = ghFullName();
   const parts = [`<span class="git-badge repo">✓ repository</span>`];
   if (state.status && state.status.branch) parts.push(`<span class="git-badge branch">⎇ ${esc(state.status.branch)}</span>`);
-  if (proj && proj.github_full_name) {
-    parts.push(`<span class="git-badge gh" id="gitProjVis" data-repo="${esc(proj.github_full_name)}">checking…</span>`);
-    parts.push(`<a class="git-badge link" href="https://github.com/${esc(proj.github_full_name)}" target="_blank" rel="noopener">${esc(proj.github_full_name)} ↗</a>`);
+  if (gh) {
+    parts.push(`<span class="git-badge gh" id="gitProjVis" data-repo="${esc(gh)}">checking…</span>`);
+    parts.push(`<a class="git-badge link" href="https://github.com/${esc(gh)}" target="_blank" rel="noopener">${esc(gh)} ↗</a>`);
   } else {
     parts.push(`<span class="git-badge none">local only — not on GitHub</span>`);
   }
@@ -331,13 +337,7 @@ async function freshHistoryPush(branch) {
 /** Delete the GitHub repository backing the selected project (needs a token
  * with the `delete_repo` scope). Lets a project be re-published in one step. */
 async function deleteRepo() {
-  const proj = projects.find(x => x.path === workdir()) || projects.find(x => x.path === state.root);
-  let full = (proj && proj.github_full_name) || '';
-  if (!full) {
-    const url = (state.remotes || []).map(r => r.url).find(u => /github\.com/.test(u)) || '';
-    const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(url);
-    if (m) full = `${m[1]}/${m[2]}`;
-  }
+  const full = ghFullName();
   if (!full) { note('this project has no GitHub remote to delete', true); return; }
   if (!confirm('Delete the GitHub repository ' + full + '?\nThis cannot be undone.')) return;
   const r = await api('/api/github/delete', {
@@ -477,12 +477,31 @@ function wireGithub() {
   if (wdInput) wdInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); wdOverride = wdInput.value.trim(); refresh(); }
   });
-  const projectSel = $('#gitProjectSelect');
-  if (projectSel) projectSel.addEventListener('change', () => {
-    wdOverride = projectSel.value || '';
-    if (wdInput) wdInput.value = wdOverride;
-    note(wdOverride ? ('project: ' + wdOverride) : '');
-    refresh();
+  const wdBrowse = $('#gitWorkdirBrowse');
+  if (wdBrowse) wdBrowse.addEventListener('click', () => {
+    window.Tacit.pickDir({
+      key: 'workspace',
+      start: (wdInput && wdInput.value.trim()) || workdir(),
+      title: 'Choose workspace',
+      onPick: (p) => {
+        wdOverride = p;
+        if (wdInput) wdInput.value = p;
+        note('workspace → ' + p);
+        refresh();
+      },
+    });
+  });
+  const ghDirBrowse = $('#gitGhDirBrowse');
+  if (ghDirBrowse) ghDirBrowse.addEventListener('click', () => {
+    window.Tacit.pickDir({
+      key: 'clone',
+      start: ($('#gitGhDir') && $('#gitGhDir').value.trim()) || '',
+      title: 'Clone into folder',
+      onPick: (p) => {
+        if ($('#gitGhDir')) $('#gitGhDir').value = p;
+        note('clone into ' + p);
+      },
+    });
   });
   const createBtn = $('#gitGhCreate');
   if (createBtn) createBtn.addEventListener('click', createRepo);

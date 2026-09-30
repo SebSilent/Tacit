@@ -122,15 +122,15 @@ async function renderProviders() {
   for (const name of names) {
     const p = providers[name];
     const keyBadge = p.apiKey.kind === 'env'
-      ? `<span class="badge key" title="resolved from env var ${esc(p.apiKey.env)}">env:${esc(p.apiKey.env)}${p.apiKey.env_set ? '' : ' (unset)'}</span>`
-      : (p.apiKey.kind === 'literal' ? '<span class="badge key">key</span>' : '<span class="badge key">no-key</span>');
+      ? `<span class="badge key">env:${esc(p.apiKey.env)}${p.apiKey.env_set ? '' : ' (unset)'}</span>`
+      : (p.apiKey.kind === 'value' ? '<span class="badge key">key</span>' : '<span class="badge key">no-key</span>');
     html += `
       <div class="prov-card" data-prov="${esc(name)}">
         <div class="prov-head">
           <div class="prov-name">${esc(name)} ${keyBadge}</div>
           <div class="prov-actions">
-            <button class="ho-btn small" data-act="probe" title="Pull the live model list from the endpoint">Re-scan</button>
-            <button class="ho-btn small danger" data-act="del" title="Delete provider">Delete</button>
+            <button class="ho-btn small" data-act="probe" title="Re-scan">Re-scan</button>
+            <button class="ho-btn small danger" data-act="del" title="Delete">Delete</button>
           </div>
         </div>
         <div class="prov-meta"><code>${esc(p.baseUrl || '')}</code> · ${esc(p.api || '')}</div>
@@ -148,13 +148,14 @@ async function renderProviders() {
           <span class="model-ctx">${m.contextWindow ? Math.round(m.contextWindow / 1024) + 'k' : ''}</span>
           <span class="model-spacer"></span>
           ${isDefault ? '<span class="badge default">default</span>' : `<button class="ho-btn small" data-act="set-default">Set default</button>`}
-          <button class="ho-btn small danger" data-act="del-model" title="Remove model">×</button>
+          <button class="ho-btn small danger" data-act="del-model" title="Remove">×</button>
         </div>`;
     }
     html += `</div>
         <div class="model-add">
-          <input class="model-add-id" placeholder="model id, e.g. qwythos-mtp:latest" spellcheck="false">
+          <input class="model-add-id" placeholder="model id, e.g. qwen2.5-coder:7b" spellcheck="false">
           <input class="model-add-name" placeholder="display name (optional)" spellcheck="false">
+          <input class="model-add-ctx" placeholder="context window (tokens)" spellcheck="false">
           <label class="chk"><input type="checkbox" class="model-add-reason" checked> reasoning</label>
           <button class="ho-btn small primary" data-act="add-model">Add model</button>
         </div>
@@ -203,7 +204,9 @@ async function renderProviders() {
       const r = await api(`/api/providers/${encodeURIComponent(prov)}/probe`, { method: 'POST' });
       if (!r.ok) { box.innerHTML = `<span class="ho-err">${esc(r.error)}</span>`; return; }
       const fresh = r.new || [];
-      if (!fresh.length) { box.innerHTML = `<span class="ho-sub">Endpoint reachable — ${r.models.length} model(s), all already added.</span>`; return; }
+      const all = r.models || [];
+      if (!all.length) { box.innerHTML = '<span class="ho-sub">The endpoint exposes no models — add them manually below.</span>'; return; }
+      if (!fresh.length) { box.innerHTML = `<span class="ho-sub">Endpoint reachable — ${all.length} model(s), all already added.</span>`; return; }
       box.innerHTML = `
         <div class="probe-head">Found ${fresh.length} new model(s) on the endpoint:</div>
         <div class="probe-ids">${fresh.map(id => `<label class="chk"><input type="checkbox" class="probe-pick" value="${esc(id)}" checked> ${esc(id)}</label>`).join('')}</div>
@@ -221,8 +224,10 @@ async function renderProviders() {
       const id = card.querySelector('.model-add-id').value.trim();
       const name = card.querySelector('.model-add-name').value.trim();
       const reasoning = card.querySelector('.model-add-reason').checked;
+      const ctxEl = card.querySelector('.model-add-ctx');
+      const contextWindow = ctxEl ? (parseInt(ctxEl.value, 10) || 0) : 0;
       if (!id) { setNote('Model id required', true); return; }
-      const r = await post(`/api/providers/${encodeURIComponent(prov)}/models`, { id, name, reasoning });
+      const r = await post(`/api/providers/${encodeURIComponent(prov)}/models`, { id, name, reasoning, contextWindow });
       if (r.ok) { setNote(`Model "${id}" added to ${prov}`); renderProviders(); refreshSidebar(); }
       else setNote(r.error || 'Add failed', true);
     });

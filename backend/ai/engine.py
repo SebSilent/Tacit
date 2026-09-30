@@ -156,7 +156,44 @@ def stream_chat(messages: list[dict], *, ref: str | None = None, tools=None,
     yield {"type": "done", "finish": finish, "model": model}
 
 
-def remote_models(base_url: str, api_key: str = "") -> list[str]:
+_CONTEXT_KEYS = ("contextWindow", "context_window", "context_length", "contextLength",
+                 "max_model_len", "max_context_length", "max_context_tokens", "context_size",
+                 "n_ctx")
+_MAXTOKEN_KEYS = ("maxTokens", "max_tokens", "max_output_tokens", "max_completion_tokens")
+
+
+def _meta_int(obj: dict, keys, depth: int = 0) -> int:
+    """First positive integer found under any of `keys` (searching nested meta)."""
+    if not isinstance(obj, dict) or depth > 2:
+        return 0
+    for k in keys:
+        v = obj.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)) and v > 0:
+            return int(v)
+        if isinstance(v, str):
+            try:
+                n = int(v.strip())
+            except ValueError:
+                continue
+            if n > 0:
+                return n
+    for nested in ("meta", "arch", "details"):
+        if isinstance(obj.get(nested), dict):
+            found = _meta_int(obj[nested], keys, depth + 1)
+            if found:
+                return found
+    return 0
+
+
+def remote_model_details(base_url: str, api_key: str = "") -> list[dict]:
+    """List a provider's models with whatever context window the endpoint exposes.
+
+    OpenAI-compatible `/models` responses vary: some return bare ids, others add
+    `context_length` (OpenRouter), `max_model_len` (vLLM) or similar. Where the
+    endpoint says nothing, contextWindow/maxTokens are 0 and the UI stays blank.
+    """
     url = f"{str(base_url).rstrip('/')}/models"
     headers = {}
     if api_key:
@@ -172,7 +209,16 @@ def remote_models(base_url: str, api_key: str = "") -> list[str]:
     out = []
     for m in rows:
         if isinstance(m, str):
-            out.append(m)
+            out.append({"id": m, "contextWindow": 0, "maxTokens": 0})
         elif isinstance(m, dict):
-            out.append(m.get("id") or m.get("name") or "")
-    return [m for m in out if m]
+            mid = m.get("id") or m.get("name") or ""
+            if not mid:
+                continue
+            out.append({"id": mid,
+                        "contextWindow": _meta_int(m, _CONTEXT_KEYS),
+                        "maxTokens": _meta_int(m, _MAXTOKEN_KEYS)})
+    return out
+
+
+def remote_models(base_url: str, api_key: str = "") -> list[str]:
+    return [m["id"] for m in remote_model_details(base_url, api_key)]
