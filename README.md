@@ -47,18 +47,19 @@ and it is paid again on every turn.
 
 Most tools do not show you this number. Tacit does, in **Settings > Tokens**.
 
-| | System prompt | Tools | Tool schemas | Estimated tokens |
+| System | System prompt | Tools | Tool schemas | Estimated tokens |
 |---|---|---|---|---|
 | **Tacit, Minimal profile** | **979 chars** | **7** | **1.9 KB** | **~710** |
-| **Tacit, Lean profile** | 979 chars | 24 | 7.2 KB | ~2,100 |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
+| **Tacit, Default profile** | 979 chars | 24 | 7.2 KB | ~2,100 |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
 
-The interesting row is the first one, because it is a like for like. Tacit's **Minimal** profile leaves
-exactly the seven tools Pi ships with, read, write, edit, shell, grep, list and glob, and nothing
-else:
+The rows are ordered by cost, so the three systems that fit inside 2,200 tokens sit together at the
+top. The interesting one is the first, because it is a like for like. Tacit's **Minimal** profile
+leaves exactly the seven tools Pi ships with, read, write, edit, shell, grep, list and glob, and
+nothing else:
 
 | Same seven capabilities | Tacit | Pi |
 |---|---|---|
@@ -121,8 +122,8 @@ before you apply it.
 | Profile | What is on | Fixed prompt |
 |---|---|---|
 | **Minimal** | Seven core tools. No plugins, no memory, nothing else. | ~710 tokens |
-| **Lean** | All 24 built-in tools. No plugins, no memory. | ~2,100 tokens |
-| **Assisted** | Lean, plus memory at the default budget | ~2,500 tokens |
+| **Default** | All 24 built-in tools. No plugins, no memory. | ~2,100 tokens |
+| **Assisted** | Default, plus memory at the default budget | ~2,500 tokens |
 | **Full** | Assisted, plus every bundled plugin | ~2,700 tokens |
 | **Everything** | Full, with MCP tools injected eagerly instead of on demand | ~2,700 tokens plus your MCP schemas |
 

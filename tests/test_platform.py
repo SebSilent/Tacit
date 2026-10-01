@@ -498,23 +498,28 @@ class TestNodeBridgeRuntime(unittest.TestCase):
 class TestProfiles(Isolated):
     def test_builtins_are_listed_with_costs(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
-        for name in ("minimal", "lean", "assisted", "full", "everything"):
+        for name in ("minimal", "default", "assisted", "full", "everything"):
             self.assertIn(name, rows)
-        self.assertTrue(rows["lean"]["active"])
-        self.assertFalse(rows["lean"]["mcp_direct"])
+        self.assertTrue(rows["default"]["active"])
+        self.assertFalse(rows["default"]["mcp_direct"])
         self.assertFalse(rows["full"]["mcp_direct"])
         self.assertTrue(rows["everything"]["mcp_direct"])
+
+    def test_legacy_lean_name_still_resolves(self):
+        config.write_json(config.PROFILES_FILE, {"active": "lean", "profiles": {}})
+        self.assertEqual(profiles.load()["active"], "default")
+        self.assertTrue(profiles.apply("lean")["ok"])
 
     def test_minimal_narrows_the_tool_set(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
         self.assertEqual(rows["minimal"]["tool_count"], len(profiles.CORE_TOOLS))
-        self.assertGreater(rows["lean"]["tool_count"], rows["minimal"]["tool_count"])
-        self.assertLess(rows["minimal"]["cost"]["total"], rows["lean"]["cost"]["total"])
+        self.assertGreater(rows["default"]["tool_count"], rows["minimal"]["tool_count"])
+        self.assertLess(rows["minimal"]["cost"]["total"], rows["default"]["cost"]["total"])
 
     def test_cost_ordering(self):
         rows = {p["name"]: p["cost"]["total"] for p in profiles.list_profiles()}
-        self.assertLess(rows["minimal"], rows["lean"])
-        self.assertLess(rows["lean"], rows["assisted"])
+        self.assertLess(rows["minimal"], rows["default"])
+        self.assertLess(rows["default"], rows["assisted"])
         self.assertLessEqual(rows["assisted"], rows["full"])
 
     def test_every_profile_pays_for_the_base_prompt(self):
@@ -532,7 +537,7 @@ class TestProfiles(Isolated):
 
     def test_switching_back_restores_every_tool(self):
         profiles.apply("minimal")
-        profiles.apply("lean")
+        profiles.apply("default")
         self.assertIsNone(profiles.current()["tools"])
         self.assertEqual(profiles.current()["tool_count"], len(agent.TOOLS))
 
@@ -541,7 +546,7 @@ class TestProfiles(Isolated):
         self.assertTrue(plugin_manager.is_enabled("memory_vault"))
         self.assertEqual(memory_store.budget(), memory_store.DEFAULT_BUDGET)
 
-        self.assertTrue(profiles.apply("lean")["ok"])
+        self.assertTrue(profiles.apply("default")["ok"])
         self.assertFalse(plugin_manager.is_enabled("memory_vault"))
         self.assertEqual(memory_store.budget(), 0)
         self.assertEqual(memory_store.startup_selection()["tokens"], 0)
@@ -549,7 +554,7 @@ class TestProfiles(Isolated):
     def test_apply_everything_sets_direct_mode(self):
         profiles.apply("everything")
         self.assertTrue(mcp_registry.settings()["direct_mode"])
-        profiles.apply("lean")
+        profiles.apply("default")
         self.assertFalse(mcp_registry.settings()["direct_mode"])
 
     def test_unknown_profile_refused(self):
@@ -565,8 +570,8 @@ class TestProfiles(Isolated):
         self.assertNotIn("my-setup", {p["name"] for p in profiles.list_profiles()})
 
     def test_builtin_cannot_be_deleted_or_shadowed(self):
-        self.assertFalse(profiles.delete("lean")["ok"])
-        self.assertFalse(profiles.capture("lean")["ok"])
+        self.assertFalse(profiles.delete("default")["ok"])
+        self.assertFalse(profiles.capture("default")["ok"])
 
     def test_profile_caps_memory_like_the_budget(self):
         memory_store.add("x " * 200, type="project_fact", pinned=True)

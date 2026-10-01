@@ -27,8 +27,8 @@ BUILTIN = {
         "mcp_direct": False,
         "tools": list(CORE_TOOLS),
     },
-    "lean": {
-        "label": "Lean",
+    "default": {
+        "label": "Default",
         "description": "All built-in tools. No plugins, no memory, MCP loaded only when used.",
         "plugins": [],
         "memory_budget": 0,
@@ -61,7 +61,11 @@ BUILTIN = {
     },
 }
 
-DEFAULT_PROFILE = "lean"
+DEFAULT_PROFILE = "default"
+
+# Earlier builds shipped this profile under the name "lean"; keep it working
+# for anyone whose profiles.json still names it.
+LEGACY_NAMES = {"lean": "default"}
 
 
 def load() -> dict:
@@ -72,6 +76,7 @@ def load() -> dict:
     if not isinstance(custom, dict):
         custom = {}
     active = data.get("active") or DEFAULT_PROFILE
+    active = LEGACY_NAMES.get(active, active)
     return {"active": active, "profiles": custom}
 
 
@@ -188,6 +193,7 @@ def current() -> dict:
 
 
 def apply(name: str) -> dict:
+    name = LEGACY_NAMES.get(name, name)
     cfg = _all().get(name)
     if cfg is None:
         return {"ok": False, "error": f"no profile '{name}'"}
