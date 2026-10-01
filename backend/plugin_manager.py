@@ -1,7 +1,7 @@
 """Lightweight plugin manager.
 
-A plugin declares metadata and may contribute tools, MCP server definitions,
-memory sources or a UI panel. Three rules shape this module:
+A plugin declares metadata and may contribute tools or MCP server definitions.
+Three rules shape this module:
 
 * **Disabled unless enabled.** Nothing a plugin provides reaches the agent
   until the user turns it on.
@@ -11,6 +11,10 @@ memory sources or a UI panel. Three rules shape this module:
   without running it.
 * **Visible cost.** Every plugin reports the tokens it adds to the startup
   prompt. A plugin that would inflate the always-on prompt must say so.
+
+A plugin contributes by defining ``tools()`` (tool schemas), ``call(name, args,
+ctx)`` to dispatch them, and optionally ``mcp_servers()`` to register external
+tool servers. Those are the two extension points the harness consumes.
 
 State lives in ``~/.tacit/plugins.json``.
 """
@@ -152,6 +156,11 @@ def describe(plugin_id: str, entry: Path, manifest: dict) -> dict:
 
 
 def _hook_names(plugin_id: str, enabled: bool) -> list[str]:
+    """Capabilities a plugin actually contributes.
+
+    Only hooks the harness consumes are reported, so the interface never
+    advertises something that would do nothing when switched on.
+    """
     if not enabled:
         return []
     with _LOCK:
@@ -159,9 +168,7 @@ def _hook_names(plugin_id: str, enabled: bool) -> list[str]:
     if module is None:
         return []
     names = []
-    for hook, label in (("tools", "tools"), ("mcp_servers", "mcp"),
-                        ("memory_sources", "memory"), ("panels", "panel"),
-                        ("services", "service")):
+    for hook, label in (("tools", "tools"), ("mcp_servers", "mcp")):
         if callable(getattr(module, hook, None)):
             names.append(label)
     return names

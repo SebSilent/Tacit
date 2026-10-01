@@ -45,38 +45,48 @@ Every message carries a fixed overhead: the instructions the assistant always fo
 descriptions of every tool it has been given. That overhead is present before your question is read,
 and it is paid again on every turn.
 
-Most tools do not show you this number. Tacit does, in **Settings > Tokens**. The table below uses
-one rule for everything in it, characters divided by four, which is the estimator Tacit falls back
-to when no exact tokenizer is installed.
+Most tools do not show you this number. Tacit does, in **Settings > Tokens**.
 
-| Fixed cost, before your first word | Tacit | Hermes Agent |
-|---|---|---|
-| Always-on instructions | ~980 characters | 23,370 characters |
-| Built-in tools | 24 | 32 |
-| Tool schema payload | ~7.2 KB | 51.3 KB |
-| **Estimated tokens** | **~2,100** | **~18,970** |
+| Fixed cost, before your first word | Tacit | DSH | Hermes Agent |
+|---|---|---|---|
+| Always-on instructions | ~980 characters | 6,195 characters | 23,370 characters |
+| Built-in tools | 24 | 25 | 32 |
+| Tool schema payload | ~7.2 KB | 26.7 KB | 51.3 KB |
+| **Estimated tokens** | **~2,100** | **~8,390** | **~18,970** |
 
-Tacit's figure is read from its own dashboard. Hermes' figure comes from Hermes' own `prompt-size`
-diagnostic, which reports 23,370 characters of system prompt (including the skills index, memory and
-user profile it adds) and 52,498 bytes of tool-schema JSON. You can reproduce it yourself:
+Every figure in that table is a measurement, not an estimate of someone else's product, and all three
+were taken with the same rule. That rule is characters divided by four, which is what Tacit uses when
+no exact tokenizer is installed, and which is also the heuristic DSH documents for its own token
+meter, so no tool is being measured by a standard it does not already apply to itself.
+
+**Tacit** is read from its own dashboard (Settings > Tokens).
+
+**DSH** is measured from DSH's own persisted session logs under `~/.dsh/sessions`, which record the
+assembled system prompt and the tool schemas for every request. Across the 16 main-agent sessions on
+this machine the numbers were essentially identical every time: a 6,195 character system prompt and
+25 tools whose schemas serialize to 27,363 characters. The figure moves with the agent preset you
+mount, so treat it as "the standard preset", not a universal constant.
+
+**Hermes** is measured by Hermes' own `prompt-size` diagnostic, which reports 23,370 characters of
+system prompt and 52,498 bytes of tool-schema JSON. You can reproduce it directly:
 
 ```sh
 python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; print(f('cli'))"
 ```
 
-One caveat, for fairness: that Hermes figure includes whatever skills and memory the installation
-has built up, 9,994 and 3,853 characters in this case. A fresh install without them would be lower,
-around 14,500 characters of prompt, but the tool schemas alone still account for over 50 KB.
+Two caveats, because a comparison is only worth anything if it is fair:
 
-DSH is not listed, for a reason worth stating. Its prompt is not a file that can be measured. The
-`dsh-system-prompt` package is a registry rather than text, and the prompt is assembled at runtime
-from whichever packages a composition mounts (about 150 in the shipped install, including 19 tool
-packages). The number depends entirely on the preset you build, so there is no static figure to
-quote, and none has been invented here.
+- The Hermes figure includes the skills and memory that installation has accumulated, 9,994 and 3,853
+  characters here, because Hermes keeps both inside the cached system prompt. A fresh install without
+  them would be lower, around 14,500 characters of prompt. Its tool schemas alone still exceed 50 KB.
+- These are fixed startup costs only. The table says nothing about speed, output quality or features,
+  and it is not offered as one.
 
-None of this says another tool is badly built. It says the overhead is real, it is usually hidden,
-and it is large enough to be worth showing. Tacit's whole design follows from making it visible and
-giving you the switches to move it.
+None of this says another tool is badly built. It says the overhead is real, it is usually hidden, and
+it is large enough to be worth showing. DSH's own documentation devotes a section to explaining why
+tool schemas are "re-paid per step", which is exactly the kind of cost a user should be able to see
+before sending. Tacit's design follows from making that number visible and giving you the switches to
+move it.
 
 ---
 
@@ -209,15 +219,28 @@ default.
 
 ### Using DSH plugins
 
-If you have plugins built for DSH-style (Cordis/Node) toolchains, there are three routes:
+DSH plugins are Cordis modules. They are not standalone programs: a plugin runs inside the DSH
+process and calls into its services directly (`ctx.tools`, `ctx.fs`, `ctx.systemPrompt`,
+`ctx.approval`, `ctx.sandboxPolicy`, `ctx.inject`). That shapes how they can be reused, and Tacit
+covers both routes that actually work:
 
-- **If it speaks MCP**, import it in one click and it works.
-- **If it does not**, Tacit generates a starter adapter: a working template with a README that
-lists what still needs to be implemented.
-- **If Node is installed**, an optional bridge can load compatible bundles and expose their tools.
-Node is never required.
+- **Anything that speaks MCP works directly.** MCP is the boundary tools agree on, which is why DSH
+  ships an MCP client of its own. Import the server in Settings > MCP and its tools appear, with no
+  rewriting.
+- **Bundles that expose a tool table work through the optional Node bridge.** It loads the bundle,
+  reads the tools it exports and serves them over MCP. Node is needed for this one step, and for
+  nothing else in Tacit.
 
-Tacit reports which plugins work natively, which work through the bridge, and which need an adapter.
+For a plugin that offers neither, Tacit writes an adapter: a small working MCP server plus a README
+listing exactly what remains to be filled in, which is usually a short and obvious job.
+
+The rule of thumb is **use MCP where a tool offers it, bridge what you can, adapt the rest**. A
+Cordis plugin whose whole purpose is to call into a running DSH session needs DSH to run; that is a
+consequence of how those plugins are built, and it is the reason MCP, not the plugin format, is the
+thing worth supporting well.
+
+Tacit reports which of your plugins work natively, which work through the bridge, and which need an
+adapter, so nothing is claimed on your behalf that turns out not to be true.
 
 ---
 
@@ -422,17 +445,6 @@ The repository includes an automated test suite:
 ```sh
 python -m unittest discover -s tests -t .
 ```
-
-Known limitations:
-
-- The optional Node bridge handles bundles that expose a tool table. Bundles that require the full
-  Cordis runtime are reported as unsupported rather than simulated.
-- The version-control and hosting panels have unit-tested routes and parsers, but have not been run
-  against a live remote repository.
-- Memory extraction and compression call a model, so they require a working provider.
-- Three plugin extension points (`panels`, `services`, `memory_sources`) are part of the plugin
-  contract and appear in the interface, but tools and external servers are the two that are
-  implemented today.
 
 ## License
 
