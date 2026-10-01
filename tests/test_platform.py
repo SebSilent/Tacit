@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import (agent, config, mcp_registry, memory_store, metrics,  # noqa: E402
-                     plugin_manager, tokens)
+                     plugin_manager, profiles, tokens)
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
@@ -492,6 +492,63 @@ class TestNodeBridgeRuntime(unittest.TestCase):
                   and "content" in m["result"]]
         self.assertTrue(called)
         self.assertEqual(called[0]["result"]["content"][0]["text"], "hello Tacit")
+
+
+class TestProfiles(Isolated):
+    def test_builtins_are_listed_with_costs(self):
+        rows = {p["name"]: p for p in profiles.list_profiles()}
+        for name in ("lean", "assisted", "full", "everything"):
+            self.assertIn(name, rows)
+        self.assertTrue(rows["lean"]["active"])
+        self.assertEqual(rows["lean"]["cost"]["total"], 0)
+        # enabling the vault costs its five tool schemas
+        self.assertGreater(rows["assisted"]["cost"]["total"], 0)
+        self.assertFalse(rows["lean"]["mcp_direct"])
+        self.assertFalse(rows["full"]["mcp_direct"])
+        self.assertTrue(rows["everything"]["mcp_direct"])
+
+    def test_cost_ordering(self):
+        rows = {p["name"]: p["cost"]["total"] for p in profiles.list_profiles()}
+        self.assertLess(rows["lean"], rows["assisted"])
+        self.assertLessEqual(rows["assisted"], rows["full"])
+
+    def test_apply_changes_plugin_state(self):
+        self.assertTrue(profiles.apply("assisted")["ok"])
+        self.assertTrue(plugin_manager.is_enabled("memory_vault"))
+        self.assertEqual(memory_store.budget(), memory_store.DEFAULT_BUDGET)
+
+        self.assertTrue(profiles.apply("lean")["ok"])
+        self.assertFalse(plugin_manager.is_enabled("memory_vault"))
+        self.assertEqual(memory_store.budget(), 0)
+        self.assertEqual(memory_store.startup_selection()["tokens"], 0)
+
+    def test_apply_everything_sets_direct_mode(self):
+        profiles.apply("everything")
+        self.assertTrue(mcp_registry.settings()["direct_mode"])
+        profiles.apply("lean")
+        self.assertFalse(mcp_registry.settings()["direct_mode"])
+
+    def test_unknown_profile_refused(self):
+        self.assertFalse(profiles.apply("nope")["ok"])
+
+    def test_capture_and_delete(self):
+        plugin_manager.enable("memory_vault")
+        made = profiles.capture("my setup", "My setup")
+        self.assertTrue(made["ok"])
+        self.assertEqual(made["name"], "my-setup")
+        self.assertIn("my-setup", {p["name"] for p in profiles.list_profiles()})
+        self.assertTrue(profiles.delete("my-setup")["ok"])
+        self.assertNotIn("my-setup", {p["name"] for p in profiles.list_profiles()})
+
+    def test_builtin_cannot_be_deleted_or_shadowed(self):
+        self.assertFalse(profiles.delete("lean")["ok"])
+        self.assertFalse(profiles.capture("lean")["ok"])
+
+    def test_profile_caps_memory_like_the_budget(self):
+        memory_store.add("x " * 200, type="project_fact", pinned=True)
+        profiles.apply("assisted")
+        self.assertLessEqual(memory_store.startup_selection()["tokens"],
+                             memory_store.DEFAULT_BUDGET)
 
 
 if __name__ == "__main__":

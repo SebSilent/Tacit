@@ -74,6 +74,17 @@
     const sid = (window.Tacit && window.Tacit.getSid && window.Tacit.getSid()) || '';
     const d = await api('/api/tokens/dashboard?sid=' + encodeURIComponent(sid));
     if (!d.ok) { panel.innerHTML = `<div class="ho-err">${esc(d.error || 'failed')}</div>`; return; }
+    const pf = await api('/api/profiles');
+    const activeProfile = pf.active || '';
+    const profileRow = (p) => `
+      <div class="prof-row ${p.active ? 'on' : ''}" data-name="${esc(p.name)}">
+        <span class="prof-name">${esc(p.label)}</span>
+        <span class="badge">${esc(p.cost_display)} tokens</span>
+        ${p.active ? '<span class="badge on">active</span>' : `<button class="ho-btn small" data-act="apply">Apply</button>`}
+        <span class="prof-desc">${esc(p.description)}</span>
+        ${p.builtin ? '' : '<button class="ho-btn small danger" data-act="del">×</button>'}
+      </div>`;
+    const profiles = (pf.profiles || []).map(profileRow).join('');
     const mark = d.exact ? '' : '<span class="ho-sub"> estimates (chars/4)</span>';
     const row = (label, value, hint) =>
       `<div class="tok-row"><span class="tok-label">${esc(label)}</span>` +
@@ -84,6 +95,13 @@
       <div class="ho-toolbar">
         <span class="ho-sub">Local accounting${mark} — nothing leaves this machine.</span>
         <button class="ho-btn small" id="tkRefresh">Refresh</button>
+      </div>
+      <div class="ho-section">Profile <span class="ho-sub sm">what is switched on, and what it costs</span></div>
+      <div class="prof-list">${profiles}</div>
+      <div class="mcp-add">
+        <input class="mcp-in" id="profName" placeholder="save current setup as…" spellcheck="false">
+        <button class="ho-btn small" id="profSave">Save profile</button>
+        <span class="ho-sub sm">Switching a profile applies immediately and updates the numbers below.</span>
       </div>
       <div class="ho-section">This session</div>
       <div class="tok-table">
@@ -113,6 +131,31 @@
         <span class="tok-hero-label">Saved by context discipline</span>
       </div>`;
     $('#tkRefresh').addEventListener('click', renderDashboard);
+
+    panel.querySelectorAll('.prof-row').forEach((row) => {
+      const name = row.dataset.name;
+      const apply = row.querySelector('[data-act="apply"]');
+      if (apply) apply.addEventListener('click', async () => {
+        note(`applying ${name}…`);
+        const r = await post(`/api/profiles/${encodeURIComponent(name)}/apply`);
+        note(r.ok ? `${name} applied (${esc(fmt((r.cost || {}).total))} tokens of extras)`
+                  : (r.error || 'failed'), !r.ok);
+        renderDashboard();
+      });
+      const del = row.querySelector('[data-act="del"]');
+      if (del) del.addEventListener('click', async () => {
+        if (!confirm(`Delete profile "${name}"?`)) return;
+        await api('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' });
+        renderDashboard();
+      });
+    });
+    $('#profSave').addEventListener('click', async () => {
+      const name = $('#profName').value.trim();
+      if (!name) { note('give the profile a name', true); return; }
+      const r = await post('/api/profiles', { name });
+      note(r.ok ? `saved profile "${r.name}"` : (r.error || 'failed'), !r.ok);
+      if (r.ok) renderDashboard();
+    });
   }
 
   // ── MCP ────────────────────────────────────────────────────────────────

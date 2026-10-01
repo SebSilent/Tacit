@@ -19,6 +19,13 @@ whether or not any of it is relevant to the task. You pay for that on every mess
 
 Tacit loads most capabilities only when they are needed, and shows what each one costs.
 
+That matters because attention is the scarce resource. A model does not read your message in
+isolation. It attends to everything in the prompt at once, and the fixed part is re-sent on every
+turn. Instructions it never needs still compete with the question it is answering, and you are
+billed for them each time. The usual way to make an agent more capable is to add more to that fixed
+part. Tacit takes the position that the fixed part should stay small, that anything extra should be
+opt-in, and that the number should be visible before you send it.
+
 - **Small standing prompt.** About 980 characters, roughly 245 tokens. That is the complete set of
 always-on instructions.
 - **Capabilities load on demand.** Skills, tools and integrations are listed by name. Full details
@@ -29,6 +36,67 @@ Estimated figures are labelled as estimates.
 and can be disabled again at any time.
 - **Local data.** All state lives in one folder on your computer. There are no accounts, no
 telemetry, no analytics, and no remote tracking.
+
+---
+
+## What a turn costs before you type
+
+Every message carries a fixed overhead: the instructions the assistant always follows, plus the
+descriptions of every tool it has been given. That overhead is present before your question is read,
+and it is paid again on every turn.
+
+Most tools do not show you this number. Tacit does, in **Settings > Tokens**. The table below uses
+one rule for everything in it, characters divided by four, which is the estimator Tacit falls back
+to when no exact tokenizer is installed.
+
+| Fixed cost, before your first word | Tacit | Hermes Agent |
+|---|---|---|
+| Always-on instructions | ~980 characters | 23,370 characters |
+| Built-in tools | 24 | 32 |
+| Tool schema payload | ~7.2 KB | 51.3 KB |
+| **Estimated tokens** | **~2,100** | **~18,970** |
+
+Tacit's figure is read from its own dashboard. Hermes' figure comes from Hermes' own `prompt-size`
+diagnostic, which reports 23,370 characters of system prompt (including the skills index, memory and
+user profile it adds) and 52,498 bytes of tool-schema JSON. You can reproduce it yourself:
+
+```sh
+python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; print(f('cli'))"
+```
+
+One caveat, for fairness: that Hermes figure includes whatever skills and memory the installation
+has built up, 9,994 and 3,853 characters in this case. A fresh install without them would be lower,
+around 14,500 characters of prompt, but the tool schemas alone still account for over 50 KB.
+
+DSH is not listed, for a reason worth stating. Its prompt is not a file that can be measured. The
+`dsh-system-prompt` package is a registry rather than text, and the prompt is assembled at runtime
+from whichever packages a composition mounts (about 150 in the shipped install, including 19 tool
+packages). The number depends entirely on the preset you build, so there is no static figure to
+quote, and none has been invented here.
+
+None of this says another tool is badly built. It says the overhead is real, it is usually hidden,
+and it is large enough to be worth showing. Tacit's whole design follows from making it visible and
+giving you the switches to move it.
+
+---
+
+## Profiles
+
+A profile is a named bundle of the optional capabilities, so you do not have to toggle four things
+every time you change how you are working. Each profile shows its token cost before you apply it.
+
+| Profile | What is on | Extra cost |
+|---|---|---|
+| **Lean** | Nothing. Everything loads on demand. | 0 tokens |
+| **Assisted** | Memory, at the default budget | ~406 tokens |
+| **Full** | Every bundled plugin, memory at the default budget | ~620 tokens |
+| **Everything** | Full, plus MCP tools injected eagerly instead of on demand | ~620 tokens plus your MCP schemas |
+
+Switching profiles applies immediately, and the dashboard numbers below the selector update to match.
+You can also save the current configuration under your own name, and delete it later.
+
+The point is not the presets themselves. It is that the cost of a configuration is knowable before
+you adopt it, rather than discovered later in a bill or a truncated conversation.
 
 ---
 
@@ -193,7 +261,8 @@ Manage them in **Settings > Plugins**. Tacit ships with two:
 
 ## Token dashboard
 
-**Settings > Tokens** shows a local breakdown for the current session:
+**Settings > Tokens** shows a local breakdown for the current session. It opens with the profile
+selector described above.
 
 - tokens sent and received
 - the composition of the starting prompt: base instructions, built-in tools, external tool schemas,
@@ -344,9 +413,9 @@ a readable audit log.
 
 Working and covered by tests: chat and agent turns against any OpenAI-compatible endpoint,
 sub-agents, plan mode, skills, compaction, background processes, snapshots with comparison and
-restore, the terminal, providers, sessions, token accounting and the dashboard, MCP servers over
-stdio and HTTP with lazy tool activation, the plugin system, the DSH bridge and adapter scaffolding,
-and the memory vault with enforced budgeting.
+restore, the terminal, providers, sessions, token accounting and the dashboard, capability profiles,
+MCP servers over stdio and HTTP with lazy tool activation, the plugin system, the DSH bridge and
+adapter scaffolding, and the memory vault with enforced budgeting.
 
 The repository includes an automated test suite:
 

@@ -249,14 +249,31 @@ def _enabled_modules():
 def collect_tools() -> list[dict]:
     """Tool schemas contributed by enabled plugins."""
     rows = []
-    for _pid, module in _enabled_modules():
+    for pid, module in _enabled_modules():
         fn = getattr(module, "tools", None)
         if callable(fn):
             try:
                 rows.extend(fn() or [])
             except Exception as exc:  # noqa: BLE001
-                _ERRORS[_pid] = str(exc)
+                _ERRORS[pid] = str(exc)
     return rows
+
+
+def tool_schemas(plugin_id: str) -> list[dict]:
+    """The tools a plugin contributes, whether or not it is enabled.
+
+    Used to price a capability before switching it on.
+    """
+    for pid, _dir, entry, _manifest in _candidates():
+        if pid != plugin_id:
+            continue
+        try:
+            module = _load(pid, entry)
+            fn = getattr(module, "tools", None)
+            return list(fn() or []) if callable(fn) else []
+        except Exception:  # noqa: BLE001
+            return []
+    return []
 
 
 def collect_mcp_servers() -> list[dict]:

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, mcp_registry, store
-from .routers import api, chat, dsh, hosting, mcp, memory, plugins, vcs
+from .routers import api, chat, dsh, hosting, mcp, memory, plugins, profiles, vcs
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ app.include_router(mcp.router)
 app.include_router(plugins.router)
 app.include_router(memory.router)
 app.include_router(dsh.router)
+app.include_router(profiles.router)
 
 
 @app.get("/health")
