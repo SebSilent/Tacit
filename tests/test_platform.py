@@ -15,43 +15,38 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, assistant, config, folders, hosting, mcp_registry, memory_store,  # noqa: E402
-                     metrics, plugin_manager, profiles, tokens, vcs)
+from backend import (agent, assistant, config, folders, gateways, hosting, mcp_registry,  # noqa: E402
+                     memory_store, metrics, plugin_manager, profiles, providers, store,
+                     tokens, vcs)
+from tests.helpers import state_paths  # noqa: E402
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
-_PATCHED = ("HOME", "MEMORY_DB", "MCP_FILE", "PLUGINS_FILE", "PROFILES_FILE", "FOLDERS_FILE",
-            "PLUGINS_USER_DIR", "ADAPTERS_DIR", "CHECKPOINT_DIR", "PREFS_FILE", "GITHUB_FILE")
-
 
 class Isolated(unittest.TestCase):
-    """Points every storage path at a temporary home."""
+    """Points every storage path under the user's home at a temporary one.
+
+    The list is derived from the config module rather than written out. The
+    hand-written version omitted the sessions directory, so tests that read as
+    isolated wrote fixture sessions into the real store.
+    """
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         home = Path(self._tmp.name)
-        self._orig = {key: getattr(config, key) for key in _PATCHED}
+        self._keys = state_paths(config)
+        self._orig = {key: getattr(config, key) for key in self._keys}
+        self._home = config.HOME
         config.HOME = home
-        config.MEMORY_DB = home / "memory.db"
-        config.MCP_FILE = home / "mcp.json"
-        config.PLUGINS_FILE = home / "plugins.json"
-        config.PLUGINS_USER_DIR = home / "plugins"
-        config.ADAPTERS_DIR = home / "adapters"
-        config.CHECKPOINT_DIR = home / "checkpoints"
-        # prefs must be redirected too, or a test that changes a preference
-        # would rewrite the user's real ~/.tacit/prefs.json
-        config.PREFS_FILE = home / "prefs.json"
-        config.PROFILES_FILE = home / "profiles.json"
-        config.FOLDERS_FILE = home / "folders.json"
-        config.GITHUB_FILE = home / "github.json"
-        if hasattr(config, "SETTINGS_FILE"):
-            config.SETTINGS_FILE = home / "settings.json"
-        config.PLUGINS_USER_DIR.mkdir(parents=True, exist_ok=True)
-        config.ADAPTERS_DIR.mkdir(parents=True, exist_ok=True)
-        config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        for key in self._keys:
+            target = home / Path(self._orig[key]).name
+            setattr(config, key, target)
+            if key.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
         mcp_registry.stop_all()
+        config.HOME = self._home
         for key, value in self._orig.items():
             setattr(config, key, value)
         self._tmp.cleanup()
@@ -91,7 +86,8 @@ class TestPluginManager(Isolated):
     def test_listing_and_toggle(self):
         rows = {p["id"]: p for p in plugin_manager.list_plugins()}
         self.assertIn("memory_vault", rows)
-        self.assertIn("dsh_bridge", rows)
+        self.assertNotIn("dsh_bridge", rows,
+                         "Tacit ships no bridge to another harness")
         self.assertFalse(rows["memory_vault"]["enabled"])
         self.assertFalse(rows["memory_vault"]["provides"])
 
@@ -412,151 +408,102 @@ class TestMcpHttpTransport(Isolated):
         self.assertNotIn("supersecret", mask_url("https://supersecret@host/mcp"))
 
 
-class TestDshBridge(Isolated):
-    def test_import_registers_a_disabled_server(self):
-        from backend.plugins import dsh_bridge
-        out = dsh_bridge.call("dsh_import", {"package": "@scope/some-mcp-thing"}, {})
-        self.assertIn("registered", out)
-        servers = mcp_registry.list_servers()
-        self.assertEqual(len(servers), 1)
-        self.assertFalse(servers[0]["enabled"])       # never auto-enabled
-
-    def test_status_classifies(self):
-        from backend.plugins import dsh_bridge
-        dsh_bridge.call("dsh_import", {"package": "some-tool"}, {})
-        text = dsh_bridge.call("dsh_status", {}, {})
-        self.assertIn("some-tool", text)
-        self.assertTrue(any(word in text for word in
-                            ("working_native", "working_bridge", "partial", "unsupported")))
-
-    def test_scaffold_writes_a_usable_adapter(self):
-        from backend.plugins import dsh_bridge
-        out = dsh_bridge.call("dsh_scaffold", {"plugin_id": "myplugin"}, {})
-        self.assertIn("scaffolded", out)
-        target = config.ADAPTERS_DIR / "myplugin"
-        for name in ("README.md", "manifest.json", "server.py"):
-            self.assertTrue((target / name).exists(), name)
-        manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["id"], "myplugin")
-
-    def test_scaffolded_server_speaks_mcp(self):
-        """The generated stub must really answer initialize + tools/list."""
-        import subprocess
-        from backend.plugins import dsh_bridge
-        dsh_bridge.call("dsh_scaffold", {"plugin_id": "speaks"}, {})
-        server = config.ADAPTERS_DIR / "speaks" / "server.py"
-        script = (json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-                  + "\n"
-                  + json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n")
-        proc = subprocess.run([sys.executable, str(server)], input=script,
-                              capture_output=True, text=True, timeout=60)
-        lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
-        self.assertTrue(any((m.get("result") or {}).get("serverInfo", {}).get("name") == "speaks"
-                            for m in lines), proc.stdout + proc.stderr)
-        listed = [m for m in lines
-                  if isinstance(m.get("result"), dict) and "tools" in m["result"]]
-        self.assertTrue(listed and listed[0]["result"]["tools"][0]["name"])
-
-
-class TestNodeBridge(unittest.TestCase):
-    def test_bridge_ships(self):
-        bridge = config.BRIDGES_DIR / "dsh-host.mjs"
-        self.assertTrue(bridge.exists(), "bridges/dsh-host.mjs should ship with Tacit")
-        text = bridge.read_text(encoding="utf-8")
-        for marker in ("initialize", "tools/list", "tools/call", "protocolVersion"):
-            self.assertIn(marker, text)
-
-
-class TestNodeBridgeRuntime(unittest.TestCase):
-    """Runs only when Node happens to be installed — it is never a dependency."""
-
-    @unittest.skipUnless(shutil.which("node"), "node is not installed")
-    def test_bridge_exposes_bundle_tools_over_mcp(self):
-        import subprocess
-        bridge = config.BRIDGES_DIR / "dsh-host.mjs"
-        bundle = Path(__file__).parent / "fake_dsh_bundle.mjs"
-        script = "\n".join([
-            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-            json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                        "params": {"name": "greet", "arguments": {"who": "Tacit"}}}),
-        ]) + "\n"
-        proc = subprocess.run(["node", str(bridge), "--plugin", str(bundle)],
-                              input=script, capture_output=True, text=True, timeout=90)
-        replies = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
-        listed = [m for m in replies if isinstance(m.get("result"), dict)
-                  and "tools" in m["result"]]
-        self.assertTrue(listed, proc.stderr)
-        self.assertEqual(sorted(t["name"] for t in listed[0]["result"]["tools"]),
-                         ["greet", "tally"])
-        called = [m for m in replies if isinstance(m.get("result"), dict)
-                  and "content" in m["result"]]
-        self.assertTrue(called)
-        self.assertEqual(called[0]["result"]["content"][0]["text"], "hello Tacit")
-
-
 class TestProfiles(Isolated):
     def test_builtins_are_listed_with_costs(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
-        for name in ("minimal", "default", "assisted", "full", "everything"):
+        for name in ("minimal", "silent", "safe", "power-isolation",
+                     "power-memory", "full"):
             self.assertIn(name, rows)
-        self.assertTrue(rows["default"]["active"])
-        self.assertFalse(rows["default"]["mcp_direct"])
-        self.assertFalse(rows["full"]["mcp_direct"])
-        self.assertTrue(rows["everything"]["mcp_direct"])
+        self.assertNotIn("dsh", rows, "no profile is named after another harness")
+        self.assertNotIn("hermes", rows, "no profile is named after another harness")
+        self.assertTrue(rows["silent"]["active"])
+        self.assertFalse(rows["silent"]["mcp_direct"])
 
-    def test_legacy_lean_name_still_resolves(self):
-        config.write_json(config.PROFILES_FILE, {"active": "lean", "profiles": {}})
-        self.assertEqual(profiles.load()["active"], "default")
-        self.assertTrue(profiles.apply("lean")["ok"])
+    def test_legacy_names_still_resolve(self):
+        for old, new in profiles.LEGACY_NAMES.items():
+            self.assertIn(new, {p["name"] for p in profiles.list_profiles()})
+            config.write_json(config.PROFILES_FILE, {"active": old, "profiles": {}})
+            self.assertEqual(profiles.load()["active"], new)
+            self.assertTrue(profiles.apply(old)["ok"])
 
     def test_minimal_narrows_the_tool_set(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
         self.assertEqual(rows["minimal"]["tool_count"], len(profiles.CORE_TOOLS))
-        self.assertGreater(rows["default"]["tool_count"], rows["minimal"]["tool_count"])
-        self.assertLess(rows["minimal"]["cost"]["total"], rows["default"]["cost"]["total"])
+        self.assertGreater(rows["silent"]["tool_count"], rows["minimal"]["tool_count"])
+        self.assertLess(rows["minimal"]["cost"]["total"], rows["silent"]["cost"]["total"])
 
     def test_cost_ordering(self):
         rows = {p["name"]: p["cost"]["total"] for p in profiles.list_profiles()}
-        self.assertLess(rows["minimal"], rows["default"])
-        self.assertLess(rows["default"], rows["assisted"])
-        self.assertLessEqual(rows["assisted"], rows["full"])
+        self.assertLess(rows["minimal"], rows["silent"])
+        self.assertLessEqual(rows["silent"], rows["full"])
 
     def test_every_profile_pays_for_the_base_prompt(self):
         for p in profiles.list_profiles():
             self.assertGreater(p["cost"]["prompt"], 0)
             self.assertGreaterEqual(p["cost"]["total"], p["cost"]["prompt"])
 
-    def test_apply_minimal_disables_everything_else(self):
-        profiles.apply("minimal")
-        live = set(profiles.current()["tools"] or [])
-        self.assertEqual(live, set(profiles.CORE_TOOLS))
-        self.assertIn("read_file", live)
-        self.assertNotIn("browser", live)
-        self.assertNotIn("task", live)
+    def test_every_profile_declares_its_capabilities(self):
+        from backend import providers
+        for name, cfg in profiles.BUILTIN.items():
+            caps = cfg.get("capabilities") or {}
+            for kind in ("sandbox", "memory", "learning"):
+                self.assertIn(kind, caps, f"{name} does not declare {kind}")
+                self.assertIsNotNone(providers.get(caps[kind], kind),
+                                     f"{name} names an unknown {kind} backend")
 
-    def test_switching_back_restores_every_tool(self):
-        profiles.apply("minimal")
-        profiles.apply("default")
-        self.assertIsNone(profiles.current()["tools"])
-        self.assertEqual(profiles.current()["tool_count"], len(agent.TOOLS))
+    def test_no_profile_enables_autonomous_learning(self):
+        for name, cfg in profiles.BUILTIN.items():
+            mode = (cfg.get("capabilities") or {}).get("learning")
+            self.assertNotEqual(mode, "auto", f"{name} turns learning loose")
+            self.assertNotEqual(mode, "auto-low-risk", f"{name} turns learning loose")
+
+    def test_a_profile_applies_its_capabilities(self):
+        profiles.apply("safe")
+        caps = providers.load()
+        self.assertEqual(caps["sandbox"]["backend"], "tacit-micro")
+        self.assertEqual(caps["memory"]["mode"], "explicit")
+
+    def test_every_profile_is_satisfiable_without_anything_external(self):
+        """No profile may depend on a tool Tacit does not implement itself.
+
+        This is the correction of direction: every capability a profile names is
+        one Tacit provides. If a profile ever points at something external, this
+        fails.
+        """
+        from backend import providers
+        applied = {}
+        for name, cfg in profiles.BUILTIN.items():
+            for kind, wanted in (cfg.get("capabilities") or {}).items():
+                got = providers.resolve(kind) if False else providers.get(wanted, kind)
+                self.assertIsNotNone(got, f"{name} names an unknown {kind}: {wanted}")
+                self.assertTrue(got["implemented"],
+                                f"{name} wants {wanted}, which Tacit does not implement")
+                self.assertTrue(got["available"],
+                                f"{name} wants {wanted}, which needs something installed")
+                applied[kind] = wanted
+        # and applying the heaviest profile actually works, with nothing external
+        res = profiles.apply("power-isolation")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["skipped"], [], "a standalone profile must not skip anything")
+
+    def test_turning_memory_off_takes_the_recall_tools_away(self):
+        profiles.apply("safe")
+        self.assertTrue(plugin_manager.is_enabled("memory_vault"))
+        profiles.apply("silent")
+        self.assertFalse(plugin_manager.is_enabled("memory_vault"))
+        self.assertEqual(providers.load()["memory"]["mode"], "off")
+
+    def test_applying_a_profile_is_recorded(self):
+        from backend import audit
+        profiles.apply("safe")
+        self.assertIn("profile_applied", [e["event"] for e in audit.recent(5)])
 
     def test_apply_changes_plugin_state(self):
-        self.assertTrue(profiles.apply("assisted")["ok"])
+        self.assertTrue(profiles.apply("safe")["ok"])
         self.assertTrue(plugin_manager.is_enabled("memory_vault"))
-        self.assertEqual(memory_store.budget(), memory_store.DEFAULT_BUDGET)
-
-        self.assertTrue(profiles.apply("default")["ok"])
+        self.assertTrue(profiles.apply("silent")["ok"])
         self.assertFalse(plugin_manager.is_enabled("memory_vault"))
         self.assertEqual(memory_store.budget(), 0)
-        self.assertEqual(memory_store.startup_selection()["tokens"], 0)
-
-    def test_apply_everything_sets_direct_mode(self):
-        profiles.apply("everything")
-        self.assertTrue(mcp_registry.settings()["direct_mode"])
-        profiles.apply("default")
-        self.assertFalse(mcp_registry.settings()["direct_mode"])
 
     def test_unknown_profile_refused(self):
         self.assertFalse(profiles.apply("nope")["ok"])
@@ -571,14 +518,20 @@ class TestProfiles(Isolated):
         self.assertNotIn("my-setup", {p["name"] for p in profiles.list_profiles()})
 
     def test_builtin_cannot_be_deleted_or_shadowed(self):
-        self.assertFalse(profiles.delete("default")["ok"])
-        self.assertFalse(profiles.capture("default")["ok"])
+        self.assertFalse(profiles.delete("silent")["ok"])
+        self.assertFalse(profiles.capture("silent")["ok"])
 
-    def test_profile_caps_memory_like_the_budget(self):
-        memory_store.add("x " * 200, type="project_fact", pinned=True)
-        profiles.apply("assisted")
-        self.assertLessEqual(memory_store.startup_selection()["tokens"],
-                             memory_store.DEFAULT_BUDGET)
+    def test_apply_minimal_disables_everything_else(self):
+        profiles.apply("minimal")
+        live = set(profiles.current()["tools"] or [])
+        self.assertEqual(live, set(profiles.CORE_TOOLS))
+        self.assertNotIn("browser", live)
+
+    def test_switching_back_restores_every_tool(self):
+        profiles.apply("minimal")
+        profiles.apply("silent")
+        self.assertIsNone(profiles.current()["tools"])
+        self.assertEqual(profiles.current()["tool_count"], len(agent.TOOLS))
 
 
 class TestCommitIdentity(Isolated):
@@ -597,12 +550,10 @@ class TestCommitIdentity(Isolated):
         self.assertIsNone(vcs.github_identity(""))
 
     def test_github_display_name_goes_on_the_commit(self):
-        """The account's display name is the author name; the login forms the address."""
         ident = vcs.github_identity("SebSilent", "Silent")
         self.assertEqual(ident["name"], "Silent")
         self.assertEqual(ident["email"], "SebSilent@users.noreply.github.com")
         self.assertEqual(ident["login"], "SebSilent")
-        # an account with no display name still works
         self.assertEqual(vcs.github_identity("SebSilent", "  ")["name"], "SebSilent")
 
     def test_save_identity_validates(self):
@@ -626,10 +577,8 @@ class TestCommitIdentity(Isolated):
             os.environ.pop("TACIT_VCS_EMAIL", None)
 
     def _resolve(self, cwd=None):
-        """_commit_identity against a directory that is not a repository."""
         import asyncio
         from backend.routers import vcs as vcs_router
-
         return asyncio.run(vcs_router._commit_identity(cwd or str(config.HOME)))
 
     def test_defaults_to_tacit_and_never_blocks(self):
@@ -645,7 +594,6 @@ class TestCommitIdentity(Isolated):
 
     def test_a_choice_is_remembered_across_sessions(self):
         vcs.save_identity("Silent", "SebSilent@users.noreply.github.com")
-        # simulate a fresh process: read the value back off disk
         stored = config.read_json(config.PREFS_FILE, {})
         self.assertEqual(stored.get("vcsName"), "Silent")
         ident, _ = self._resolve()
@@ -658,6 +606,12 @@ class TestCommitIdentity(Isolated):
         ident, _ = self._resolve()
         self.assertEqual(ident["name"], "Silent")
         self.assertEqual(ident["email"], "SebSilent@users.noreply.github.com")
+
+    def _with_repository(self, ident):
+        from backend import vcs as vcs_mod
+        original = vcs_mod.configured_identity
+        vcs_mod.configured_identity = lambda cwd: ident
+        return original
 
     def test_a_chosen_identity_wins_over_the_repository(self):
         from backend import vcs as vcs_mod
@@ -699,19 +653,10 @@ class TestCommitIdentity(Isolated):
         self.assertEqual(ident["name"], "Ada")
 
     def test_the_placeholder_fallback_is_no_longer_hidden(self):
-        """Tacit is still the default, but now by a named, visible constant."""
         import inspect
         from backend.routers import vcs as vcs_router
-
         self.assertNotIn('or "Tacit"', inspect.getsource(vcs_router))
         self.assertEqual(vcs.DEFAULT_IDENTITY["email"], "tacit@localhost")
-
-    def _with_repository(self, ident):
-        from backend import vcs as vcs_mod
-
-        original = vcs_mod.configured_identity
-        vcs_mod.configured_identity = lambda cwd: ident
-        return original
 
 
 class TestVersionControlPermission(Isolated):
@@ -968,6 +913,150 @@ class TestAssistant(Isolated):
         assistant.append(rec, "user", "remember me")
         self.assertIn("assistant", rec)
         self.assertEqual(rec["assistant"][0]["content"], "remember me")
+
+
+class TestSessionSummaries(Isolated):
+    """Long-term memory: a whole session becomes one recallable note."""
+
+    def setUp(self):
+        super().setUp()
+        from backend.routers import memory as mem
+        self.mem = mem
+        self._orig_chat = mem.engine.chat
+        mem.engine.chat = lambda messages, ref=None: (
+            "Goal: add a flag\nDid: added it\nDecided: kept it simple\nOpen: none")
+        self.rec = store.create(title="Add a flag")
+        store.append(self.rec, "user", "please add a --verbose flag")
+        store.append(self.rec, "assistant", "added it to main.py")
+        store.save(self.rec)
+
+    def tearDown(self):
+        self.mem.engine.chat = self._orig_chat
+        super().tearDown()
+
+    class Req:
+        def __init__(self, body):
+            self._b = body
+
+        async def json(self):
+            return self._b
+
+    def _call(self, body):
+        import asyncio
+        res = asyncio.run(self.mem.summarise(self.Req(body)))
+        return json.loads(res.body) if hasattr(res, "body") else res
+
+    def test_a_preview_saves_nothing(self):
+        from backend import memory_store as ms
+        got = self._call({"sid": self.rec["id"]})
+        self.assertTrue(got["ok"])
+        self.assertFalse(got["saved"])
+        self.assertIn("Goal", got["summary"])
+        self.assertGreater(got["tokens"], 0)
+        self.assertEqual(ms.list_memories(), [], "a preview must not write")
+
+    def test_saving_carries_the_session_it_came_from(self):
+        from backend import memory_store as ms
+        got = self._call({"sid": self.rec["id"], "save": True})
+        self.assertTrue(got["saved"])
+        rows = ms.list_memories()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_session"], f"session:{self.rec['id']}")
+        self.assertIn("session summary", rows[0]["reason"])
+        self.assertIn("Goal", rows[0]["content"])
+
+    def test_a_supplied_summary_is_not_regenerated(self):
+        got = self._call({"sid": self.rec["id"], "text": "my own words"})
+        self.assertEqual(got["summary"], "my own words")
+
+    def test_an_unknown_session_is_refused(self):
+        for bad in ("", "nope"):
+            got = self._call({"sid": bad})
+            self.assertFalse(got["ok"])
+
+    def test_a_session_with_no_content_is_refused(self):
+        empty = store.create(title="Empty")
+        self.assertFalse(self._call({"sid": empty["id"]})["ok"])
+
+    def test_a_summary_can_expire(self):
+        from backend import memory_store as ms
+        got = self._call({"sid": self.rec["id"], "save": True, "ttl_days": 7})
+        self.assertTrue(got["saved"])
+        self.assertGreater(ms.get(got["memory"]["id"])["expires_at"], 0)
+
+
+class TestSessionCreationRule(Isolated):
+    """A session exists because the user asked for one, never because a page loaded.
+
+    The interface opens a socket on every page load, and that socket used to
+    create a session for whatever id it was handed. One reload could therefore
+    add a session, and a sync could add every local one at once.
+    """
+
+    def test_a_sync_never_creates_an_unknown_session(self):
+        store.merge({"sessions": [{"id": "never-seen", "title": "ghost",
+                                   "messages": [{"role": "user", "content": "hi"}]}]})
+        self.assertEqual(store.index(), [])
+        self.assertIsNone(store.get("never-seen"))
+
+    def test_a_sync_still_updates_a_known_session(self):
+        rec = store.create(title="real")
+        store.merge({"sessions": [{"id": rec["id"], "title": "renamed",
+                                   "messages": [{"role": "user", "content": "hello"}]}]})
+        after = store.get(rec["id"])
+        self.assertEqual(after["title"], "renamed")
+        self.assertEqual(len(after["messages"]), 1)
+
+    def test_a_sync_cannot_inflate_the_list(self):
+        before = len(store.index())
+        store.merge({"sessions": [{"id": f"ghost-{i}", "title": "g"} for i in range(40)]})
+        self.assertEqual(len(store.index()), before)
+
+    def test_an_empty_registry_creates_nothing(self):
+        reg = store.registry()
+        self.assertEqual(reg["sessions"], [])
+        self.assertEqual(reg["active"], "")
+        self.assertEqual(store.index(), [])
+
+    def test_a_client_may_name_the_id_it_asked_for(self):
+        rec = store.create(title="mine", sid="chosen-id")
+        self.assertEqual(rec["id"], "chosen-id")
+        self.assertIsNotNone(store.get("chosen-id"))
+
+    def test_creating_the_same_id_twice_is_harmless(self):
+        first = store.create(title="one", sid="dup")
+        second = store.create(title="two", sid="dup")
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second["title"], "one")   # the original is kept
+        self.assertEqual(len(store.index()), 1)
+
+    def test_the_socket_refuses_an_unknown_id(self):
+        """Only an explicit create request may bring a session into being."""
+        from pathlib import Path as _P
+        src = (_P(__file__).parent.parent / "backend/routers/chat.py").read_text(
+            encoding="utf-8")
+        self.assertIn('q.get("create") != "1"', src)
+        self.assertIn("unknown session", src)
+        # the old unconditional creation must be gone
+        self.assertNotIn('rec = store.create(title=q.get("name") or "New session",\n'
+                         '                           model=q.get("model") or "",',
+                         src.split('q.get("create")')[0].split("rec = store.get(sid)")[-1])
+
+    def test_the_browser_only_asks_for_one_when_told_to(self):
+        from pathlib import Path as _P
+        js = (_P(__file__).parent.parent / "static/app.js").read_text(encoding="utf-8")
+        self.assertIn("s._new ? '&create=1' : ''", js)
+        # no boot-time creation may remain
+        self.assertNotIn("if (!sessions.length) newSession(true)", js)
+
+    def test_storage_paths_follow_the_config(self):
+        """A frozen path at import time is how the index escaped its directory."""
+        from pathlib import Path as _P
+        src = (_P(__file__).parent.parent / "backend/store.py").read_text(encoding="utf-8")
+        self.assertIn("def _index_path", src)
+        self.assertNotIn("INDEX = config.", src)
+        moved = config.SESSIONS_DIR
+        self.assertEqual(store._index_path(), moved / "index.json")
 
 
 if __name__ == "__main__":

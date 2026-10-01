@@ -1344,6 +1344,15 @@ svg { display: block; }
 .as-send:disabled { opacity: .4; cursor: default; }
 .icon-btn.on { color: var(--accent); }
 
+/* ── advanced switch in the settings header ───────────────────────── */
+.ho-tabs { flex-wrap: wrap; }
+.adv-switch {
+  margin-left: auto; align-self: center; font-size: 11px; color: var(--fadetext);
+  white-space: nowrap; padding-left: 8px;
+}
+.adv-switch.on { color: var(--accent); }
+.adv-switch input { margin-right: 4px; }
+
 /* ── snapshot timeline ─────────────────────────────────────────────── */
 .snap-list { display: flex; flex-direction: column; gap: 8px; }
 .snap-card {

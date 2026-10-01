@@ -4,7 +4,7 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import agent, assistant, config, mcp_registry, memory_store, metrics, plan, plugin_manager, store
+from .. import agent, assistant, config, mcp_registry, memory_modes, metrics, plan, plugin_manager, store
 from .. import tokens as token_mod
 from ..ai import prompts
 
@@ -143,15 +143,13 @@ def _content_parts(text: str, images) -> list:
 
 
 def _memory_block(project: str | None) -> str:
-    """The budgeted memory block, or '' when the vault is off.
+    """The budgeted memory block, or '' when memory is off.
 
-    Memory only ever enters as its own system block, capped by the configured
-    budget — it never merges into the base prompt.
+    The mode decides what may be injected, and every item is explained by the
+    module that produced it. Memory never merges into the base prompt.
     """
     try:
-        if not plugin_manager.is_enabled("memory_vault"):
-            return ""
-        return memory_store.startup_selection(project or "").get("text") or ""
+        return memory_modes.startup(project or "").get("text") or ""
     except Exception:  # noqa: BLE001
         return ""
 
@@ -191,11 +189,18 @@ async def ws_session(ws: WebSocket, sid: str):
     q = ws.query_params
     rec = store.get(sid)
     if rec is None:
+        # A socket may not create a session. Only the interface's own New
+        # session action asks for one, and it says so with ?create=1. Anything
+        # else is a stale id, and it is refused rather than silently honoured
+        # (honouring it grew the session list on every page load).
+        if q.get("create") != "1":
+            await ws.close(code=4404, reason="unknown session")
+            return
         rec = store.create(title=q.get("name") or "New session",
                            model=q.get("model") or "",
                            mode=q.get("mode") or "agent",
                            thinking=q.get("thinking") or "medium",
-                           project=q.get("workdir") or "")
+                           project=q.get("workdir") or "", sid=sid)
         sid = rec["id"]
     else:
         changed = False

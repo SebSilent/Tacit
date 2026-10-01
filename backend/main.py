@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, mcp_registry, store
-from .routers import api, chat, dsh, hosting, mcp, memory, plugins, profiles, vcs
+from . import analyzer, config, mcp_registry, store
+from .routers import api, capabilities, chat, hosting, mcp, memory, plugins, profiles, vcs
 
 
 @asynccontextmanager
@@ -18,7 +18,17 @@ async def lifespan(app: FastAPI):
         config.PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
     except Exception:
         pass
+    # Reads finished transcripts on a timer and leaves proposals behind. It is
+    # never on the request path, and it cannot change an answer by itself.
+    try:
+        analyzer.worker.start()
+    except Exception:
+        pass
     yield
+    try:
+        analyzer.worker.stop()
+    except Exception:
+        pass
     try:
         mcp_registry.stop_all()
     except Exception:
@@ -38,8 +48,8 @@ app.include_router(hosting.router)
 app.include_router(mcp.router)
 app.include_router(plugins.router)
 app.include_router(memory.router)
-app.include_router(dsh.router)
 app.include_router(profiles.router)
+app.include_router(capabilities.router)
 
 
 @app.get("/health")

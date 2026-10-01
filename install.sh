@@ -59,9 +59,7 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 
 # ── prerequisites ─────────────────────────────────────────────────────────
-for tool in git curl; do
-    command -v "$tool" >/dev/null 2>&1 || die "$tool is required. Install it and re-run."
-done
+command -v curl >/dev/null 2>&1 || die "curl is required to download Tacit. Install it and re-run."
 
 PY=""
 for candidate in python3 python; do
@@ -90,12 +88,34 @@ elif [ -d "$APP_DIR/.git" ]; then
 else
     say "downloading into $APP_DIR"
     mkdir -p "$(dirname "$APP_DIR")"
-    if [ -n "$BRANCH" ]; then
-        git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
-            || die "could not clone $REPO_URL (branch $BRANCH)"
+    if command -v git >/dev/null 2>&1; then
+        if [ -n "$BRANCH" ]; then
+            git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
+                || die "could not clone $REPO_URL (branch $BRANCH)"
+        else
+            git clone --depth 1 "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
+                || die "could not clone $REPO_URL"
+        fi
     else
-        git clone --depth 1 "$REPO_URL" "$APP_DIR" >/dev/null 2>&1 \
-            || die "could not clone $REPO_URL"
+        # No git: fetch a source archive instead. Try the real default branch
+        # names in order rather than assuming one, since an empty name builds a
+        # URL that cannot resolve.
+        BASE="$(printf '%s' "$REPO_URL" | sed 's/\.git$//')"
+        TMP="$(mktemp -d)"
+        GOT=""
+        for REF in ${BRANCH:-"main master"}; do
+            if curl -fsSL "$BASE/archive/refs/heads/$REF.tar.gz" -o "$TMP/src.tar.gz" 2>/dev/null; then
+                GOT="$REF"; break
+            fi
+        done
+        [ -n "$GOT" ] || { rm -rf "$TMP"; die "could not download the source archive. Install git, or pass --branch NAME."; }
+        say "downloaded the $GOT branch (git not found, so updates will be skipped)"
+        mkdir -p "$APP_DIR"
+        tar -xzf "$TMP/src.tar.gz" -C "$TMP"
+        INNER="$(find "$TMP" -maxdepth 1 -type d -name 'Tacit-*' | head -1)"
+        [ -n "$INNER" ] || { rm -rf "$TMP"; die "the downloaded archive looked empty"; }
+        cp -R "$INNER/." "$APP_DIR/"
+        rm -rf "$TMP"
     fi
 fi
 [ -f "$APP_DIR/backend/main.py" ] || die "$APP_DIR does not look like Tacit"

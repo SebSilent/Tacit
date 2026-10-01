@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import benchmarks, config, extras, mcp_registry, metrics, plugin_manager, skills
+from . import benchmarks, config, extras, mcp_registry, metrics, plugin_manager, sandbox, skills
 from . import tokens as token_mod
 from .ai import engine, prompts
 
@@ -198,18 +198,25 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
         return ("version control is turned off for the agent in this workspace. Use the Git panel "
                 "for status, commits, branches, push and pull, or turn the agent's access on in "
                 "Settings > Tools.")
-    cwd = _root(project)
-    try:
-        r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True, text=True,
-                           timeout=max(1, min(int(timeout or config.SHELL_TIMEOUT), 600)))
-    except subprocess.TimeoutExpired:
-        return f"ERROR: timed out after {timeout or config.SHELL_TIMEOUT}s"
-    except Exception as e:
-        return f"ERROR: {e}"
-    out = r.stdout or ""
-    if r.stderr:
-        out += ("\n[stderr]\n" if out else "") + r.stderr
-    return _clip(f"exit code {r.returncode}\n{out.strip()}")
+    # Everything runs through the sandbox layer, so which backend ran it, and what
+    # it changed, is recorded whether or not isolation was in force.
+    res = sandbox.run(cmd, project=project, timeout=timeout)
+    if not res.get("ok"):
+        return (res.get("stderr") or "ERROR: the command did not run").strip()
+    out = res.get("stdout") or ""
+    if res.get("stderr"):
+        out += ("\n[stderr]\n" if out else "") + res["stderr"]
+    body = f"exit code {res.get('code', 0)}\n{out.strip()}"
+    if res.get("backend") not in ("", "none"):
+        changed = res.get("changed") or {}
+        if changed.get("count"):
+            names = (changed.get("added", []) + changed.get("modified", [])
+                     + changed.get("removed", []))[:12]
+            body += f"\n\n[{res['backend']}] {changed['count']} file(s) changed: " + \
+                    ", ".join(names)
+        for note in (res.get("notes") or [])[:2]:
+            body += f"\n[{res['backend']}] {note}"
+    return _clip(body)
 
 
 def t_bg_start(command: str, project: str | None = None, cwd: str | None = None) -> str:

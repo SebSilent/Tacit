@@ -11,7 +11,7 @@ before you apply it, using the same estimator as the dashboard.
 
 from __future__ import annotations
 
-from . import config, mcp_registry, memory_store, plugin_manager, tokens
+from . import audit, config, mcp_registry, memory_store, plugin_manager, providers, tokens
 
 # The seven tools a bare harness ships with: read, write, edit, shell, grep,
 # list, glob. A profile can restrict the tool set to exactly these.
@@ -26,46 +26,67 @@ BUILTIN = {
         "memory_budget": 0,
         "mcp_direct": False,
         "tools": list(CORE_TOOLS),
+        "capabilities": {"sandbox": "none", "memory": "off", "learning": "propose"},
     },
-    "default": {
-        "label": "Default",
-        "description": "All built-in tools. No plugins, no memory, MCP loaded only when used.",
+    "silent": {
+        "label": "Silent",
+        "description": "All tools, no memory, no sandbox, nothing learned. The default.",
         "plugins": [],
         "memory_budget": 0,
         "mcp_direct": False,
         "tools": None,
+        "capabilities": {"sandbox": "none", "memory": "off", "learning": "propose"},
     },
-    "assisted": {
-        "label": "Assisted",
-        "description": "Memory on at the default budget. Everything else stays off.",
+    "safe": {
+        "label": "Safe",
+        "description": "Micro sandbox, memory limited to what you wrote or approved, "
+                       "learning proposes only.",
         "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
+        "capabilities": {"sandbox": "tacit-micro", "memory": "explicit",
+                         "learning": "propose"},
     },
-    "full": {
-        "label": "Full",
-        "description": "Every bundled plugin on, memory at the default budget.",
-        "plugins": ["memory_vault", "dsh_bridge"],
+    "power-isolation": {
+        "label": "Power isolation",
+        "description": "The strongest isolation Tacit can provide on this OS, plus "
+                       "explicit memory. Nothing external is required.",
+        "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
+        "capabilities": {"sandbox": "tacit-micro", "memory": "explicit",
+                         "learning": "propose"},
     },
-    "everything": {
-        "label": "Everything",
-        "description": "Full, and MCP tools injected eagerly instead of on demand.",
-        "plugins": ["memory_vault", "dsh_bridge"],
+    "power-memory": {
+        "label": "Power memory",
+        "description": "Every memory feature Tacit implements: explicit notes plus "
+                       "just-in-time retrieval. Sandbox left to you.",
+        "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
-        "mcp_direct": True,
+        "mcp_direct": False,
         "tools": None,
+        "capabilities": {"sandbox": "none", "memory": "full", "learning": "propose"},
+    },
+    "full": {
+        "label": "Full",
+        "description": "Isolation, every memory feature, learning proposing only. "
+                       "All of it implemented inside Tacit.",
+        "plugins": ["memory_vault"],
+        "memory_budget": memory_store.DEFAULT_BUDGET,
+        "mcp_direct": False,
+        "tools": None,
+        "capabilities": {"sandbox": "tacit-micro", "memory": "full", "learning": "propose"},
     },
 }
 
-DEFAULT_PROFILE = "default"
+DEFAULT_PROFILE = "silent"
 
-# Earlier builds shipped this profile under the name "lean"; keep it working
-# for anyone whose profiles.json still names it.
-LEGACY_NAMES = {"lean": "default"}
+# Names from earlier builds, so an existing profiles.json keeps working.
+LEGACY_NAMES = {"lean": "silent", "default": "silent", "assisted": "safe",
+                "everything": "full", "dsh": "power-isolation",
+                "hermes": "power-memory"}
 
 
 def load() -> dict:
@@ -193,14 +214,50 @@ def current() -> dict:
 
 
 def apply(name: str) -> dict:
+    """Switch to a profile, and report honestly what it could not turn on.
+
+    A profile is a bundle of choices. If one of them cannot be honoured, the rest
+    still apply and the one that failed is named with its reason. A profile never
+    silently gives you less than it claims.
+    """
     name = LEGACY_NAMES.get(name, name)
     cfg = _all().get(name)
     if cfg is None:
         return {"ok": False, "error": f"no profile '{name}'"}
+
+    applied, skipped = {}, []
+
+    # capabilities first, so memory mode and budget are in place before the
+    # plugins and the toolset are decided
+    caps = dict(cfg.get("capabilities") or {})
+    for kind in ("sandbox", "memory", "learning"):
+        if kind not in caps:
+            continue
+        wanted = caps[kind]
+        row = providers.get(wanted, kind)
+        if row is None or not row["implemented"] or not row["available"]:
+            skipped.append({"what": kind, "wanted": wanted,
+                            "why": (row or {}).get("reason")
+                                   or ("Tacit has no adapter for this yet"
+                                       if row else "unknown backend")})
+            continue
+        if kind == "sandbox":
+            providers.save({"sandbox": {"backend": wanted}})
+        elif kind == "memory":
+            providers.save({"memory": {"mode": wanted,
+                                        "budget": int(cfg.get("memory_budget") or 0)}})
+        else:
+            providers.save({"learning": {"mode": wanted}})
+        applied[kind] = wanted
+
+    # the memory plugin follows the memory mode, so turning memory on gives the
+    # agent its recall tools and turning it off takes them away
+    wanted_plugins = list(cfg.get("plugins") or [])
+    if applied.get("memory", "off") == "off" and "memory_vault" in wanted_plugins:
+        wanted_plugins.remove("memory_vault")
     known = {p["id"] for p in plugin_manager.list_plugins()}
-    wanted = [pid for pid in (cfg.get("plugins") or []) if pid in known]
     for pid in known:
-        if pid in wanted:
+        if pid in wanted_plugins:
             plugin_manager.enable(pid)
         else:
             plugin_manager.disable(pid)
@@ -209,15 +266,18 @@ def apply(name: str) -> dict:
         mcp_registry.save_settings({"direct_mode": bool(cfg.get("mcp_direct"))})
     except Exception:  # noqa: BLE001
         pass
-    # A profile may narrow the tool set. Everything not named is switched off
-    # using the same disabledTools preference the Tools panel writes.
+
     want_tools = cfg.get("tools")
     disabled = [] if want_tools is None else sorted(_tool_names() - set(want_tools))
     config.save_prefs({"disabledTools": disabled})
+
     data = load()
     data["active"] = name
     save(data)
-    return {"ok": True, "active": name, "applied": current(), "cost": cost_of(cfg)}
+    audit.record("profile_applied", mode=name, status="ok" if not skipped else "partial",
+                 applied=applied, skipped=[s["what"] for s in skipped])
+    return {"ok": True, "active": name, "applied": applied, "skipped": skipped,
+            "applied_now": current(), "cost": cost_of(cfg)}
 
 
 def capture(name: str, label: str = "", description: str = "") -> dict:

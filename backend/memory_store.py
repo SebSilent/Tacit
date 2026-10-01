@@ -23,7 +23,7 @@ import time
 from . import config, tokens
 
 TYPES = ("preference", "project_fact", "decision", "lesson", "pattern", "contact", "other")
-SCOPES = ("global", "project")
+SCOPES = ("global", "project", "language", "repository")
 CONFIDENCE = ("low", "medium", "high")
 SOURCES = ("user", "agent_suggestion", "session_extract")
 
@@ -31,7 +31,6 @@ DEFAULT_BUDGET = 120
 HARD_MAX_BUDGET = 500
 
 _LOCK = threading.RLock()
-_FTS: bool | None = None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -61,6 +60,26 @@ CREATE TABLE IF NOT EXISTS compressions (
 );
 """
 
+# Added after the first release, so they are applied to existing databases
+# rather than assumed. Each is additive and safe to skip.
+_MIGRATIONS = (
+    ("scope_key", "ALTER TABLE memories ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''"),
+    ("expires_at", "ALTER TABLE memories ADD COLUMN expires_at REAL NOT NULL DEFAULT 0"),
+    ("source_session",
+     "ALTER TABLE memories ADD COLUMN source_session TEXT NOT NULL DEFAULT ''"),
+    ("reason", "ALTER TABLE memories ADD COLUMN reason TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    have = {row[1] for row in con.execute("PRAGMA table_info(memories)")}
+    for name, sql in _MIGRATIONS:
+        if name not in have:
+            try:
+                con.execute(sql)
+            except Exception:  # noqa: BLE001
+                pass
+
 
 class _Conn:
     """Context manager that commits on success and *always* closes the handle.
@@ -73,6 +92,14 @@ class _Conn:
         self.con = sqlite3.connect(str(config.MEMORY_DB))
         self.con.row_factory = sqlite3.Row
         self.con.executescript(_SCHEMA)
+        _migrate(self.con)
+        # The search index belongs to the database, so it is created with it.
+        # If this SQLite build has no FTS5, searching falls back to LIKE.
+        try:
+            self.con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts "
+                             "USING fts5(content, content='memories', content_rowid='id')")
+        except Exception:  # noqa: BLE001
+            pass
 
     def __enter__(self) -> sqlite3.Connection:
         return self.con
@@ -93,17 +120,17 @@ def _connect() -> _Conn:
 
 
 def has_fts() -> bool:
-    """True when this SQLite build can do full-text search."""
-    global _FTS
-    if _FTS is None:
-        try:
-            with _connect() as con:
-                con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts "
-                            "USING fts5(content, content='memories', content_rowid='id')")
-                _FTS = True
-        except Exception:  # noqa: BLE001
-            _FTS = False
-    return bool(_FTS)
+    """True when this database can do full-text search.
+
+    Asked per call rather than cached: the answer belongs to a database, and
+    caching it globally broke every other database the process touched.
+    """
+    try:
+        with _connect() as con:
+            row = con.execute("SELECT name FROM sqlite_master WHERE name = 'memories_fts'")
+            return row.fetchone() is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _now() -> float:
@@ -140,7 +167,8 @@ def _row(record: sqlite3.Row) -> dict:
 
 def add(content: str, *, type: str = "other", scope: str = "global", project: str = "",
         source: str = "user", confidence: str = "medium", pinned: bool = False,
-        enabled: bool = True) -> dict:
+        enabled: bool = True, scope_key: str = "", source_session: str = "",
+        ttl_days: int = 0, reason: str = "") -> dict:
     text = str(content or "").strip()
     if not text:
         return {"ok": False, "error": "content is required"}
@@ -150,17 +178,39 @@ def add(content: str, *, type: str = "other", scope: str = "global", project: st
     origin = source if source in SOURCES else "user"
     now = _now()
     est = tokens.estimate_tokens(text)
+    expires = now + int(ttl_days) * 86400 if int(ttl_days or 0) > 0 else 0.0
     with _LOCK, _connect() as con:
         cur = con.execute(
-            "INSERT INTO memories (type, scope, project, content, source, confidence, "
-            "enabled, pinned, created_at, updated_at, token_estimate) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (kind, where, project if where == "project" else "", text, origin, trust,
-             int(enabled), int(pinned), now, now, est))
+            "INSERT INTO memories (type, scope, scope_key, project, content, source, "
+            "confidence, enabled, pinned, created_at, updated_at, token_estimate, "
+            "expires_at, source_session, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (kind, where, str(scope_key or ""),
+             project if where == "project" else "", text, origin, trust,
+             int(enabled), int(pinned), now, now, est, expires,
+             str(source_session or ""), str(reason or "")))
         new_id = int(cur.lastrowid)
         if has_fts():
             con.execute("INSERT INTO memories_fts (rowid, content) VALUES (?, ?)", (new_id, text))
     return {"ok": True, "memory": get(new_id)}
+
+
+def reinforce(memory_id: int, ttl_days: int = 0) -> dict:
+    """Mark a memory as used: bump the count, and push its expiry out."""
+    now = _now()
+    with _LOCK, _connect() as con:
+        if int(ttl_days or 0) > 0:
+            con.execute("UPDATE memories SET last_used_at = ?, use_count = use_count + 1, "
+                        "expires_at = ? WHERE id = ?",
+                        (now, now + int(ttl_days) * 86400, int(memory_id)))
+        else:
+            con.execute("UPDATE memories SET last_used_at = ?, use_count = use_count + 1 "
+                        "WHERE id = ?", (now, int(memory_id)))
+    return {"ok": True, "memory": get(memory_id)}
+
+
+def is_expired(row: dict) -> bool:
+    expires = float(row.get("expires_at") or 0)
+    return bool(expires and expires < _now())
 
 
 def get(memory_id: int) -> dict | None:
@@ -256,7 +306,7 @@ def list_memories(*, type: str = "", scope: str = "", project: str = "",
         rows = [r for r in rows if needle in (r["content"] or "").lower()]
     if project:
         rows = [r for r in rows if r["scope"] == "global" or r["project"] == project]
-    return rows
+    return [r for r in rows if not is_expired(r)]
 
 
 def recall(query: str = "", *, limit: int = 5, scope: str = "", project: str = "") -> list[dict]:

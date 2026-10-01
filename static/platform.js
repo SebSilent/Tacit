@@ -28,13 +28,39 @@
   }
 
   // ── tabs + panels ──────────────────────────────────────────────────────
+  // Core tabs come from index.html. These are the ones this file adds. Anything
+  // that is not plain Tacit is marked advanced and stays hidden until asked for,
+  // so the settings panel opens with six tabs rather than ten.
   const TABS = [
     { id: 'dashboard', label: 'Tokens' },
-    { id: 'mcp', label: 'MCP' },
-    { id: 'memory', label: 'Memory' },
     { id: 'snapshots', label: 'Snapshots' },
-    { id: 'plugins', label: 'Plugins' },
+    { id: 'capabilities', label: 'Capabilities', advanced: true },
+    { id: 'mcp', label: 'MCP', advanced: true },
+    { id: 'memory', label: 'Memory', advanced: true },
+    { id: 'plugins', label: 'Plugins', advanced: true },
   ];
+
+  const ADV_KEY = 'tacit.settings.advanced';
+
+  function advancedOn() {
+    try { return localStorage.getItem(ADV_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function applyAdvanced() {
+    const on = advancedOn();
+    document.querySelectorAll('.ho-tab').forEach((btn) => {
+      const spec = TABS.find((t) => t.id === btn.dataset.tab);
+      if (spec && spec.advanced) btn.hidden = !on;
+    });
+    const box = $('#advWrap');
+    if (box) box.classList.toggle('on', on);
+    // if the tab you were on just went away, land somewhere that still exists
+    const active = document.querySelector('.ho-tab.active');
+    if (active && active.hidden) {
+      const first = [...document.querySelectorAll('.ho-tab')].find((b) => !b.hidden);
+      if (first) first.click();
+    }
+  }
 
   function install() {
     const tabs = $('#hoTabs');
@@ -57,10 +83,25 @@
       if (!btn || !TABS.some((t) => t.id === btn.dataset.tab)) return;
       render(btn.dataset.tab);
     });
+
+    const adv = document.createElement('label');
+    adv.className = 'chk adv-switch';
+    adv.id = 'advWrap';
+    adv.title = 'Show the optional systems: capabilities, MCP, memory and plugins';
+    adv.innerHTML = '<input type="checkbox" id="advToggle"> advanced';
+    tabs.appendChild(adv);
+    const cb = $('#advToggle');
+    cb.checked = advancedOn();
+    cb.addEventListener('change', () => {
+      try { localStorage.setItem(ADV_KEY, cb.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+      applyAdvanced();
+    });
+    applyAdvanced();
   }
 
   function render(tab) {
     if (tab === 'dashboard') renderDashboard();
+    else if (tab === 'capabilities') renderCapabilities();
     else if (tab === 'mcp') renderMcp();
     else if (tab === 'memory') renderMemory();
     else if (tab === 'snapshots') renderSnapshots();
@@ -158,6 +199,350 @@
     });
   }
 
+  // ── Capabilities ───────────────────────────────────────────────────────
+  // Sandbox, memory and learning in one place, each option stating whether it
+  // is usable and why not when it is not. A heavy mode that is on is marked in
+  // the header so it cannot be forgotten.
+  async function renderCapabilities() {
+    const panel = $('#panel-capabilities');
+    panel.innerHTML = '<div class="ho-loading">Loading capabilities…</div>';
+    const c = await api('/api/capabilities');
+    const a = await api('/api/audit?limit=40');
+    const gw = await api('/api/gateways');
+    const lg = await api('/api/learning');
+    const an = await api('/api/analyzer').catch(() => ({ enabled: false }));
+    const dp = await api('/api/deps');
+    const mg = await api('/api/migrate/hint');
+    const sm = c.sandbox_mode || {};
+    const cfg = (c.config || {});
+    const rep = c.memory_report || {};
+
+    const optionFor = (row, chosen) => {
+      const usable = row.available && row.implemented;
+      const why = !row.available ? (row.reason || 'unavailable')
+        : (!row.implemented ? 'no adapter yet' : '');
+      return `<option value="${esc(row.id)}"${row.id === chosen ? ' selected' : ''}` +
+        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' — ' + esc(why)}</option>`;
+    };
+    const kind = (k) => (c.providers || []).filter((p) => p.kind === k);
+
+    const sandboxOn = sm.backend && sm.backend !== 'none';
+    const memoryOn = (c.memory || {}).id && c.memory.id !== 'off';
+    const flags = [];
+    if (sandboxOn) flags.push('sandbox ' + sm.backend);
+    if (memoryOn) flags.push('memory ' + c.memory.id);
+    if ((c.learning || {}).id && c.learning.id !== 'learn-off') flags.push('learning ' + c.learning.id);
+
+    const en = sm.will_enforce || {};
+    const yn = (v) => (v ? 'yes' : 'no');
+
+    panel.innerHTML = `
+      <div class="ho-toolbar">
+        <span class="ho-sub">Optional systems. Nothing here is on unless you turn it on.</span>
+        ${flags.length ? `<span class="badge on">${esc(flags.join(' · '))}</span>` : '<span class="badge">all optional systems off</span>'}
+      </div>
+
+      <div class="ho-section">Profile</div>
+      <div class="mcp-add">
+        <select class="git-select" id="capProfile">
+          ${['minimal', 'silent', 'safe', 'power-isolation', 'power-memory', 'full']
+            .map((n) => `<option value="${n}"${n === c.profile ? ' selected' : ''}>${n}</option>`).join('')}
+        </select>
+        <button class="ho-btn small primary" id="capProfileApply">Apply</button>
+        <span class="ho-sub sm">A profile sets everything below. What it cannot turn on is reported.</span>
+      </div>
+      <div id="capProfileNote"></div>
+
+      <div class="ho-section">Sandbox <span class="ho-sub sm">how commands are isolated</span></div>
+      <div class="mcp-add">
+        <select class="git-select" id="capSandbox">${kind('sandbox').map((r) => optionFor(r, sm.backend)).join('')}</select>
+        <label class="chk"><input type="checkbox" id="capNet" ${cfg.sandbox && cfg.sandbox.network ? 'checked' : ''}> allow network</label>
+        <input class="mcp-in sm" id="capTimeout" type="number" min="1" max="600" value="${(cfg.sandbox && cfg.sandbox.timeout) || 180}">
+        <span class="ho-sub sm">seconds</span>
+        <button class="ho-btn small" id="capSandboxSave">Save</button>
+      </div>
+      <div class="tok-table">
+        <div class="tok-row"><span class="tok-label">Will enforce</span><span class="tok-value">timeout ${yn(en.timeout)} · cpu ${yn(en.cpu_limit)} · memory ${yn(en.memory_limit)} · network ${yn(en.network)} · read-only ${yn(en.readonly_project)}</span></div>
+        <div class="tok-row"><span class="tok-label">Platform</span><span class="tok-value">${esc(sm.platform || '')}</span><span class="tok-hint">what this OS can do at all</span></div>
+      </div>
+
+      <div class="ho-section">Memory <span class="ho-sub sm">what the agent may remember</span></div>
+      <div class="mcp-add">
+        <select class="git-select" id="capMemory">${kind('memory').map((r) => optionFor(r, (c.memory || {}).id)).join('')}</select>
+        <input class="mcp-in sm" id="capBudget" type="number" min="0" max="2000" value="${rep.budget || 0}">
+        <span class="ho-sub sm">token budget</span>
+        <button class="ho-btn small" id="capMemorySave">Save</button>
+      </div>
+      <div class="tok-table">
+        <div class="tok-row"><span class="tok-label">Injected now</span><span class="tok-value">${esc(rep.display || '0')}</span><span class="tok-hint">${rep.used || 0} of ${rep.budget || 0} tokens, ${rep.held_back || 0} held back</span></div>
+      </div>
+      ${(rep.injected || []).length ? `<div class="mem-list">${rep.injected.map((i) =>
+        `<div class="mem-row"><span class="mem-type badge">${esc(i.type)}</span>` +
+        `<span class="mem-text">${esc((i.content || '').slice(0, 160))}</span>` +
+        `<span class="badge">${esc(i.why)}</span>` +
+        `<span class="badge">${i.tokens} tok</span>` +
+        `<span class="badge">${esc(i.source_session || i.source || '')}</span></div>`).join('')}</div>`
+        : '<div class="ho-sub sm">Nothing is being injected.</div>'}
+
+      <div class="ho-section">Learning <span class="ho-sub sm">whether Tacit may learn</span></div>
+      <div class="mcp-add">
+        <select class="git-select" id="capLearning">${kind('learning').map((r) => optionFor(r, (c.learning || {}).id)).join('')}</select>
+        <button class="ho-btn small" id="capLearningSave">Save</button>
+      </div>
+      <div class="mcp-add">
+        <label class="ho-sub sm"><input type="checkbox" id="capAnalyzer"${an.enabled ? ' checked' : ''}> Auto-analyze finished sessions</label>
+        <button class="ho-btn small" id="capAnalyzerRun">Analyze now</button>
+      </div>
+      <div class="ho-sub sm">Runs on a timer over finished transcripts and leaves proposals behind. It adds no tool to the agent, makes no model call, and cannot apply anything.</div>
+      <div class="tok-table">
+        <div class="tok-row"><span class="tok-label">Sessions read</span><span class="tok-value">${an.sessions_read || 0}</span></div>
+        <div class="tok-row"><span class="tok-label">Proposals made</span><span class="tok-value">${an.proposals_made || 0}</span></div>
+        <div class="tok-row"><span class="tok-label">Rules seen before</span><span class="tok-value">${an.rules_seen || 0}</span></div>
+      </div>
+
+      <div class="ho-section">Proposals <span class="ho-count">${(lg.artifacts || []).length}</span></div>
+      <div class="mem-list">${(lg.artifacts || []).map((p) =>
+        `<div class="mem-row" data-art="${esc(p.id)}">` +
+        `<span class="mem-type badge">${esc(p.kind)}</span>` +
+        `<span class="badge${p.risk === 'high' ? ' danger-high' : ''}">${esc(p.risk)}</span>` +
+        `<span class="badge${p.state === 'approved' ? ' on' : ''}">${esc(p.state)}</span>` +
+        `<span class="mem-text">${esc((p.title || p.body || '').slice(0, 110))}` +
+        (p.provenance
+          ? `<span class="ho-sub sm">because ${esc(p.provenance.why || p.provenance.rule || 'it matched a pattern')}</span>` +
+            `<span class="ho-sub sm">you said: “${esc((p.provenance.snippet || '').slice(0, 100))}” (turn ${esc(p.provenance.turn)})</span>`
+          : '') +
+        `</span>` +
+        `<span class="badge">${esc(p.display)}</span>` +
+        `<span class="mem-actions">` +
+        (p.state === 'approved'
+          ? '<button class="ho-btn small" data-act="pdisable">disable</button>'
+          : '<button class="ho-btn small primary" data-act="papprove">approve</button>') +
+        `<button class="ho-btn small" data-act="preject">reject</button>` +
+        `<button class="ho-btn small" data-act="pedit">edit</button>` +
+        `<button class="ho-btn small danger" data-act="pdel">×</button>` +
+        `</span></div>`).join('') || '<div class="ho-empty sm">Nothing proposed yet.</div>'}</div>
+      <div class="mcp-add">
+        <input class="mcp-in" id="capPropTitle" placeholder="title" spellcheck="false">
+        <input class="mcp-in" id="capPropBody" placeholder="what should be remembered" spellcheck="false">
+        <select class="git-select" id="capPropKind">${['rule', 'preference', 'correction', 'skill'].map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+        <button class="ho-btn small" id="capPropAdd">Propose</button>
+      </div>
+      <div class="ho-sub sm">A proposal changes nothing until you approve it. Approving a skill writes a skill file; anything else goes to memory, under the memory budget.</div>
+
+      <div class="ho-section">Gateways <span class="ho-sub sm">hand a task to another program</span></div>
+      <div class="mcp-add">
+        <select class="git-select" id="capGateway">
+          ${(gw.gateways || []).map((g) => `<option value="${esc(g.id)}"${g.id === gw.selected ? ' selected' : ''}${g.available ? '' : ' disabled'}>${esc(g.name)}${g.available ? '' : ' — unavailable'}</option>`).join('')}
+        </select>
+        <button class="ho-btn small primary" id="capGatewaySelect">Select</button>
+      </div>
+      <div class="tok-table">
+        ${(gw.gateways || []).filter((g) => g.command).map((g) =>
+          `<div class="tok-row"><span class="tok-label">${esc(g.name)}</span><span class="tok-value">${esc(g.command)}</span></div>`).join('')
+          || '<div class="tok-row"><span class="tok-label">No command configured</span></div>'}
+      </div>
+      <div id="capGwList">${(gw.gateways || []).filter((g) => g.status === 'optional').map((g) =>
+        `<div class="prof-row" data-gw="${esc(g.id)}"><span class="prof-name">${esc(g.name)}</span>` +
+        `<span class="prof-desc">${esc(g.command)}</span>` +
+        `<button class="ho-btn small danger" data-act="gwdel">×</button></div>`).join('')}</div>
+      <div class="mcp-add">
+        <input class="mcp-in" id="capGwId" placeholder="id" spellcheck="false">
+        <input class="mcp-in" id="capGwCmd" placeholder="command" spellcheck="false">
+        <input class="mcp-in" id="capGwArgs" placeholder="args, use {task}" spellcheck="false">
+        <button class="ho-btn small" id="capGwAdd">Add gateway</button>
+      </div>
+      <div class="mcp-add"${gw.selected === 'none' ? ' hidden' : ''} id="capGwRunRow">
+        <input class="mcp-in" id="capGwTask" placeholder="task to hand over" spellcheck="false">
+        <button class="ho-btn small" id="capGwRun">Run</button>
+      </div>
+      <div id="capGwOut"></div>
+
+      <div class="ho-section">Optional dependencies <span class="ho-sub sm">Tacit installs nothing on its own</span></div>
+      <div class="tok-table">
+        ${(dp.groups || []).map((g) => `<div class="tok-row">
+          <span class="tok-label">${esc(g.label)}</span>
+          <span class="tok-value">${g.satisfied ? 'ready' : 'needs ' + esc(g.missing.map((m) => m.binary).join(', '))}</span>
+          <span class="tok-hint">${g.satisfied ? esc(g.note) : esc(g.missing[0].install)}</span>
+        </div>`).join('')}
+      </div>
+
+      <div class="ho-section">Import from another tool <span class="ho-sub sm">one time, only if you ask</span></div>
+      <div class="mcp-add">
+        <input class="mcp-in" id="capMigPath" placeholder="path to a file or folder you exported" spellcheck="false">
+        <button class="ho-btn small" id="capMigPreview">Preview</button>
+      </div>
+      <div class="ho-sub sm">${esc(mg.hint || '')}</div>
+      <div id="capMigOut"></div>
+
+      <div class="ho-section">Audit <span class="ho-count">${(a.entries || []).length} recent</span></div>
+      <div class="mcp-audit">${(a.entries || []).map((e) =>
+        `<div class="audit-row"><span class="audit-event">${esc(e.event)}</span>` +
+        `<span class="audit-detail">${esc(e.backend || '')} ${esc(e.tool || '')} ${esc(e.status || '')} ${e.changed ? '· ' + e.changed + ' changed' : ''}</span></div>`).join('')
+        || '<div class="ho-empty sm">Nothing recorded yet.</div>'}</div>`;
+
+    const note = (t, err) => { const el = $('#capProfileNote'); if (el) el.innerHTML = t ? `<div class="ho-sub sm">${esc(t)}</div>` : ''; };
+
+    $('#capProfileApply').addEventListener('click', async () => {
+      const name = $('#capProfile').value;
+      const r = await post(`/api/profiles/${encodeURIComponent(name)}/apply`);
+      if (!r.ok) { note(r.error || 'could not apply', true); return; }
+      const skipped = (r.skipped || []).map((s) => `${s.what} (${s.wanted}: ${s.why})`);
+      note(`${name} applied. ` + (skipped.length ? `Could not turn on: ${skipped.join(', ')}`
+                                                  : 'Everything it names is on.'));
+      renderCapabilities();
+    });
+
+    const setSandbox = async () => {
+      const r = await post('/api/capabilities/sandbox', {
+        backend: $('#capSandbox').value, network: $('#capNet').checked,
+        timeout: parseInt($('#capTimeout').value, 10) || 180,
+      });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('sandbox set to ' + r.sandbox.id);
+      renderCapabilities();
+    };
+    $('#capSandboxSave').addEventListener('click', setSandbox);
+
+    $('#capMemorySave').addEventListener('click', async () => {
+      const r = await post('/api/capabilities/memory', {
+        mode: $('#capMemory').value, budget: parseInt($('#capBudget').value, 10) || 0,
+      });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('memory set to ' + r.memory.id);
+      renderCapabilities();
+    });
+
+    $('#capLearningSave').addEventListener('click', async () => {
+      const r = await post('/api/capabilities/learning', { mode: $('#capLearning').value });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('learning set to ' + r.learning.id);
+      renderCapabilities();
+    });
+
+    // ── the background analyzer ──
+    const anBox = $('#capAnalyzer');
+    if (anBox) anBox.addEventListener('change', async () => {
+      const r = await post('/api/analyzer', { enabled: anBox.checked });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('session analysis ' + (r.enabled ? 'on' : 'off'));
+    });
+    const anRun = $('#capAnalyzerRun');
+    if (anRun) anRun.addEventListener('click', async () => {
+      anRun.disabled = true;
+      toast('reading finished sessions…');
+      const r = await post('/api/analyzer/run', {});
+      anRun.disabled = false;
+      if (!r.ok) { toast(r.error || 'could not run', true); return; }
+      toast(`${r.sessions_read} session(s) read, ${r.proposals} proposal(s) added`);
+      renderCapabilities();
+    });
+
+    // ── proposals ──
+    panel.querySelectorAll('[data-art]').forEach((row) => {
+      const id = row.dataset.art;
+      const act = async (what) => {
+        const r = await post(`/api/learning/${encodeURIComponent(id)}/${what}`);
+        if (!r.ok) { toast(r.error || 'could not do that', true); return; }
+        toast(what === 'approve' ? ('approved, wrote ' + (r.wrote || 'nothing')) : what);
+        renderCapabilities();
+      };
+      const on = (name, fn) => {
+        const b = row.querySelector(`[data-act="${name}"]`);
+        if (b) b.addEventListener('click', fn);
+      };
+      on('papprove', () => act('approve'));
+      on('pdisable', () => act('disable'));
+      on('preject', () => act('reject'));
+      on('pedit', async () => {
+        const next = prompt('Edit the proposal body', row.querySelector('.mem-text').textContent);
+        if (next == null) return;
+        const r = await api('/api/learning/' + encodeURIComponent(id),
+          { method: 'PATCH', body: JSON.stringify({ body: next }) });
+        toast(r.ok ? 'edited' : (r.error || 'could not edit'), !r.ok);
+        if (r.ok) renderCapabilities();
+      });
+      on('pdel', async () => {
+        if (!confirm('Delete this proposal? Anything it wrote is removed too.')) return;
+        const r = await api('/api/learning/' + encodeURIComponent(id), { method: 'DELETE' });
+        toast(r.ok ? 'deleted' : (r.error || 'could not delete'), !r.ok);
+        if (r.ok) renderCapabilities();
+      });
+    });
+    $('#capPropAdd').addEventListener('click', async () => {
+      const body = $('#capPropBody').value.trim();
+      if (!body) { toast('say what should be remembered', true); return; }
+      const r = await post('/api/learning/propose', {
+        kind: $('#capPropKind').value, title: $('#capPropTitle').value.trim(), body,
+      });
+      if (!r.ok) { toast(r.error || 'could not propose', true); return; }
+      toast(r.auto_applied ? 'proposed and applied by the current mode' : 'proposed');
+      renderCapabilities();
+    });
+
+    // ── gateways ──
+    const gwOut = () => $('#capGwOut');
+    $('#capGatewaySelect').addEventListener('click', async () => {
+      const id = $('#capGateway').value;
+      const r = await post(`/api/gateways/${encodeURIComponent(id)}/select`);
+      toast(r.ok ? (id === 'none' ? 'gateways off' : id + ' selected') : (r.error || 'failed'), !r.ok);
+      if (r.ok) renderCapabilities();
+    });
+    $('#capGwAdd').addEventListener('click', async () => {
+      const id = ($('#capGwId').value || '').trim();
+      const command = ($('#capGwCmd').value || '').trim();
+      const args = ($('#capGwArgs').value || '').trim();
+      if (!id || !command) { toast('an id and a command are required', true); return; }
+      const r = await post('/api/gateways',
+        { id, command, args: args ? args.split(/\s+/) : [], enabled: true });
+      if (!r.ok) { toast(r.error || 'could not add it', true); return; }
+      toast('added ' + id + '. Select it before it can run.');
+      renderCapabilities();
+    });
+    panel.querySelectorAll('[data-gw]').forEach((row) => {
+      row.querySelector('[data-act="gwdel"]').addEventListener('click', async () => {
+        if (!confirm('Remove gateway ' + row.dataset.gw + '?')) return;
+        const r = await api('/api/gateways/' + encodeURIComponent(row.dataset.gw),
+                            { method: 'DELETE' });
+        toast(r.ok ? 'removed' : (r.error || 'could not remove it'), !r.ok);
+        if (r.ok) renderCapabilities();
+      });
+    });
+    const runBtn = $('#capGwRun');
+    if (runBtn) runBtn.addEventListener('click', async () => {
+      const task = ($('#capGwTask').value || '').trim();
+      if (!task) { toast('a task is required', true); return; }
+      gwOut().innerHTML = '<div class="ho-sub sm">running…</div>';
+      const r = await post(`/api/gateways/${encodeURIComponent(gw.selected)}/run`, { task });
+      gwOut().innerHTML = r.ok
+        ? `<pre class="mem-preview">${esc(r.output || '(no output)')}</pre>`
+        : `<div class="ho-err">${esc(r.error || 'the gateway did not answer')}</div>`;
+    });
+
+    // ── migration: nothing happens until you point and confirm ──
+    const migOut = () => $('#capMigOut');
+    $('#capMigPreview').addEventListener('click', async () => {
+      const path = ($('#capMigPath').value || '').trim();
+      if (!path) { toast('point at a file or folder', true); return; }
+      migOut().innerHTML = '<div class="ho-sub sm">reading…</div>';
+      const r = await post('/api/migrate/preview', { path });
+      if (!r.ok) { migOut().innerHTML = `<div class="ho-err">${esc(r.error || 'nothing found')}</div>`; return; }
+      migOut().innerHTML = `
+        <div class="tok-table">
+          <div class="tok-row"><span class="tok-label">Found</span><span class="tok-value">${r.count} item(s)</span><span class="tok-hint">${esc(r.display)} tokens</span></div>
+          <div class="tok-row"><span class="tok-label">Refused</span><span class="tok-value">${r.refused_count}</span><span class="tok-hint">looked like credentials</span></div>
+        </div>
+        <div class="mcp-add">
+          <button class="ho-btn small primary" id="capMigDo">Import these</button>
+        </div>`;
+      $('#capMigDo').addEventListener('click', async () => {
+        const done = await post('/api/migrate/import', { path });
+        migOut().innerHTML = done.ok
+          ? `<div class="ho-sub sm">imported ${done.added_count}, skipped ${done.skipped_count}. ${esc(done.note || '')}</div>`
+          : `<div class="ho-err">${esc(done.error || 'import failed')}</div>`;
+      });
+    });
+  }
+
   // ── MCP ────────────────────────────────────────────────────────────────
   async function renderMcp() {
     const panel = $('#panel-mcp');
@@ -222,15 +607,6 @@
         <input class="mcp-in" id="mcpHttpUrl" placeholder="…or an HTTP endpoint (https://host/mcp)" spellcheck="false">
         <button class="ho-btn" id="mcpAddHttp">Add HTTP server</button>
       </div>
-      <div class="ho-section">Import DSH</div>
-      <div class="mcp-add">
-        <input class="mcp-in" id="dshPkg" placeholder="npm package or command (e.g. @scope/dsh-tool)" spellcheck="false">
-        <button class="ho-btn primary" id="dshImport">Import as MCP server</button>
-        <button class="ho-btn small" id="dshStatusBtn">Show status</button>
-        <button class="ho-btn small" id="dshScaffold">Generate adapter</button>
-      </div>
-      <div class="ho-sub sm">DSH plugins are Node/Cordis bundles. Anything that speaks MCP works directly; the rest gets an adapter scaffold. Nothing is installed or run.</div>
-      <div id="dshOut"></div>
       <div class="ho-section">Discovered tools <span class="ho-count">${(tools.tools || []).length}</span></div>
       <div class="mcp-tools">${(tools.tools || []).map(toolRow).join('') || '<div class="ho-empty sm">Nothing discovered yet.</div>'}</div>
       <div class="ho-section">Recent activity</div>
@@ -313,28 +689,6 @@
       const r = await post('/api/mcp/servers', { name: url, command: url, transport: 'http' });
       note(r.ok ? `added "${r.server.id}" over HTTP (disabled)` : (r.error || 'add failed'), !r.ok);
       if (r.ok) renderMcp();
-    });
-
-    const dshOut = () => $('#dshOut');
-    $('#dshImport').addEventListener('click', async () => {
-      const pkg = $('#dshPkg').value.trim();
-      if (!pkg) { note('a package or command is required', true); return; }
-      const r = await post('/api/dsh/import', { package: pkg });
-      dshOut().innerHTML = `<pre class="mem-preview">${esc(r.message || r.error || '')}</pre>`;
-      note(r.ok ? 'imported as a disabled MCP server' : (r.error || 'import failed'), !r.ok);
-      if (r.ok) renderMcp();
-    });
-    $('#dshStatusBtn').addEventListener('click', async () => {
-      const r = await api('/api/dsh/status');
-      dshOut().innerHTML = `<pre class="mem-preview">${esc((r.plugins || []).map((p) =>
-        `${p.name || p.package}: ${p.status} — ${p.detail}`).join('\n') || 'No DSH plugins registered yet.')}</pre>`;
-    });
-    $('#dshScaffold').addEventListener('click', async () => {
-      const pkg = $('#dshPkg').value.trim();
-      if (!pkg) { note('enter the plugin id first', true); return; }
-      const r = await post('/api/dsh/scaffold', { plugin_id: pkg });
-      dshOut().innerHTML = `<pre class="mem-preview">${esc(r.message || r.error || '')}</pre>`;
-      note(r.ok ? 'adapter scaffold written' : (r.error || 'failed'), !r.ok);
     });
   }
 
@@ -431,6 +785,7 @@
         <span class="ho-sub">Vault is <strong>${vault.enabled ? 'enabled' : 'disabled'}</strong>.</span>
         <button class="ho-btn small" id="mvToggle">${vault.enabled ? 'Disable vault' : 'Enable vault'}</button>
         <button class="ho-btn small" id="mvExtract">Extract from session</button>
+        <button class="ho-btn small" id="mvSummarise">Summarise session</button>
         <button class="ho-btn small" id="mvCompress">Compress startup set</button>
       </div>
       <div class="tok-table">
@@ -511,6 +866,34 @@
           if (res.ok) renderMemory();
         });
         row.querySelector('[data-act="no"]').addEventListener('click', () => row.remove());
+      });
+    });
+
+    $('#mvSummarise').addEventListener('click', async () => {
+      const sid = (window.Tacit && window.Tacit.getSid && window.Tacit.getSid()) || '';
+      if (!sid) { note('no session is open', true); return; }
+      note('summarising this session…');
+      const preview = await post('/api/memory/summarise', { sid });
+      if (!preview.ok) { note(preview.error || 'could not summarise', true); return; }
+      const box = document.createElement('div');
+      box.className = 'mem-candidates';
+      box.innerHTML =
+        `<div class="ho-section">Session summary — ${esc(preview.display)} tokens</div>` +
+        `<pre class="mem-preview">${esc(preview.summary)}</pre>` +
+        `<div class="mcp-add">
+           <input class="mcp-in sm" id="mvSumTtl" type="number" min="0" placeholder="ttl days">
+           <button class="ho-btn small primary" id="mvSumSave">Save to memory</button>
+           <button class="ho-btn small" id="mvSumCancel">Cancel</button>
+         </div>`;
+      panel.insertBefore(box, panel.querySelector('.ho-section'));
+      $('#mvSumCancel').addEventListener('click', () => box.remove());
+      $('#mvSumSave').addEventListener('click', async () => {
+        const ttl = parseInt($('#mvSumTtl').value, 10) || 0;
+        const saved = await post('/api/memory/summarise',
+          { sid, text: preview.summary, save: true, ttl_days: ttl });
+        note(saved.ok ? 'saved as a session summary' : (saved.error || 'could not save'), !saved.ok);
+        box.remove();
+        if (saved.ok) renderMemory();
       });
     });
 

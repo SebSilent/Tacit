@@ -82,6 +82,66 @@ async def set_budget(request: Request):
     return res if res.get("ok") else _fail(res.get("error") or "could not set budget")
 
 
+_SUMMARY_PROMPT = (
+    "Summarise this work session so it can be recalled in a later one. Write it for "
+    "someone who was not here. Keep it short and factual, and use these four lines:\n"
+    "Goal: what was asked\n"
+    "Did: what actually changed\n"
+    "Decided: choices made and why\n"
+    "Open: anything unfinished\n\n"
+)
+
+
+@router.post("/api/memory/summarise")
+async def summarise(request: Request):
+    """Distil a session into one durable note. Nothing is saved unless asked.
+
+    This is the long-term half of memory: individual facts are extracted from a
+    conversation, but a session summary is what makes the session itself
+    recallable months later.
+    """
+    body = await request.json()
+    rec = store.get(str(body.get("sid") or ""))
+    if not rec:
+        return _fail("no such session")
+    msgs = rec.get("messages") or []
+    transcript = "\n".join(
+        f"{m.get('role')}: {(m.get('content') or '').strip()}"
+        for m in msgs if (m.get("content") or "").strip())
+    if not transcript.strip():
+        return _fail("that session has nothing to summarise")
+
+    existing = str(body.get("text") or "").strip()
+    if not existing:
+        try:
+            existing = (engine.chat(
+                [{"role": "user", "content": _SUMMARY_PROMPT + transcript[:24000]}],
+                ref=body.get("model") or None) or "").strip()
+        except engine.EngineError as exc:
+            return _fail(f"summarising needs a working model: {exc}")
+        if not existing:
+            return _fail("the model returned nothing")
+
+    cost = tokens.estimate_tokens(existing)
+    result = {"summary": existing, "tokens": cost, "display": tokens.label(cost),
+              "sid": rec["id"], "saved": False,
+              "title": rec.get("title") or "session"}
+    if not body.get("save"):
+        return _ok(**result)
+
+    ttl = int(body.get("ttl_days") or 0)
+    saved = memory_store.add(
+        existing, type=body.get("type") or "lesson", scope="global",
+        source="user", confidence=body.get("confidence") or "medium",
+        pinned=bool(body.get("pinned")), source_session=f"session:{rec['id']}",
+        ttl_days=ttl, reason=f"session summary of {rec.get('title') or rec['id']}")
+    if not saved.get("ok"):
+        return _fail(saved.get("error") or "could not save the summary")
+    result["saved"] = True
+    result["memory"] = saved["memory"]
+    return _ok(**result)
+
+
 @router.get("/api/memory/compressions")
 async def compressions(limit: int = 50):
     return _ok(compressions=memory_store.compressions(limit))

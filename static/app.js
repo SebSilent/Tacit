@@ -165,8 +165,9 @@ async function syncSessionMetadata(s) {
 
 async function initSessions() {
   await loadServerRegistry();
-  if (!sessions.length) newSession(true);
-  if (!activeId || !sessions.find(s => s.id === activeId)) activeId = sessions[0].id;
+  if (!activeId || !sessions.find(s => s.id === activeId)) {
+    activeId = sessions.length ? sessions[0].id : null;
+  }
   renderSessionList();
   renderTranscript(cur());
   renderModelChip();
@@ -183,7 +184,7 @@ function newSession(silent) {
     // sent to the server or injected into the prompt; the model picks its own
     // paths. (localStorage holds a choice only if the user actually made one.)
     workdir: localStorage.getItem('tacit.workdir') || '',
-    created: Date.now(), messages: []
+    created: Date.now(), messages: [], _new: true
   };
   sessions.unshift(s);
   activeId = s.id;
@@ -343,7 +344,10 @@ function wsUrl(s) {
     : location.host;
   const think = s.thinking ? `&thinking=${s.thinking}` : '';
   const wd = s.workdir ? `&workdir=${encodeURIComponent(s.workdir)}` : '';
-  return `${proto}://${host}/ws/${s.id}?model=${encodeURIComponent(s.model)}&mode=${s.mode}${think}${wd}`;
+  // create=1 only ever rides on a socket the New session button just asked
+  // for. Every other connection names a session that already exists.
+  const mk = s._new ? '&create=1' : '';
+  return `${proto}://${host}/ws/${s.id}?model=${encodeURIComponent(s.model)}&mode=${s.mode}${think}${wd}${mk}`;
 }
 
 function connect() {
@@ -351,9 +355,10 @@ function connect() {
   if (ws && ws.readyState === 1) return;           // transport already live
   if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; }
   const s = cur();
+  if (!s) { setConn(''); return; }        // nothing to attach to yet
   setConn('connecting…');
   ws = new WebSocket(wsUrl(s));
-  ws.onopen = () => { wsDead = false; setConn(''); };
+  ws.onopen = () => { wsDead = false; setConn(''); if (s) delete s._new; };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.sid && m.sid !== activeId) { bgIngest(m); return; }
@@ -373,6 +378,14 @@ function attachCurrent() {
     window.TacitAssistant.sessionChanged(activeId);
   }
   const s = cur();
+  if (!s) return;
+  // A brand-new session must ride a socket that is allowed to create it, so
+  // drop the current one and reconnect rather than switching over it. Switching
+  // never created anything, which is why pressing New session did nothing.
+  if (s._new && ws && ws.readyState === 1) {
+    try { ws.onclose = null; ws.close(); } catch (e) {}
+    ws = null;
+  }
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'switch', sid: s.id, model: s.model,
       mode: s.mode, thinking: s.thinking || '' }));
@@ -645,6 +658,7 @@ function send(text) {
   }
   if (busy && planLive) { toast('Plan mode is running — wait for it or press Stop'); return; }
   const s = cur();
+  if (!s) { toast('Press New session to start one'); return; }
   if (wsDead || !ws || ws.readyState !== 1) { connect(); toast('Reconnecting — your message will send once the link is up'); }
   if (sessionStarting) toast('Agent is booting — message queued, it will fire the moment it is ready');
 
@@ -860,6 +874,7 @@ function finishToolCard(m) {
 function renderTranscript(s) {
   const inner = ensureInner();
   inner.innerHTML = '';
+  if (!s) { emptyState.style.display = ''; return; }
   emptyState.style.display = s.messages.length ? 'none' : '';
   for (const msg of s.messages) {
     const body = appendMsg(msg.role, msg.content);
@@ -990,8 +1005,7 @@ function endStreamQuiet() {
 
 function deleteSession(id) {
   sessions = sessions.filter(s => s.id !== id);
-  if (!sessions.length) newSession(true);
-  if (activeId === id) activeId = sessions[0].id;
+  if (activeId === id) activeId = sessions.length ? sessions[0].id : null;
   persist();
   fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
   renderSessionList();
@@ -1159,6 +1173,12 @@ messagesEl.addEventListener('click', e => {
 // ── model / mode / status ────────────────────────────────────────────
 function renderModelChip() {
   const s = cur();
+  if (!s) {
+    $('#topTitle').textContent = 'Tacit';
+    $('#topMeta').textContent = 'no session — press New session';
+    renderWdChip();
+    return;
+  }
   $('#topTitle').textContent = s.title;
   const sid = splitModelId(s.model);
   const name = (info.models.find(m => m.id === s.model) || {}).name || sid.model;
@@ -1970,11 +1990,11 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Every top-level const (tokMeter and friends) is initialised by now, so it is
-// safe to create the fallback session here — and it MUST happen before
-// initSeg() below, which reads cur().
-if (!sessions.length) newSession(true);
-if (!activeId || !sessions.find(s => s.id === activeId)) activeId = sessions[0].id;
+// No session is created here. A session exists because the user asked for one,
+// never because a page was loaded. Everything below tolerates an empty list.
+if (!activeId || !sessions.find(s => s.id === activeId)) {
+  activeId = sessions.length ? sessions[0].id : null;
+}
 
 // init mode seg from session
 (function initSeg() {

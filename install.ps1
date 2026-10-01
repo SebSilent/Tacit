@@ -48,6 +48,12 @@ Write-Host ''
 Write-Host ' Tacit - the Silent Harness' -ForegroundColor White
 Write-Host ''
 
+# Older Windows defaults to TLS 1.0, which makes the download fail with a
+# message that says nothing useful. Ask for 1.2 before anything is fetched.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch { }
+
 if (-not $IsWindows -and $PSVersionTable.PSVersion.Major -ge 6) {
     Die 'this installer is for Windows. On macOS/Linux run install.sh instead.'
 }
@@ -99,11 +105,25 @@ if ((Test-Path (Join-Path $AppDir 'backend\main.py')) -and -not (Test-Path (Join
         $clone = Invoke-Native 'git' $cloneArgs
         if ($clone.Code -ne 0) { Die "could not clone $RepoUrl`n$($clone.Output)" }
     } else {
-        $zipUrl = ($RepoUrl -replace '\.git$', '') + "/archive/refs/heads/$Branch.zip"
         Say "git not found - downloading the source archive instead"
+        # $Branch is empty unless --branch was given, and an empty name builds a
+        # URL that cannot resolve (/refs/heads/.zip). Try the real default names
+        # in order rather than trusting one.
+        $refs = if ($Branch) { @($Branch) } else { @('main', 'master') }
+        $base = $RepoUrl -replace '\.git$', ''
         $tmp = Join-Path $env:TEMP ("tacit-" + [Guid]::NewGuid().ToString('N') + '.zip')
+        $got = $false
+        foreach ($ref in $refs) {
+            try {
+                Invoke-WebRequest -Uri "$base/archive/refs/heads/$ref.zip" -OutFile $tmp -UseBasicParsing
+                $got = $true
+                break
+            } catch { }
+        }
+        if (-not $got) {
+            Die "could not download the source archive. Install git, or pass --branch NAME."
+        }
         try {
-            Invoke-WebRequest -Uri $zipUrl -OutFile $tmp -UseBasicParsing
             $extract = Join-Path $env:TEMP ("tacit-" + [Guid]::NewGuid().ToString('N'))
             Expand-Archive -Path $tmp -DestinationPath $extract -Force
             $inner = Get-ChildItem $extract -Directory | Select-Object -First 1

@@ -5,7 +5,15 @@ from pathlib import Path
 
 from . import config
 
-INDEX = config.SESSIONS_DIR / "index.json"
+def _index_path() -> Path:
+    """Resolved on every call, never cached at import.
+
+    This was a module-level constant, which meant redirecting the sessions
+    directory (as the tests do, and as any future relocation would) moved the
+    session files but left the index behind. The two halves of the store then
+    disagreed about where they lived.
+    """
+    return config.SESSIONS_DIR / "index.json"
 
 
 def _path(sid: str) -> Path:
@@ -17,12 +25,12 @@ def _now() -> float:
 
 
 def index() -> list[dict]:
-    rows = config.read_json(INDEX, [])
+    rows = config.read_json(_index_path(), [])
     return rows if isinstance(rows, list) else []
 
 
 def _write_index(rows: list[dict]) -> None:
-    config.write_json(INDEX, rows)
+    config.write_json(_index_path(), rows)
 
 
 def list_sessions() -> list[dict]:
@@ -30,8 +38,16 @@ def list_sessions() -> list[dict]:
 
 
 def create(title: str = "New session", model: str = "", mode: str = "agent",
-           thinking: str = "medium", project: str = "") -> dict:
-    sid = uuid.uuid4().hex
+           thinking: str = "medium", project: str = "", sid: str = "") -> dict:
+    """Make a session. Only ever called for an explicit request.
+
+    A session exists because the user started one. Nothing on a page load, a
+    reconnect, or a sync is allowed to conjure one, so `sid` may be supplied by
+    the caller to keep the client and server agreed on the id.
+    """
+    if sid and get(sid) is not None:
+        return get(sid)
+    sid = sid or uuid.uuid4().hex
     rec = {
         "id": sid, "title": title or "New session", "model": model, "mode": mode,
         "thinking": thinking, "project": project, "created": _now(), "updated": _now(),
@@ -120,6 +136,14 @@ def registry(rows: list[dict] | None = None) -> dict:
 
 
 def merge(payload: dict) -> dict:
+    """Apply updates arriving from another browser. Never creates anything.
+
+    This used to invent a session for every unrecognised id, which meant one
+    page load could multiply the list: the client pushed its whole local set
+    and the server dutifully materialised each one. An unknown id is now
+    ignored, because a session is created by the user, not by a mention of an
+    id.
+    """
     rows = index()
     by_id = {r["id"]: r for r in rows}
     for incoming in (payload or {}).get("sessions") or []:
@@ -128,14 +152,7 @@ def merge(payload: dict) -> dict:
             continue
         local = get(sid)
         if local is None:
-            local = {
-                "id": sid, "title": incoming.get("title") or "New session",
-                "model": incoming.get("model") or "", "mode": incoming.get("mode") or "agent",
-                "thinking": incoming.get("thinking") or "medium",
-                "project": incoming.get("project") or "",
-                "created": incoming.get("created") or _now(),
-                "updated": incoming.get("updated") or _now(), "messages": [],
-            }
+            continue
         incoming_msgs = incoming.get("messages") or []
         if len(incoming_msgs) > len(local.get("messages") or []):
             local["messages"] = incoming_msgs
