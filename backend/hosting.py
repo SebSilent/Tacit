@@ -82,6 +82,23 @@ async def auth() -> dict:
     return {"token": "", "source": "none", "username": ""}
 
 
+async def account() -> dict:
+    """The signed-in account: login, display name and token.
+
+    The login is what GitHub attributes commits to, so it builds the noreply
+    address. The display name is what a person expects to see on the commit.
+    """
+    a = await auth()
+    if not a.get("token"):
+        return {"connected": False, "login": "", "name": "",
+                "token": "", "source": a.get("source", "none")}
+    r = await api("/user", a["token"])
+    who = (r.get("json") or {}) if r.get("ok") else {}
+    login = who.get("login") or a.get("username") or ""
+    return {"connected": bool(login), "login": login, "name": who.get("name") or "",
+            "token": a["token"], "source": a.get("source", "")}
+
+
 async def api(pathname: str, token: str = "", method: str = "GET", body=None) -> dict:
     headers = {
         "Accept": "application/vnd.github+json",

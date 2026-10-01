@@ -123,3 +123,58 @@ def has_identity(workdir: str) -> bool:
     n = vc(workdir, ["config", "user.name"])
     e = vc(workdir, ["config", "user.email"])
     return bool(n["ok"] and n["stdout"].strip() and e["ok"] and e["stdout"].strip())
+
+
+def configured_identity(workdir: str) -> dict | None:
+    """The repository's own user.name / user.email, when both are set."""
+    n = vc(workdir, ["config", "user.name"])
+    e = vc(workdir, ["config", "user.email"])
+    name = (n["stdout"] or "").strip() if n["ok"] else ""
+    mail = (e["stdout"] or "").strip() if e["ok"] else ""
+    if name and mail:
+        return {"name": name, "email": mail, "source": "repository"}
+    return None
+
+
+def saved_identity() -> dict | None:
+    """A name and email the user set in Tacit's own settings."""
+    prefs = config.prefs()
+    name = str(prefs.get("vcsName") or "").strip()
+    mail = str(prefs.get("vcsEmail") or "").strip()
+    if name and mail:
+        return {"name": name, "email": mail, "source": "settings"}
+    return None
+
+
+def env_identity() -> dict | None:
+    name = (os.environ.get("TACIT_VCS_NAME") or "").strip()
+    mail = (os.environ.get("TACIT_VCS_EMAIL") or "").strip()
+    if name and mail:
+        return {"name": name, "email": mail, "source": "environment"}
+    return None
+
+
+def github_identity(username: str, display_name: str = "") -> dict | None:
+    """Build a commit identity from the connected GitHub account.
+
+    The login is what GitHub attributes a commit to, so it forms the noreply
+    address. The display name, when the account has one, is what goes on the
+    commit as the author's name.
+    """
+    login = str(username or "").strip()
+    if not login:
+        return None
+    name = str(display_name or "").strip() or login
+    return {"name": name, "email": f"{login}@users.noreply.github.com",
+            "login": login, "source": "github"}
+
+
+def save_identity(name: str, email: str) -> dict:
+    name = str(name or "").strip()
+    email = str(email or "").strip()
+    if not name:
+        return {"ok": False, "error": "a name is required"}
+    if "@" not in email or " " in email:
+        return {"ok": False, "error": "a valid email address is required"}
+    config.save_prefs({"vcsName": name, "vcsEmail": email})
+    return {"ok": True, "identity": {"name": name, "email": email, "source": "settings"}}

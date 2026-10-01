@@ -69,6 +69,11 @@ async function runCommand(cmd, { silent = false } = {}) {
   const out = (r.output || r.error || '').trim();
   if (out) logLine(out);
   if (!r.ok && r.error) logLine('! ' + r.error);
+  if (!r.ok && r.needs_identity) {
+    // a commit was refused because there is no identity — send them to the field
+    const field = $('#gitIdName');
+    if (field) field.focus();
+  }
   if (!silent) note(r.ok ? cmd + ' — ok' : (r.error || 'command failed'), !r.ok);
   return r;
 }
@@ -190,6 +195,50 @@ function renderLog() {
     </div>`).join('');
 }
 
+let idOptions = [];
+
+async function refreshIdentity() {
+  const sel = $('#gitIdSelect');
+  const status = $('#gitIdentity');
+  if (!sel || !status) return;
+  const r = await api('/api/git/identity?' + qs());
+  if (!r.ok) { status.textContent = r.error || 'unknown'; return; }
+
+  const label = (i, tag) => `${i.name} <${i.email}> — ${tag}`;
+  idOptions = [];
+  if (r.repository) idOptions.push({ text: label(r.repository, 'repository config'), ident: r.repository });
+  if (r.settings) idOptions.push({ text: label(r.settings, 'saved here'), ident: r.settings });
+  if (r.github) idOptions.push({ text: label(r.github, 'GitHub account'), ident: r.github });
+  if (r.environment) idOptions.push({ text: label(r.environment, 'environment'), ident: r.environment });
+
+  const cur = r.effective;
+  const same = (a, b) => a && b && a.name === b.name && a.email === b.email;
+  sel.innerHTML = idOptions.map((o, i) =>
+    `<option value="${i}"${same(o.ident, cur) ? ' selected' : ''}>${esc(o.text)}</option>`
+  ).join('') + `<option value="custom"${cur ? '' : ' selected'}>Write my own…</option>`;
+
+  if (cur) {
+    status.innerHTML = `<span class="git-badge repo">${esc(cur.name)}</span>` +
+      `<span class="git-badge">${esc(cur.email)}</span>` +
+      `<span class="git-badge">from ${esc(cur.source)}</span>`;
+  } else {
+    status.innerHTML = '<span class="git-badge none">none set — commits will be refused until you pick one</span>';
+  }
+  // keep the custom fields showing whatever is saved, not a stale value
+  if (r.settings) {
+    const n = $('#gitIdName'), e = $('#gitIdEmail');
+    if (n) n.value = r.settings.name;
+    if (e) e.value = r.settings.email;
+  }
+  toggleIdentityCustom();
+}
+
+function toggleIdentityCustom() {
+  const sel = $('#gitIdSelect');
+  const box = $('#gitIdCustom');
+  if (sel && box) box.hidden = sel.value !== 'custom';
+}
+
 function renderAll() {
   renderRepo();
   renderBranchBar();
@@ -221,6 +270,7 @@ async function refresh() {
       state.log = []; state.branches = [];
     }
     renderAll();
+    refreshIdentity();
     if (st.isRepo === false && st.error) note(st.error, false);
   } finally {
     busy = false;
@@ -503,6 +553,29 @@ function wireGithub() {
       },
     });
   });
+  const idSel = $('#gitIdSelect');
+  if (idSel) idSel.addEventListener('change', toggleIdentityCustom);
+
+  const idSave = $('#gitIdSave');
+  if (idSave) idSave.addEventListener('click', async () => {
+    let payload;
+    if (!idSel || idSel.value === 'custom') {
+      payload = { name: ($('#gitIdName').value || '').trim(),
+                  email: ($('#gitIdEmail').value || '').trim() };
+    } else {
+      const opt = idOptions[parseInt(idSel.value, 10)];
+      if (!opt) { note('nothing selected', true); return; }
+      payload = { name: opt.ident.name, email: opt.ident.email };
+    }
+    const r = await api('/api/git/identity', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) { note(r.error || 'could not save the identity', true); return; }
+    note('commits will be made as ' + r.identity.name);
+    refreshIdentity();
+  });
+
   const createBtn = $('#gitGhCreate');
   if (createBtn) createBtn.addEventListener('click', createRepo);
   const delGitBtn = $('#gitGhDelete');

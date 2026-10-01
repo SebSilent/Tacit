@@ -15,8 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, config, mcp_registry, memory_store, metrics,  # noqa: E402
-                     plugin_manager, profiles, tokens)
+from backend import (agent, config, hosting, mcp_registry, memory_store, metrics,  # noqa: E402
+                     plugin_manager, profiles, tokens, vcs)
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
@@ -578,6 +578,137 @@ class TestProfiles(Isolated):
         profiles.apply("assisted")
         self.assertLessEqual(memory_store.startup_selection()["tokens"],
                              memory_store.DEFAULT_BUDGET)
+
+
+class TestCommitIdentity(Isolated):
+    """Commits must carry a real identity, never a placeholder."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("TACIT_VCS_NAME", "TACIT_VCS_EMAIL"):
+            os.environ.pop(key, None)
+
+    def test_github_identity_uses_the_noreply_address(self):
+        ident = vcs.github_identity("octocat")
+        self.assertEqual(ident["name"], "octocat")
+        self.assertEqual(ident["email"], "octocat@users.noreply.github.com")
+        self.assertEqual(ident["source"], "github")
+        self.assertIsNone(vcs.github_identity(""))
+
+    def test_github_display_name_goes_on_the_commit(self):
+        """The account's display name is the author name; the login forms the address."""
+        ident = vcs.github_identity("SebSilent", "Silent")
+        self.assertEqual(ident["name"], "Silent")
+        self.assertEqual(ident["email"], "SebSilent@users.noreply.github.com")
+        self.assertEqual(ident["login"], "SebSilent")
+        # an account with no display name still works
+        self.assertEqual(vcs.github_identity("SebSilent", "  ")["name"], "SebSilent")
+
+    def test_save_identity_validates(self):
+        self.assertIsNone(vcs.saved_identity())
+        self.assertTrue(vcs.save_identity("Ada Lovelace", "ada@example.com")["ok"])
+        self.assertEqual(vcs.saved_identity()["name"], "Ada Lovelace")
+        self.assertEqual(vcs.saved_identity()["source"], "settings")
+        self.assertFalse(vcs.save_identity("", "a@b.c")["ok"])
+        self.assertFalse(vcs.save_identity("Ada", "not-an-email")["ok"])
+        self.assertFalse(vcs.save_identity("Ada", "two words@x.y")["ok"])
+
+    def test_env_identity(self):
+        self.assertIsNone(vcs.env_identity())
+        os.environ["TACIT_VCS_NAME"] = "Env User"
+        os.environ["TACIT_VCS_EMAIL"] = "env@example.com"
+        try:
+            self.assertEqual(vcs.env_identity()["name"], "Env User")
+            self.assertEqual(vcs.env_identity()["source"], "environment")
+        finally:
+            os.environ.pop("TACIT_VCS_NAME", None)
+            os.environ.pop("TACIT_VCS_EMAIL", None)
+
+    def _resolve(self, login, display=""):
+        """_commit_identity with the hosting lookup stubbed out."""
+        import asyncio
+        from backend.routers import vcs as vcs_router
+
+        original = hosting.account
+
+        async def fake_account():
+            return {"connected": bool(login), "login": login, "name": display,
+                    "token": "t", "source": "cli"}
+
+        hosting.account = fake_account
+        try:
+            return asyncio.run(vcs_router._commit_identity("/tmp"))
+        finally:
+            hosting.account = original
+
+    def test_falls_back_to_the_github_account(self):
+        ident, why = self._resolve("octocat")
+        self.assertEqual(why, "")
+        self.assertEqual(ident["source"], "github")
+        self.assertEqual(ident["name"], "octocat")
+        self.assertEqual(ident["email"], "octocat@users.noreply.github.com")
+
+    def test_uses_the_github_display_name(self):
+        ident, _ = self._resolve("SebSilent", "Silent")
+        self.assertEqual(ident["name"], "Silent")
+        self.assertEqual(ident["email"], "SebSilent@users.noreply.github.com")
+
+    def _with_repository(self, ident):
+        from backend import vcs as vcs_mod
+
+        original = vcs_mod.configured_identity
+        vcs_mod.configured_identity = lambda cwd: ident
+        return original
+
+    def test_a_chosen_identity_wins_over_the_repository(self):
+        from backend import vcs as vcs_mod
+        vcs.save_identity("Chosen", "chosen@example.com")
+        original = self._with_repository({"name": "Repo", "email": "repo@example.com",
+                                          "source": "repository"})
+        try:
+            ident, _ = self._resolve("octocat")
+        finally:
+            vcs_mod.configured_identity = original
+        self.assertEqual(ident["source"], "settings")
+        self.assertEqual(ident["name"], "Chosen")
+
+    def test_repository_config_is_used_when_nothing_is_chosen(self):
+        from backend import vcs as vcs_mod
+        original = self._with_repository({"name": "Repo", "email": "repo@example.com",
+                                          "source": "repository"})
+        try:
+            ident, _ = self._resolve("octocat")
+        finally:
+            vcs_mod.configured_identity = original
+        self.assertEqual(ident["source"], "repository")
+        self.assertEqual(ident["name"], "Repo")
+
+    def test_saved_settings_win_over_github(self):
+        vcs.save_identity("Ada", "ada@example.com")
+        ident, _ = self._resolve("octocat")
+        self.assertEqual(ident["source"], "settings")
+
+    def test_env_wins_over_github(self):
+        os.environ["TACIT_VCS_NAME"] = "Env User"
+        os.environ["TACIT_VCS_EMAIL"] = "env@example.com"
+        try:
+            ident, _ = self._resolve("octocat")
+            self.assertEqual(ident["source"], "environment")
+        finally:
+            os.environ.pop("TACIT_VCS_NAME", None)
+            os.environ.pop("TACIT_VCS_EMAIL", None)
+
+    def test_refuses_rather_than_inventing_a_name(self):
+        ident, why = self._resolve("")
+        self.assertIsNone(ident)
+        self.assertIn("identity", why.lower())
+
+    def test_the_placeholder_fallback_is_gone(self):
+        import inspect
+        from backend.routers import vcs as vcs_router
+
+        src = inspect.getsource(vcs_router)
+        self.assertNotIn("tacit@localhost", src)
 
 
 if __name__ == "__main__":

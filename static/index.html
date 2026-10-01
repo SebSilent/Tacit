@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tacit</title>
-<link rel="stylesheet" href="/static/style.css?v=24">
+<link rel="stylesheet" href="/static/style.css?v=26">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
 </head>
 <body>
@@ -213,6 +213,19 @@
           </div>
           <div class="ho-section">Remotes</div>
           <div class="git-remotes" id="gitRemotes"></div>
+          <div class="ho-section">Commit identity</div>
+          <div class="git-id-row">
+            <span class="git-id-label">Commit by</span>
+            <select id="gitIdSelect" class="git-select"></select>
+          </div>
+          <div class="git-id-custom" id="gitIdCustom" hidden>
+            <input id="gitIdName" placeholder="your name" spellcheck="false" autocomplete="off">
+            <input id="gitIdEmail" placeholder="you@example.com" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="git-identity" id="gitIdentity"></div>
+          <div class="git-gh-row">
+            <button class="ho-btn small primary" id="gitIdSave">Save</button>
+          </div>
           <div class="ho-section">GitHub</div>
           <div class="git-github">
             <div class="git-gh-account" id="gitGhAccount">checking…</div>
@@ -258,7 +271,7 @@
   </div>
 </div>
 <script src="/static/app.js?v=31"></script>
-<script src="/static/git.js?v=11"></script>
+<script src="/static/git.js?v=13"></script>
 <script src="/static/harness.js?v=18"></script>
 <script src="/static/platform.js?v=3"></script>
 </body>
