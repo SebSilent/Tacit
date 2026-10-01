@@ -20,8 +20,8 @@ from backend import (agent, config, mcp_registry, memory_store, metrics,  # noqa
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
-_PATCHED = ("HOME", "MEMORY_DB", "MCP_FILE", "PLUGINS_FILE", "PLUGINS_USER_DIR",
-            "ADAPTERS_DIR", "CHECKPOINT_DIR", "PREFS_FILE", "GITHUB_FILE")
+_PATCHED = ("HOME", "MEMORY_DB", "MCP_FILE", "PLUGINS_FILE", "PROFILES_FILE",
+            "PLUGINS_USER_DIR", "ADAPTERS_DIR", "CHECKPOINT_DIR", "PREFS_FILE", "GITHUB_FILE")
 
 
 class Isolated(unittest.TestCase):
@@ -41,6 +41,7 @@ class Isolated(unittest.TestCase):
         # prefs must be redirected too, or a test that changes a preference
         # would rewrite the user's real ~/.tacit/prefs.json
         config.PREFS_FILE = home / "prefs.json"
+        config.PROFILES_FILE = home / "profiles.json"
         config.GITHUB_FILE = home / "github.json"
         if hasattr(config, "SETTINGS_FILE"):
             config.SETTINGS_FILE = home / "settings.json"
@@ -497,20 +498,43 @@ class TestNodeBridgeRuntime(unittest.TestCase):
 class TestProfiles(Isolated):
     def test_builtins_are_listed_with_costs(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
-        for name in ("lean", "assisted", "full", "everything"):
+        for name in ("minimal", "lean", "assisted", "full", "everything"):
             self.assertIn(name, rows)
         self.assertTrue(rows["lean"]["active"])
-        self.assertEqual(rows["lean"]["cost"]["total"], 0)
-        # enabling the vault costs its five tool schemas
-        self.assertGreater(rows["assisted"]["cost"]["total"], 0)
         self.assertFalse(rows["lean"]["mcp_direct"])
         self.assertFalse(rows["full"]["mcp_direct"])
         self.assertTrue(rows["everything"]["mcp_direct"])
 
+    def test_minimal_narrows_the_tool_set(self):
+        rows = {p["name"]: p for p in profiles.list_profiles()}
+        self.assertEqual(rows["minimal"]["tool_count"], len(profiles.CORE_TOOLS))
+        self.assertGreater(rows["lean"]["tool_count"], rows["minimal"]["tool_count"])
+        self.assertLess(rows["minimal"]["cost"]["total"], rows["lean"]["cost"]["total"])
+
     def test_cost_ordering(self):
         rows = {p["name"]: p["cost"]["total"] for p in profiles.list_profiles()}
+        self.assertLess(rows["minimal"], rows["lean"])
         self.assertLess(rows["lean"], rows["assisted"])
         self.assertLessEqual(rows["assisted"], rows["full"])
+
+    def test_every_profile_pays_for_the_base_prompt(self):
+        for p in profiles.list_profiles():
+            self.assertGreater(p["cost"]["prompt"], 0)
+            self.assertGreaterEqual(p["cost"]["total"], p["cost"]["prompt"])
+
+    def test_apply_minimal_disables_everything_else(self):
+        profiles.apply("minimal")
+        live = set(profiles.current()["tools"] or [])
+        self.assertEqual(live, set(profiles.CORE_TOOLS))
+        self.assertIn("read_file", live)
+        self.assertNotIn("browser", live)
+        self.assertNotIn("task", live)
+
+    def test_switching_back_restores_every_tool(self):
+        profiles.apply("minimal")
+        profiles.apply("lean")
+        self.assertIsNone(profiles.current()["tools"])
+        self.assertEqual(profiles.current()["tool_count"], len(agent.TOOLS))
 
     def test_apply_changes_plugin_state(self):
         self.assertTrue(profiles.apply("assisted")["ok"])

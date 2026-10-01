@@ -47,66 +47,95 @@ and it is paid again on every turn.
 
 Most tools do not show you this number. Tacit does, in **Settings > Tokens**.
 
-| Fixed cost, before your first word | Tacit | DSH | Hermes Agent |
-|---|---|---|---|
-| Always-on instructions | ~980 characters | 6,195 characters | 23,370 characters |
-| Built-in tools | 24 | 25 | 32 |
-| Tool schema payload | ~7.2 KB | 26.7 KB | 51.3 KB |
-| **Estimated tokens** | **~2,100** | **~8,390** | **~18,970** |
+| | System prompt | Tools | Tool schemas | Estimated tokens |
+|---|---|---|---|---|
+| **Tacit, Minimal profile** | **979 chars** | **7** | **1.9 KB** | **~710** |
+| **Tacit, Lean profile** | 979 chars | 24 | 7.2 KB | ~2,100 |
+| Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
+| little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
+| DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
+| Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
 
-Every figure in that table is a measurement, not an estimate of someone else's product, and all three
-were taken with the same rule. That rule is characters divided by four, which is what Tacit uses when
-no exact tokenizer is installed, and which is also the heuristic DSH documents for its own token
-meter, so no tool is being measured by a standard it does not already apply to itself.
+The interesting row is the first one, because it is a like for like. Tacit's **Minimal** profile leaves
+exactly the seven tools Pi ships with, read, write, edit, shell, grep, list and glob, and nothing
+else:
 
-**Tacit** is read from its own dashboard (Settings > Tokens).
+| Same seven capabilities | Tacit | Pi |
+|---|---|---|
+| Tool schemas | **1,852 chars** | 4,626 chars |
+| System prompt | **979 chars** | 1,352 chars |
+| **Estimated tokens** | **~710** | **~1,600** |
 
-**DSH** is measured from DSH's own persisted session logs under `~/.dsh/sessions`, which record the
-assembled system prompt and the tool schemas for every request. Across the 16 main-agent sessions on
-this machine the numbers were essentially identical every time: a 6,195 character system prompt and
-25 tools whose schemas serialize to 27,363 characters. The figure moves with the agent preset you
-mount, so treat it as "the standard preset", not a universal constant.
+Same tools, less than half the cost. Two things account for it. Pi's descriptions are longer: its
+`read` tool has the same three parameters as Tacit's and still costs 182 tokens against 67. And
+Tacit's standing prompt is smaller to begin with. Pi's `grep` does expose more options than Tacit's,
+so that one is not a fair fight, but the rest are.
 
-**Hermes** is measured by Hermes' own `prompt-size` diagnostic, which reports 23,370 characters of
-system prompt and 52,498 bytes of tool-schema JSON. You can reproduce it directly:
+Every figure here is a measurement of a real installation, not an estimate of someone else's product,
+and all of them use the same rule: characters divided by four. That is the heuristic Tacit falls back
+to when no exact tokenizer is installed, and it is also the heuristic DSH documents for its own token
+meter, so nothing is being measured by a standard it does not already apply to itself.
+
+- **Tacit** is read from its own dashboard, and the same numbers appear in the profile selector in
+Settings > Tokens.
+- **Pi** and **little-coder** are measured from the bundled JavaScript of the installed packages.
+`AGENTS.md` is little-coder's system prompt, replacing Pi's built-in one through `--system-prompt`,
+which is why the two rows are not additive.
+- **DSH** is measured from DSH's own persisted session logs under `~/.dsh/sessions`, which record the
+assembled system prompt and tool schemas for every request. Across 16 main-agent sessions the numbers
+were identical every time: 6,195 characters and 25 tools.
+- **Hermes** is measured by its own `prompt-size` diagnostic. You can reproduce it:
 
 ```sh
 python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; print(f('cli'))"
 ```
 
-Two caveats, because a comparison is only worth anything if it is fair:
+Caveats, because a comparison is only worth anything if it is fair:
 
 - The Hermes figure includes the skills and memory that installation has accumulated, 9,994 and 3,853
-  characters here, because Hermes keeps both inside the cached system prompt. A fresh install without
-  them would be lower, around 14,500 characters of prompt. Its tool schemas alone still exceed 50 KB.
-- These are fixed startup costs only. The table says nothing about speed, output quality or features,
-  and it is not offered as one.
+  characters, because Hermes keeps both inside the cached system prompt. Fresh, it would be nearer
+  14,500 characters and about 12,900 tokens. Still the heaviest here by a wide margin.
+- Pi's figure is the softest. Its prompt embeds per-tool snippet lines generated at runtime, so those
+  are estimated, and its parameter schemas are approximated. If anything Pi is understated.
+- little-coder spends its tokens deliberately, on write guards, output repair and per-turn skill
+  cards, and it is tuned for models far smaller than the ones Tacit targets. Its Terminal-Bench
+  result on a 35B model running on an 8 GB laptop is a capability claim, and a good one. It is not a
+  token claim, and this table is not a capability comparison.
+- These are fixed startup costs only. Nothing here speaks to speed, output quality or features, and it
+  is not offered as a ranking of how good any of these tools are.
 
-None of this says another tool is badly built. It says the overhead is real, it is usually hidden, and
-it is large enough to be worth showing. DSH's own documentation devotes a section to explaining why
-tool schemas are "re-paid per step", which is exactly the kind of cost a user should be able to see
-before sending. Tacit's design follows from making that number visible and giving you the switches to
-move it.
+The point is not that anything here is badly built. It is that this cost is real, it is usually
+hidden, and it is large enough to be worth showing. DSH's own documentation devotes a section to
+explaining why tool schemas are "re-paid per step", which is exactly the kind of number a user should
+be able to see before sending. Tacit exists to make that number visible and to give you the switches
+to move it, which is what the profiles below are for.
 
 ---
 
 ## Profiles
 
-A profile is a named bundle of the optional capabilities, so you do not have to toggle four things
-every time you change how you are working. Each profile shows its token cost before you apply it.
+A profile is a named bundle of the choices that decide the fixed cost, so you do not have to toggle
+several things each time you change how you are working. Every profile shows its total prompt cost
+before you apply it.
 
-| Profile | What is on | Extra cost |
+| Profile | What is on | Fixed prompt |
 |---|---|---|
-| **Lean** | Nothing. Everything loads on demand. | 0 tokens |
-| **Assisted** | Memory, at the default budget | ~406 tokens |
-| **Full** | Every bundled plugin, memory at the default budget | ~620 tokens |
-| **Everything** | Full, plus MCP tools injected eagerly instead of on demand | ~620 tokens plus your MCP schemas |
+| **Minimal** | Seven core tools. No plugins, no memory, nothing else. | ~710 tokens |
+| **Lean** | All 24 built-in tools. No plugins, no memory. | ~2,100 tokens |
+| **Assisted** | Lean, plus memory at the default budget | ~2,500 tokens |
+| **Full** | Assisted, plus every bundled plugin | ~2,700 tokens |
+| **Everything** | Full, with MCP tools injected eagerly instead of on demand | ~2,700 tokens plus your MCP schemas |
 
-Switching profiles applies immediately, and the dashboard numbers below the selector update to match.
-You can also save the current configuration under your own name, and delete it later.
+Minimal is the one to reach for on a small model or a tight context window. It hands the agent
+read, write, edit, shell, grep, list and glob, and switches off the other seventeen built-in tools
+as well as every optional capability. You give up browsing, sub-agents, plan mode, research and
+snapshots, and in exchange the standing prompt drops to about a third of its normal size.
 
-The point is not the presets themselves. It is that the cost of a configuration is knowable before
-you adopt it, rather than discovered later in a bill or a truncated conversation.
+Switching profiles applies immediately, and the numbers in the dashboard below the selector update
+to match. You can also save the current configuration under your own name and delete it later.
+
+The point is not the presets. It is that the cost of a configuration is knowable before you adopt
+it, rather than discovered later in a bill or a truncated conversation.
 
 ---
 

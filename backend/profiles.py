@@ -13,13 +13,27 @@ from __future__ import annotations
 
 from . import config, mcp_registry, memory_store, plugin_manager, tokens
 
+# The seven tools a bare harness ships with: read, write, edit, shell, grep,
+# list, glob. A profile can restrict the tool set to exactly these.
+CORE_TOOLS = ("read_file", "write_file", "edit_file", "run_shell",
+              "grep_files", "list_files", "glob_files")
+
 BUILTIN = {
-    "lean": {
-        "label": "Lean",
-        "description": "No plugins, no memory, MCP tools loaded only when used.",
+    "minimal": {
+        "label": "Minimal",
+        "description": "Seven core tools, nothing else. The smallest fixed prompt available.",
         "plugins": [],
         "memory_budget": 0,
         "mcp_direct": False,
+        "tools": list(CORE_TOOLS),
+    },
+    "lean": {
+        "label": "Lean",
+        "description": "All built-in tools. No plugins, no memory, MCP loaded only when used.",
+        "plugins": [],
+        "memory_budget": 0,
+        "mcp_direct": False,
+        "tools": None,
     },
     "assisted": {
         "label": "Assisted",
@@ -27,6 +41,7 @@ BUILTIN = {
         "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
+        "tools": None,
     },
     "full": {
         "label": "Full",
@@ -34,6 +49,7 @@ BUILTIN = {
         "plugins": ["memory_vault", "dsh_bridge"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
+        "tools": None,
     },
     "everything": {
         "label": "Everything",
@@ -41,6 +57,7 @@ BUILTIN = {
         "plugins": ["memory_vault", "dsh_bridge"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": True,
+        "tools": None,
     },
 }
 
@@ -77,8 +94,39 @@ def _plugin_tool_tokens(plugin_id: str) -> int:
     return tokens.estimate_tools_tokens(plugin_manager.tool_schemas(plugin_id))
 
 
+def _tool_set(cfg: dict) -> list[dict]:
+    """The tool schemas a profile leaves enabled."""
+    from . import agent
+
+    by_name = {t["function"]["name"]: t for t in agent.TOOLS}
+    wanted = cfg.get("tools")
+    if wanted is None:
+        return list(by_name.values())
+    return [by_name[n] for n in wanted if n in by_name]
+
+
+def _tool_names() -> set[str]:
+    from . import agent
+
+    return {t["function"]["name"] for t in agent.TOOLS}
+
+
 def cost_of(cfg: dict) -> dict:
-    """Estimated prompt cost of a profile, split by source."""
+    """Estimated fixed prompt cost of a profile, split by source.
+
+    This is the whole standing cost: the base prompt, the tool schemas the
+    profile leaves enabled, and any extras (plugins, memory, eager MCP).
+    """
+    try:
+        from .ai import prompts
+
+        prompt_tokens = tokens.estimate_tokens(prompts.system_prompt(None, False, chat=False))
+    except Exception:  # noqa: BLE001
+        prompt_tokens = 0
+
+    chosen = _tool_set(cfg)
+    tool_tokens = tokens.estimate_tools_tokens(chosen)
+
     enabled = list(cfg.get("plugins") or [])
     plugin_tokens = sum(_plugin_tool_tokens(pid) for pid in enabled)
 
@@ -96,8 +144,9 @@ def cost_of(cfg: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
-    return {"plugins": plugin_tokens, "memory": memory_tokens, "mcp": mcp_tokens,
-            "total": plugin_tokens + memory_tokens + mcp_tokens,
+    return {"prompt": prompt_tokens, "tools": tool_tokens, "tool_count": len(chosen),
+            "plugins": plugin_tokens, "memory": memory_tokens, "mcp": mcp_tokens,
+            "total": prompt_tokens + tool_tokens + plugin_tokens + memory_tokens + mcp_tokens,
             "exact": tokens.exact()}
 
 
@@ -115,6 +164,8 @@ def list_profiles() -> list[dict]:
             "plugins": list(cfg.get("plugins") or []),
             "memory_budget": int(cfg.get("memory_budget") or 0),
             "mcp_direct": bool(cfg.get("mcp_direct")),
+            "tools": cfg.get("tools"),
+            "tool_count": cost["tool_count"],
             "cost": cost,
             "cost_display": tokens.label(cost["total"]),
         })
@@ -129,7 +180,11 @@ def current() -> dict:
         direct = bool(mcp_registry.settings().get("direct_mode"))
     except Exception:  # noqa: BLE001
         direct = False
-    return {"plugins": enabled, "memory_budget": memory_store.budget(), "mcp_direct": direct}
+    disabled = set(config.prefs().get("disabledTools") or [])
+    live_tools = sorted(_tool_names() - disabled)
+    tools = live_tools if set(live_tools) != _tool_names() else None
+    return {"plugins": enabled, "memory_budget": memory_store.budget(),
+            "mcp_direct": direct, "tools": tools, "tool_count": len(live_tools)}
 
 
 def apply(name: str) -> dict:
@@ -148,6 +203,11 @@ def apply(name: str) -> dict:
         mcp_registry.save_settings({"direct_mode": bool(cfg.get("mcp_direct"))})
     except Exception:  # noqa: BLE001
         pass
+    # A profile may narrow the tool set. Everything not named is switched off
+    # using the same disabledTools preference the Tools panel writes.
+    want_tools = cfg.get("tools")
+    disabled = [] if want_tools is None else sorted(_tool_names() - set(want_tools))
+    config.save_prefs({"disabledTools": disabled})
     data = load()
     data["active"] = name
     save(data)
