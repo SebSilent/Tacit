@@ -5,31 +5,23 @@ from .. import hosting, vcs
 router = APIRouter()
 
 IDENTITY_HELP = (
-    "No commit identity is set, so this commit would be attributed to a placeholder. "
-    "Connect GitHub in this panel and the account name is used, or fill in the "
-    "Commit identity fields below.")
+    "Commits default to Tacit. Choose your name here once and it is remembered, "
+    "or write your own.")
 
 
-async def _commit_identity(cwd: str) -> tuple[dict | None, str]:
-    """Who a commit should be attributed to, best available source first.
+async def _commit_identity(cwd: str) -> tuple[dict, str]:
+    """Who a commit is attributed to. This always resolves to something.
 
-    An identity chosen in Tacit's settings wins, because selecting it here is
-    the user saying so deliberately. After that: the repository's own config,
-    then the environment, then the connected GitHub account. If none exists the
-    commit is refused rather than misattributed to a placeholder.
+    A choice saved in Tacit wins, because selecting it is the user saying so
+    deliberately. Then the repository's own config, then the environment, then
+    the Tacit default. Nothing is ever blocked or misattributed, and the choice
+    survives across sessions.
     """
     for candidate in (vcs.saved_identity(), vcs.configured_identity(cwd),
                       vcs.env_identity()):
         if candidate:
             return candidate, ""
-    try:
-        acct = await hosting.account()
-    except Exception:  # noqa: BLE001
-        acct = {}
-    github = vcs.github_identity(acct.get("login") or "", acct.get("name") or "")
-    if github:
-        return github, ""
-    return None, IDENTITY_HELP
+    return vcs.default_identity(), ""
 
 
 @router.get("/api/git/status")
@@ -108,14 +100,15 @@ async def get_identity(workdir: str = "", sid: str = ""):
     except Exception:  # noqa: BLE001
         acct = {}
     github = vcs.github_identity(acct.get("login") or "", acct.get("name") or "")
-    effective = settings or repository or environment or github
+    default = vcs.default_identity()
+    effective = settings or repository or environment or default
     return {"ok": True, "workdir": cwd, "effective": effective,
             "repository": repository, "settings": settings,
-            "environment": environment, "github": github,
+            "environment": environment, "github": github, "default": default,
             "github_connected": bool(acct.get("login")),
             "github_username": acct.get("login") or "",
             "github_name": acct.get("name") or "",
-            "needs_identity": effective is None, "help": IDENTITY_HELP}
+            "needs_identity": False, "help": IDENTITY_HELP}
 
 
 @router.post("/api/git/identity")
@@ -141,12 +134,9 @@ async def run(request: Request):
 
     prefix = []
     if len(argv) > 1 and binary.startswith("git") and argv[1] == "commit":
-        # A real identity is always used and a placeholder never is. When the
-        # chosen one is the repository's own config there is nothing to inject.
+        # Always attributed to a real identity, chosen or defaulted. When that
+        # identity is the repository's own config there is nothing to inject.
         identity, why = await _commit_identity(cwd)
-        if identity is None:
-            return {"ok": False, "workdir": cwd, "command": command,
-                    "error": why, "needs_identity": True}
         if identity.get("source") != "repository":
             prefix = ["-c", f"user.name={identity['name']}",
                       "-c", f"user.email={identity['email']}"]

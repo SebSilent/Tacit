@@ -194,9 +194,10 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
     cmd = str(command or "").strip()
     if not cmd:
         return "ERROR: empty command"
-    if _blocked_shell(cmd):
-        return ("version control is a human action in this workspace — use the Git panel for "
-                "status, commits, branches, push and pull. Do not attempt it from a shell.")
+    if not config.allow_vcs() and _blocked_shell(cmd):
+        return ("version control is turned off for the agent in this workspace. Use the Git panel "
+                "for status, commits, branches, push and pull, or turn the agent's access on in "
+                "Settings > Tools.")
     cwd = _root(project)
     try:
         r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True, text=True,

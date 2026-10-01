@@ -4,7 +4,7 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import agent, config, mcp_registry, memory_store, metrics, plan, plugin_manager, store
+from .. import agent, assistant, config, mcp_registry, memory_store, metrics, plan, plugin_manager, store
 from .. import tokens as token_mod
 from ..ai import prompts
 
@@ -206,7 +206,7 @@ async def ws_session(ws: WebSocket, sid: str):
         if changed:
             store.save(rec)
     running = {"thread": None, "stop": threading.Event(), "steer": [], "busy": False,
-               "starting": False}
+               "starting": False, "assistant": False, "assistant_stop": threading.Event()}
     plan_state = {"run": None}
 
     await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
@@ -256,6 +256,50 @@ async def ws_session(ws: WebSocket, sid: str):
         plan_state["run"] = run
         await _drive(plan.explore(run), rec["id"])
         running["busy"] = False
+
+    async def start_assistant(text: str):
+        """A turn in the side conversation. It never touches the agent's window."""
+        if not (text or "").strip():
+            return
+        if running["assistant"]:
+            await ws.send_text(_json({"type": "notify", "level": "warn",
+                                      "message": "the assistant is already replying"}))
+            return
+        if not rec.get("model"):
+            rec["model"] = config.registry().get("default") or ""
+        cfg = assistant.settings_of(rec)
+        assistant.append(rec, "user", text)
+        store.save(rec)
+        running["assistant"] = True
+        running["assistant_stop"] = threading.Event()
+
+        queue: asyncio.Queue = asyncio.Queue()
+        collected = []
+
+        def worker():
+            try:
+                for ev in assistant.run_turn(rec, text, cfg, ref=rec.get("model") or None,
+                                             stop=running["assistant_stop"]):
+                    if ev.get("type") == "text":
+                        collected.append(ev["delta"])
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait,
+                        {**ev, "type": "assistant_" + str(ev.get("type")), "sid": rec["id"]})
+            except Exception as e:  # noqa: BLE001
+                loop.call_soon_threadsafe(queue.put_nowait,
+                                          {"type": "assistant_error", "message": str(e),
+                                           "sid": rec["id"]})
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        await pump(queue)
+        running["assistant"] = False
+        if collected:
+            assistant.append(rec, "assistant", "".join(collected))
+        store.save(rec)
+        await ws.send_text(_json({"type": "assistant_saved", "sid": rec["id"],
+                                  "preview": assistant.preview(rec)}))
 
     async def start_turn(text: str, images=None):
         if running["busy"]:
@@ -375,7 +419,23 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind == "abort":
                 running["stop"].set()
+                running["assistant_stop"].set()
                 running["steer"].clear()
+
+            elif kind == "assistant_prompt":
+                asyncio.create_task(start_assistant(msg.get("message") or ""))
+
+            elif kind == "assistant_clear":
+                assistant.clear(rec)
+                store.save(rec)
+                await ws.send_text(_json({"type": "assistant_cleared", "sid": rec["id"],
+                                          "preview": assistant.preview(rec)}))
+
+            elif kind == "assistant_settings":
+                cfg = assistant.save_settings(rec, msg.get("patch") or {})
+                store.save(rec)
+                await ws.send_text(_json({"type": "assistant_settings", "settings": cfg,
+                                          "preview": assistant.preview(rec), "sid": rec["id"]}))
 
             elif kind == "switch":
                 target = msg.get("sid") or ""

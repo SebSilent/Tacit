@@ -1264,6 +1264,86 @@ svg { display: block; }
 }
 .git-id-custom input:focus { outline: none; border-color: var(--accent); }
 
+/* ── saved folders for the clone target ───────────────────────────── */
+.saved-folders { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 0 6px; }
+.saved-folder {
+  display: inline-flex; align-items: stretch; overflow: hidden;
+  border: 1px solid var(--line-2); border-radius: 999px; background: var(--bg-3);
+}
+.sf-pick {
+  border: 0; background: transparent; color: var(--text); font-size: 11.5px;
+  padding: 4px 9px; cursor: pointer; font-family: var(--mono);
+}
+.sf-pick:hover { background: var(--bg); }
+.sf-del {
+  border: 0; border-left: 1px solid var(--line); background: transparent;
+  color: var(--fadetext); font-size: 12px; padding: 4px 8px; cursor: pointer;
+}
+.sf-del:hover { color: #d86a6a; }
+
+/* ── assistant panel ──────────────────────────────────────────────── */
+/* A normal flex sibling of the sidebar and the main column, so it is aligned
+   with them rather than floating over the top of the app. */
+.as-panel {
+  flex: 0 0 auto; width: 0; height: 100vh; overflow: hidden;
+  background: var(--bg-2); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; transition: width .16s ease;
+}
+.as-panel.open { width: min(400px, 40vw); }
+.as-head {
+  display: flex; align-items: center; gap: 6px; padding: 10px 12px;
+  border-bottom: 1px solid var(--line); flex: 0 0 auto;
+}
+.as-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.as-sub { flex: 1; font-size: 11px; color: var(--fadetext); }
+.as-context { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.as-cost { display: flex; align-items: baseline; gap: 8px; }
+.as-cost-num { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--accent); }
+.as-cost-label { font-size: 11.5px; color: var(--muted); }
+.as-break {
+  display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0;
+  font-size: 11px; font-family: var(--mono); color: var(--fadetext);
+}
+.as-controls { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
+.as-group {
+  flex: 0 0 100%; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--fadetext); margin-top: 4px;
+}
+.as-row { display: flex; flex-wrap: wrap; gap: 6px 12px; flex: 0 0 100%; }
+.as-sel { flex: 1 1 30%; min-width: 0; font-size: 11.5px; padding: 3px 5px; }
+.as-pickers { gap: 6px; }
+.as-chk, .as-turns { font-size: 11.5px; }
+.as-turns input {
+  width: 54px; padding: 2px 5px; font-size: 11px; background: var(--bg);
+  color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.as-messages {
+  flex: 1; overflow: auto; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.as-msg { font-size: 13px; line-height: 1.5; }
+.as-body { white-space: pre-wrap; word-break: break-word; }
+.as-msg.me .as-body {
+  background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 7px 9px;
+}
+.as-msg.them .as-body { color: var(--text); }
+.as-empty { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.as-note { font-size: 11px; color: var(--fadetext); margin-top: 6px; }
+.as-input {
+  display: flex; gap: 6px; padding: 10px 12px;
+  border-top: 1px solid var(--line); flex: 0 0 auto;
+}
+.as-input textarea {
+  flex: 1; min-width: 0; resize: none; padding: 8px 9px; font-size: 12.5px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-sm); font-family: inherit;
+}
+.as-input textarea:focus { outline: none; border-color: var(--accent); }
+.as-send { border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 4px 6px; }
+.as-send:disabled { opacity: .4; cursor: default; }
+.icon-btn.on { color: var(--accent); }
+
 /* ── snapshot timeline ─────────────────────────────────────────────── */
 .snap-list { display: flex; flex-direction: column; gap: 8px; }
 .snap-card {

@@ -1,41 +1,17 @@
 # Tacit
 
-**The Silent Harness.** A local-first coding agent that runs in your browser.
+**A coding agent that shows you what it costs.**
 
-Tacit runs on your computer or on your local network. It reads files, runs commands, writes code,
-searches the web, and connects to external tools. Your data stays on your machine, and no
-information is sent to us.
+Tacit is a coding assistant you run yourself and use in your browser. It reads your files, runs
+commands, writes code, searches the web, and connects to outside tools. It keeps everything on your
+machine and has no accounts, no telemetry and no tracking of any kind.
 
-The whole application is one Python program. The interface is plain web pages and needs no build
-step.
+The whole thing is one small Python program serving plain web pages. There is nothing to build, and
+almost nothing to install.
 
----
-
-## Why Tacit is different
-
-AI models have a limited working memory: the amount of text they can consider at once. Many agent
-tools fill that memory at the start with tool descriptions, plugin listings, and remembered facts,
-whether or not any of it is relevant to the task. You pay for that on every message.
-
-Tacit loads most capabilities only when they are needed, and shows what each one costs.
-
-That matters because attention is the scarce resource. A model does not read your message in
-isolation. It attends to everything in the prompt at once, and the fixed part is re-sent on every
-turn. Instructions it never needs still compete with the question it is answering, and you are
-billed for them each time. The usual way to make an agent more capable is to add more to that fixed
-part. Tacit takes the position that the fixed part should stay small, that anything extra should be
-opt-in, and that the number should be visible before you send it.
-
-- **Small standing prompt.** About 980 characters, roughly 245 tokens. That is the complete set of
-always-on instructions.
-- **Capabilities load on demand.** Skills, tools and integrations are listed by name. Full details
-are fetched only when they are used.
-- **Visible cost.** A local dashboard shows what was sent, what it cost, and what was avoided.
-Estimated figures are labelled as estimates.
-- **Off by default.** Memory, plugins and external tool servers are disabled until you enable them,
-and can be disabled again at any time.
-- **Local data.** All state lives in one folder on your computer. There are no accounts, no
-telemetry, no analytics, and no remote tracking.
+Two things make it different, and both are on this page: it tells you how much of the model's
+attention it is about to spend before it spends it, and it gives you a second assistant to help you
+direct the work.
 
 ---
 
@@ -91,7 +67,7 @@ were identical every time: 6,195 characters and 25 tools.
 python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; print(f('cli'))"
 ```
 
-Caveats, because a comparison is only worth anything if it is fair:
+Caveats, so the comparison stands up to a second look:
 
 - The Hermes figure includes the skills and memory that installation has accumulated, 9,994 and 3,853
   characters, because Hermes keeps both inside the cached system prompt. Fresh, it would be nearer
@@ -105,11 +81,78 @@ Caveats, because a comparison is only worth anything if it is fair:
 - These are fixed startup costs only. Nothing here speaks to speed, output quality or features, and it
   is not offered as a ranking of how good any of these tools are.
 
-The point is not that anything here is badly built. It is that this cost is real, it is usually
-hidden, and it is large enough to be worth showing. DSH's own documentation devotes a section to
+Nothing here is badly built. The cost is real, it is usually hidden, and it is large enough to be
+worth showing. DSH's own documentation devotes a section to
 explaining why tool schemas are "re-paid per step", which is exactly the kind of number a user should
 be able to see before sending. Tacit exists to make that number visible and to give you the switches
 to move it, which is what the profiles below are for.
+
+---
+
+## Meet the Assistant
+
+Tacit gives you two conversations instead of one.
+
+```
++-----------+------------------------------+-------------------+
+|  sessions |         the main agent       |     Assistant     |
+|           |   writes code, runs commands |  helps you think  |
++-----------+------------------------------+-------------------+
+```
+
+The main agent does the work, and it stays in the middle where you expect it.
+
+The **Assistant** sits on the right and helps with the work around the work: drafting a prompt to
+give the agent, thinking an approach through, noticing what got missed, explaining what the agent
+just did. It is the conversation you would otherwise be having in a second tab, with all the
+copy-pasting that involves.
+
+Three things make it useful rather than annoying:
+
+- **It can read the session.** It sees what you asked and what the agent answered, so you never have
+to paste context into it.
+- **The agent cannot see it.** The Assistant is invisible to the main agent. Nothing it says reaches
+the agent unless you copy it across yourself, so your notes, hesitations and half-formed ideas stay
+between you and it.
+- **It is confined to the session.** Every conversation has its own Assistant. Switch sessions and
+you switch assistants; delete a session and its assistant goes with it.
+
+A second conversation is a second cost, so you decide exactly what it may read, and the price is
+shown before anything is sent:
+
+```
+   ~182 tokens of session context
+   you 20   persona 162   history 0   tools 0
+
+   [x] Your prompts     [x] Agent replies     [x] Session info
+   [ ] Read-only tools
+   Last [20] turns
+```
+
+Read-only tools add roughly **1,450 tokens** on their own, which is why they are off by default. The
+Assistant has its own provider, model and thinking level as well, so pointing a reasoning-heavy
+model at the thinking and a cheap one at the code is a couple of clicks.
+
+---
+
+## What you can do
+
+- **Work in a project.** Pick a folder and Tacit reads, edits and runs commands there.
+- **Get a second opinion.** The Assistant reads the session and helps you direct it, without the
+agent ever seeing that conversation.
+- **Use any model.** OpenAI-compatible endpoints, local servers such as Ollama, llama.cpp or
+LM Studio, or hosted providers. Configure several at once, and give the Assistant a different one
+from the agent.
+- **Undo changes.** Snapshots record your project before changes, with a timeline, a file-by-file
+comparison, and one-click restore.
+- **Connect outside tools.** Tacit speaks MCP, the open standard for connecting assistants to
+tools. Descriptions stay out of your prompt until a tool is actually used.
+- **Remember what matters (optional).** A memory vault stores preferences, decisions and project
+facts within a token budget you set. It is off until you turn it on.
+- **Plan first.** Plan mode researches your project, asks clarifying questions, and drafts an
+approach for you to approve before any files are changed.
+- **Delegate.** A sub-agent can read a large amount of material in its own separate context and
+return only a summary, so the main conversation stays small.
 
 ---
 
@@ -135,26 +178,34 @@ snapshots, and in exchange the standing prompt drops to about a third of its nor
 Switching profiles applies immediately, and the numbers in the dashboard below the selector update
 to match. You can also save the current configuration under your own name and delete it later.
 
-The point is not the presets. It is that the cost of a configuration is knowable before you adopt
-it, rather than discovered later in a bill or a truncated conversation.
+The presets matter less than the habit they encourage: the cost of a configuration is knowable
+before you adopt it, rather than discovered later in a bill or a truncated conversation.
 
 ---
 
-## What you can do
+## Why Tacit is different
 
-- **Use any model.** OpenAI-compatible endpoints, local servers such as Ollama, llama.cpp or
-LM Studio, or hosted providers. You can configure several at once.
-- **Work on real projects.** Choose a folder, and Tacit reads, edits and runs commands there.
-- **Undo changes.** Snapshots record your project before changes, with a timeline, a file-by-file
-comparison, and one-click restore.
-- **Connect external tools.** Tacit supports MCP, the open standard for connecting assistants to
-tools. Tool descriptions stay out of your prompt until a tool is actually used.
-- **Optional memory.** A memory vault stores preferences, decisions and project facts within a
-token budget you set. It is disabled until you enable it.
-- **Plan first.** Plan mode researches your project, asks clarifying questions, and drafts an
-approach for you to approve before any files are changed.
-- **Delegate.** A sub-agent can read a large amount of material in its own separate context and
-return only a summary, so the main conversation stays small.
+AI models have a limited working memory: the amount of text they can consider at once. Many agent
+tools fill that memory at the start with tool descriptions, plugin listings and remembered facts,
+whether or not any of it is relevant. You pay for that on every message.
+
+That matters because attention is the scarce resource. A model does not read your message in
+isolation. It attends to everything in the prompt at once, and the fixed part is re-sent on every
+turn. Instructions it never needs still compete with the question it is answering, and you are
+billed for them each time. The usual way to make an agent more capable is to add more to that fixed
+part. Tacit takes the position that the fixed part should stay small, that anything extra should be
+opt-in, and that the number should be visible before you send it.
+
+- **Small standing prompt.** About 980 characters, roughly 245 tokens. That is the complete set of
+always-on instructions.
+- **Capabilities load on demand.** Skills, tools and integrations are listed by name. Full details
+are fetched only when they are used.
+- **Visible cost.** A local dashboard shows what was sent, what it cost, and what was avoided.
+Estimated figures are labelled as estimates.
+- **Off by default.** Memory, plugins and external tool servers are disabled until you enable them,
+and can be disabled again at any time.
+- **Local data.** All state lives in one folder on your computer. There are no accounts, no
+telemetry, no analytics, and no remote tracking.
 
 ---
 
@@ -328,6 +379,9 @@ up front
 All figures are measured locally. Numbers are exact when a tokenizer is available and are marked as
 estimates otherwise. No figures for other products are estimated or invented.
 
+The Assistant keeps its own counter, shown above its conversation, so a second conversation is never
+a hidden second bill.
+
 ---
 
 ## Snapshots and undo
@@ -426,8 +480,10 @@ directory, and no assumption about where your projects are stored.
 | `evidence`, `benchmark` | citable facts, per-model settings |
 | `memory_recall` `memory_add` `memory_update` `memory_delete` `memory_list_summary` | memory, only when the vault is enabled |
 
-Version control is not available to the model. The Git panel is the interface for the person using
-Tacit, and `run_shell` refuses version-control binaries.
+Version control is off for the agent by default. A model left to itself commits and pushes far more
+than anyone asked for, and cleaning that up by hand is nobody's idea of a good afternoon. The Git
+panel is the intended route for the person using Tacit. If you would rather the agent handled it,
+**Settings > Tools** has a switch for exactly that, and it is yours to flip.
 
 ---
 
@@ -456,7 +512,9 @@ Tacit, and `run_shell` refuses version-control binaries.
 the agent. Run it on a trusted network, or set `TACIT_HOST=127.0.0.1` to keep it local.
 - **API keys** are stored in `~/.tacit/.env`, are masked in the interface, and are never written
 into a project or into a log.
-- The agent's file tools refuse the key store, and the shell tool refuses version control.
+- The agent's file tools refuse the key store.
+- **Version control** is off for the agent unless you enable it in **Settings > Tools**. The default
+  is deliberate: a repository filling with unreviewed commits is a mess you have to clean up.
 - **External tools and plugins** run only after you enable them, and their activity is recorded in
 a readable audit log.
 
@@ -468,7 +526,8 @@ Working and covered by tests: chat and agent turns against any OpenAI-compatible
 sub-agents, plan mode, skills, compaction, background processes, snapshots with comparison and
 restore, the terminal, providers, sessions, token accounting and the dashboard, capability profiles,
 MCP servers over stdio and HTTP with lazy tool activation, the plugin system, the DSH bridge and
-adapter scaffolding, and the memory vault with enforced budgeting.
+adapter scaffolding, the memory vault with enforced budgeting, and the per-session Assistant with
+its own model, thinking level and budgeted read access to the session.
 
 The repository includes an automated test suite:
 

@@ -15,12 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, config, hosting, mcp_registry, memory_store, metrics,  # noqa: E402
-                     plugin_manager, profiles, tokens, vcs)
+from backend import (agent, assistant, config, folders, hosting, mcp_registry, memory_store,  # noqa: E402
+                     metrics, plugin_manager, profiles, tokens, vcs)
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
-_PATCHED = ("HOME", "MEMORY_DB", "MCP_FILE", "PLUGINS_FILE", "PROFILES_FILE",
+_PATCHED = ("HOME", "MEMORY_DB", "MCP_FILE", "PLUGINS_FILE", "PROFILES_FILE", "FOLDERS_FILE",
             "PLUGINS_USER_DIR", "ADAPTERS_DIR", "CHECKPOINT_DIR", "PREFS_FILE", "GITHUB_FILE")
 
 
@@ -42,6 +42,7 @@ class Isolated(unittest.TestCase):
         # would rewrite the user's real ~/.tacit/prefs.json
         config.PREFS_FILE = home / "prefs.json"
         config.PROFILES_FILE = home / "profiles.json"
+        config.FOLDERS_FILE = home / "folders.json"
         config.GITHUB_FILE = home / "github.json"
         if hasattr(config, "SETTINGS_FILE"):
             config.SETTINGS_FILE = home / "settings.json"
@@ -624,41 +625,39 @@ class TestCommitIdentity(Isolated):
             os.environ.pop("TACIT_VCS_NAME", None)
             os.environ.pop("TACIT_VCS_EMAIL", None)
 
-    def _resolve(self, login, display=""):
-        """_commit_identity with the hosting lookup stubbed out."""
+    def _resolve(self, cwd=None):
+        """_commit_identity against a directory that is not a repository."""
         import asyncio
         from backend.routers import vcs as vcs_router
 
-        original = hosting.account
+        return asyncio.run(vcs_router._commit_identity(cwd or str(config.HOME)))
 
-        async def fake_account():
-            return {"connected": bool(login), "login": login, "name": display,
-                    "token": "t", "source": "cli"}
-
-        hosting.account = fake_account
-        try:
-            return asyncio.run(vcs_router._commit_identity("/tmp"))
-        finally:
-            hosting.account = original
-
-    def test_falls_back_to_the_github_account(self):
-        ident, why = self._resolve("octocat")
+    def test_defaults_to_tacit_and_never_blocks(self):
+        ident, why = self._resolve()
+        self.assertEqual(ident["source"], "tacit")
+        self.assertEqual(ident["name"], "Tacit")
+        self.assertEqual(ident["email"], "tacit@localhost")
         self.assertEqual(why, "")
-        self.assertEqual(ident["source"], "github")
-        self.assertEqual(ident["name"], "octocat")
-        self.assertEqual(ident["email"], "octocat@users.noreply.github.com")
 
-    def test_uses_the_github_display_name(self):
-        ident, _ = self._resolve("SebSilent", "Silent")
+    def test_the_default_comes_from_one_constant(self):
+        self.assertEqual(vcs.default_identity(), vcs.DEFAULT_IDENTITY)
+        self.assertEqual(vcs.DEFAULT_IDENTITY["name"], "Tacit")
+
+    def test_a_choice_is_remembered_across_sessions(self):
+        vcs.save_identity("Silent", "SebSilent@users.noreply.github.com")
+        # simulate a fresh process: read the value back off disk
+        stored = config.read_json(config.PREFS_FILE, {})
+        self.assertEqual(stored.get("vcsName"), "Silent")
+        ident, _ = self._resolve()
+        self.assertEqual(ident["name"], "Silent")
+        self.assertEqual(ident["source"], "settings")
+
+    def test_the_github_choice_also_persists(self):
+        gh = vcs.github_identity("SebSilent", "Silent")
+        self.assertTrue(vcs.save_identity(gh["name"], gh["email"])["ok"])
+        ident, _ = self._resolve()
         self.assertEqual(ident["name"], "Silent")
         self.assertEqual(ident["email"], "SebSilent@users.noreply.github.com")
-
-    def _with_repository(self, ident):
-        from backend import vcs as vcs_mod
-
-        original = vcs_mod.configured_identity
-        vcs_mod.configured_identity = lambda cwd: ident
-        return original
 
     def test_a_chosen_identity_wins_over_the_repository(self):
         from backend import vcs as vcs_mod
@@ -666,7 +665,7 @@ class TestCommitIdentity(Isolated):
         original = self._with_repository({"name": "Repo", "email": "repo@example.com",
                                           "source": "repository"})
         try:
-            ident, _ = self._resolve("octocat")
+            ident, _ = self._resolve()
         finally:
             vcs_mod.configured_identity = original
         self.assertEqual(ident["source"], "settings")
@@ -677,38 +676,298 @@ class TestCommitIdentity(Isolated):
         original = self._with_repository({"name": "Repo", "email": "repo@example.com",
                                           "source": "repository"})
         try:
-            ident, _ = self._resolve("octocat")
+            ident, _ = self._resolve()
         finally:
             vcs_mod.configured_identity = original
         self.assertEqual(ident["source"], "repository")
         self.assertEqual(ident["name"], "Repo")
 
-    def test_saved_settings_win_over_github(self):
-        vcs.save_identity("Ada", "ada@example.com")
-        ident, _ = self._resolve("octocat")
-        self.assertEqual(ident["source"], "settings")
-
-    def test_env_wins_over_github(self):
+    def test_env_is_used_when_nothing_is_chosen(self):
         os.environ["TACIT_VCS_NAME"] = "Env User"
         os.environ["TACIT_VCS_EMAIL"] = "env@example.com"
         try:
-            ident, _ = self._resolve("octocat")
+            ident, _ = self._resolve()
             self.assertEqual(ident["source"], "environment")
         finally:
             os.environ.pop("TACIT_VCS_NAME", None)
             os.environ.pop("TACIT_VCS_EMAIL", None)
 
-    def test_refuses_rather_than_inventing_a_name(self):
-        ident, why = self._resolve("")
-        self.assertIsNone(ident)
-        self.assertIn("identity", why.lower())
+    def test_saved_settings_win_over_github(self):
+        vcs.save_identity("Ada", "ada@example.com")
+        ident, _ = self._resolve()
+        self.assertEqual(ident["source"], "settings")
+        self.assertEqual(ident["name"], "Ada")
 
-    def test_the_placeholder_fallback_is_gone(self):
+    def test_the_placeholder_fallback_is_no_longer_hidden(self):
+        """Tacit is still the default, but now by a named, visible constant."""
         import inspect
         from backend.routers import vcs as vcs_router
 
-        src = inspect.getsource(vcs_router)
-        self.assertNotIn("tacit@localhost", src)
+        self.assertNotIn('or "Tacit"', inspect.getsource(vcs_router))
+        self.assertEqual(vcs.DEFAULT_IDENTITY["email"], "tacit@localhost")
+
+    def _with_repository(self, ident):
+        from backend import vcs as vcs_mod
+
+        original = vcs_mod.configured_identity
+        vcs_mod.configured_identity = lambda cwd: ident
+        return original
+
+
+class TestVersionControlPermission(Isolated):
+    """Off for the agent by default, and the user can turn it on."""
+
+    def setUp(self):
+        super().setUp()
+        config.save_prefs({"allowVersionControl": False})
+
+    def test_off_by_default(self):
+        config.save_prefs({"allowVersionControl": None})
+        self.assertFalse(config.allow_vcs())
+
+    def test_shell_tool_refuses_while_off(self):
+        out = agent.t_run_shell("git status")
+        self.assertIn("turned off", out)
+        self.assertIn("Settings > Tools", out)
+
+    def test_chained_commands_are_still_caught(self):
+        self.assertIn("turned off", agent.t_run_shell("ls && git commit -m x"))
+        self.assertIn("turned off", agent.t_run_shell("echo hi | git log"))
+
+    def test_detection_is_unchanged_by_the_setting(self):
+        """_blocked_shell stays a pure check; the gate is the preference."""
+        self.assertTrue(agent._blocked_shell("git status"))
+        config.save_prefs({"allowVersionControl": True})
+        self.assertTrue(agent._blocked_shell("git status"))
+
+    def test_the_setting_round_trips(self):
+        self.assertFalse(config.allow_vcs())
+        config.save_prefs({"allowVersionControl": True})
+        self.assertTrue(config.allow_vcs())
+        self.assertTrue(config.read_json(config.PREFS_FILE, {}).get("allowVersionControl"))
+
+    def test_the_prompt_tracks_the_setting(self):
+        from backend.ai import prompts
+
+        config.save_prefs({"allowVersionControl": False})
+        off = prompts.system_prompt(None, False, chat=False)
+        self.assertIn("human action", off)
+
+        config.save_prefs({"allowVersionControl": True})
+        on = prompts.system_prompt(None, False, chat=False)
+        self.assertIn("available to you", on)
+        self.assertNotIn("human action", on)
+
+    def test_the_prompt_stays_small_either_way(self):
+        from backend.ai import prompts
+
+        for allowed in (False, True):
+            config.save_prefs({"allowVersionControl": allowed})
+            size = len(prompts.system_prompt(None, False, chat=False))
+            self.assertLess(size, 1200, f"prompt grew to {size} chars with allow={allowed}")
+
+
+class TestSavedFolders(Isolated):
+    """Folders that have been used are remembered, and can be forgotten."""
+
+    BS = chr(92)
+
+    def test_empty_to_begin_with(self):
+        self.assertEqual(folders.list_folders(), [])
+
+    def test_most_recent_first(self):
+        folders.add("C:/Projects/one")
+        folders.add("C:/Projects/two")
+        self.assertEqual([r["name"] for r in folders.list_folders()], ["two", "one"])
+
+    def test_re_adding_moves_up_without_duplicating(self):
+        folders.add("C:/a")
+        folders.add("C:/b")
+        folders.add("C:/a")
+        rows = folders.list_folders()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["name"], "a")
+
+    def test_the_same_folder_in_another_style_is_the_same_folder(self):
+        folders.add("C:/Projects/Tacit")
+        folders.add("C:" + self.BS + "Projects" + self.BS + "Tacit" + self.BS)
+        self.assertEqual(len(folders.list_folders()), 1, folders.list_folders())
+
+    def test_remove(self):
+        folders.add("C:/keep")
+        folders.add("C:/drop")
+        res = folders.remove("C:/drop")
+        self.assertTrue(res["ok"])
+        self.assertEqual([r["name"] for r in folders.list_folders()], ["keep"])
+
+    def test_remove_accepts_a_different_separator_style(self):
+        folders.add("C:/Projects/Tacit")
+        res = folders.remove("C:" + self.BS + "Projects" + self.BS + "Tacit")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(folders.list_folders(), [])
+
+    def test_removing_something_absent_is_reported(self):
+        self.assertFalse(folders.remove("C:/never")["ok"])
+
+    def test_blank_is_rejected(self):
+        self.assertFalse(folders.add("   ")["ok"])
+        self.assertEqual(folders.list_folders(), [])
+
+    def test_the_list_is_capped(self):
+        for i in range(folders.MAX + 8):
+            folders.add(f"C:/x/{i}")
+        self.assertEqual(len(folders.list_folders()), folders.MAX)
+
+    def test_it_survives_a_reload(self):
+        folders.add("C:/Projects/Tacit")
+        on_disk = config.read_json(config.FOLDERS_FILE, [])
+        self.assertEqual(len(on_disk), 1)
+        self.assertEqual(folders.list_folders()[0]["path"].replace(chr(92), "/"),
+                         "C:/Projects/Tacit")
+
+    def test_endpoints(self):
+        import asyncio
+        from backend.routers import api
+
+        class Req:
+            def __init__(self, body):
+                self._body = body
+
+            async def json(self):
+                return self._body
+
+        added = asyncio.run(api.remember_folder(Req({"path": "C:/Projects/Tacit"})))
+        self.assertTrue(added["ok"])
+        self.assertTrue(asyncio.run(api.list_folders())["folders"])
+        gone = asyncio.run(api.forget_folder(Req({"path": "C:/Projects/Tacit"})))
+        self.assertTrue(gone["ok"])
+        self.assertEqual(asyncio.run(api.list_folders())["folders"], [])
+
+
+class TestAssistant(Isolated):
+    """A per-session side conversation the main agent never sees."""
+
+    def _rec(self):
+        return {"id": "s1", "title": "Build a game", "project": "C:/x", "model": "p/m",
+                "mode": "agent",
+                "messages": [
+                    {"role": "user", "content": "make snake"},
+                    {"role": "assistant", "content": "done"},
+                    {"role": "user", "content": "add score"},
+                    {"role": "assistant", "content": "added"},
+                ]}
+
+    def test_defaults(self):
+        cfg = assistant.settings_of({})
+        self.assertTrue(cfg["include_user"])
+        self.assertTrue(cfg["include_assistant"])
+        self.assertFalse(cfg["tools"], "tool access must be opt-in")
+        self.assertEqual(cfg["turns"], assistant.DEFAULTS["turns"])
+
+    def test_settings_round_trip_and_clamp(self):
+        rec = {}
+        assistant.save_settings(rec, {"tools": True, "turns": 999})
+        cfg = assistant.settings_of(rec)
+        self.assertTrue(cfg["tools"])
+        self.assertLessEqual(cfg["turns"], 200)
+        assistant.save_settings(rec, {"turns": 0})
+        self.assertGreaterEqual(assistant.settings_of(rec)["turns"], 1)
+
+    def test_digest_respects_the_toggles(self):
+        rec = self._rec()
+        self.assertIn("make snake", assistant.digest(rec))
+        self.assertIn("added", assistant.digest(rec))
+
+        no_user = assistant.digest(rec, {**assistant.DEFAULTS, "include_user": False})
+        self.assertNotIn("make snake", no_user)
+        self.assertIn("added", no_user)
+
+        no_reply = assistant.digest(rec, {**assistant.DEFAULTS, "include_assistant": False})
+        self.assertIn("make snake", no_reply)
+        self.assertNotIn("added", no_reply)
+
+        no_meta = assistant.digest(rec, {**assistant.DEFAULTS, "include_meta": False})
+        self.assertNotIn("[session]", no_meta)
+
+    def test_digest_respects_the_turn_limit(self):
+        rec = self._rec()
+        one = assistant.digest(rec, {**assistant.DEFAULTS, "turns": 1})
+        self.assertIn("add score", one)
+        self.assertNotIn("make snake", one)
+
+    def test_preview_costs_it_out(self):
+        rec = self._rec()
+        cheap = assistant.preview(rec)
+        rich = assistant.preview(rec, {**assistant.DEFAULTS, "tools": True})
+        self.assertEqual(cheap["tokens"]["tools"], 0)
+        self.assertGreater(rich["tokens"]["tools"], 0)
+        self.assertGreater(rich["tokens"]["total"], cheap["tokens"]["total"])
+        self.assertEqual(cheap["turns"], 2)
+
+    def test_model_defaults_to_the_session(self):
+        rec = self._rec()
+        self.assertEqual(assistant.settings_of(rec)["model"], "")
+        self.assertEqual(assistant.resolve_model(rec), "p/m")
+        self.assertEqual(assistant.preview(rec)["resolved_model"], "p/m")
+
+    def test_a_different_model_can_be_chosen(self):
+        rec = self._rec()
+        assistant.save_settings(rec, {"model": "other/cheap"})
+        self.assertEqual(assistant.resolve_model(rec), "other/cheap")
+        self.assertEqual(assistant.preview(rec)["resolved_model"], "other/cheap")
+        # and switching back to "same as session" restores the fallback
+        assistant.save_settings(rec, {"model": ""})
+        self.assertEqual(assistant.resolve_model(rec), "p/m")
+
+    def test_thinking_follows_the_session_until_overridden(self):
+        rec = self._rec()
+        rec["thinking"] = "low"
+        self.assertEqual(assistant.resolve_thinking(rec), "low")
+        assistant.save_settings(rec, {"thinking": "high"})
+        self.assertEqual(assistant.resolve_thinking(rec), "high")
+        self.assertEqual(assistant.preview(rec)["resolved_thinking"], "high")
+
+    def test_model_and_thinking_do_not_affect_the_token_cost(self):
+        rec = self._rec()
+        cheap = assistant.preview(rec)["tokens"]["total"]
+        assistant.save_settings(rec, {"model": "other/cheap", "thinking": "max"})
+        self.assertEqual(assistant.preview(rec)["tokens"]["total"], cheap)
+
+    def test_tools_are_read_only(self):
+        names = {t["function"]["name"] for t in assistant.read_tools()}
+        for blocked in ("write_file", "edit_file", "run_shell", "restore", "bg_start"):
+            self.assertNotIn(blocked, names)
+        self.assertIn("read_file", names)
+
+    def test_a_write_tool_is_refused_even_if_asked(self):
+        out = assistant._run_read_tool("write_file", {"path": "x", "content": "y"}, self._rec())
+        self.assertIn("read-only", out)
+
+    def test_the_agent_never_sees_the_assistant(self):
+        from backend.routers import chat
+
+        rec = self._rec()
+        assistant.append(rec, "user", "SECRET ASSISTANT NOTE")
+        assistant.append(rec, "assistant", "SECRET ASSISTANT REPLY")
+
+        history = chat._history(rec)
+        blob = " ".join(m.get("content") or "" for m in history)
+        self.assertNotIn("SECRET", blob)
+        # ...while the assistant can still read the session itself
+        self.assertIn("make snake", assistant.digest(rec))
+
+    def test_clear_only_removes_the_side_conversation(self):
+        rec = self._rec()
+        assistant.append(rec, "user", "hi")
+        assistant.clear(rec)
+        self.assertEqual(rec.get("assistant"), [])
+        self.assertEqual(len(rec["messages"]), 4, "the session itself must be untouched")
+
+    def test_it_lives_in_the_session_record(self):
+        rec = self._rec()
+        assistant.append(rec, "user", "remember me")
+        self.assertIn("assistant", rec)
+        self.assertEqual(rec["assistant"][0]["content"], "remember me")
 
 
 if __name__ == "__main__":

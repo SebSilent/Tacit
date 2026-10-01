@@ -13,6 +13,15 @@ else:
     BIN = "git"
     HOST_BIN = "gh"
 
+# Used when nothing else is chosen. Offered as the first option in the Git
+# panel, and the only one that is never asked for: pick anything else once and
+# it is remembered.
+DEFAULT_IDENTITY = {"name": "Tacit", "email": "tacit@localhost", "source": "tacit"}
+
+
+def default_identity() -> dict:
+    return dict(DEFAULT_IDENTITY)
+
 ALLOWED_BINS = {"git", "git.exe", "gh", "gh.exe"}
 TIMEOUT = int(os.environ.get("TACIT_VCS_TIMEOUT", "120"))
 

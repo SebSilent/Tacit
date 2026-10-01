@@ -35,6 +35,7 @@ PLUGINS_FILE = HOME / "plugins.json"
 PLUGINS_USER_DIR = HOME / "plugins"
 MCP_FILE = HOME / "mcp.json"
 PROFILES_FILE = HOME / "profiles.json"
+FOLDERS_FILE = HOME / "folders.json"
 MEMORY_DB = HOME / "memory.db"
 ADAPTERS_DIR = HOME / "adapters"
 BRIDGES_DIR = ROOT / "bridges"
@@ -146,6 +147,18 @@ def save_prefs(patch: dict) -> dict:
     merged = {**prefs(), **patch}
     write_json(PREFS_FILE, merged)
     return merged
+
+
+def allow_vcs() -> bool:
+    """Whether the agent may run version-control commands. Off by default.
+
+    Version control is a human action here. A model left to its own devices will
+    commit and push far more than anyone asked for, and a repository fills up
+    with noise that has to be cleaned up by hand. The Git panel exists so the
+    user can do it deliberately. This switch is for the people who do want the
+    agent to handle it, and it is theirs to turn on.
+    """
+    return bool(prefs().get("allowVersionControl"))
 
 
 def registry() -> dict:

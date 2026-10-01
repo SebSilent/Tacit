@@ -197,6 +197,47 @@ function renderLog() {
 
 let idOptions = [];
 
+// Folders the user has used before, so the clone target does not have to be
+// browsed to every time. The list is theirs: each chip can be removed.
+async function refreshSavedFolders() {
+  const box = $('#gitGhSaved');
+  if (!box) return;
+  const r = await api('/api/folders');
+  const rows = r.folders || [];
+  if (!rows.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = rows.map(f =>
+    `<span class="saved-folder" data-path="${esc(f.path)}" title="${esc(f.path)}">` +
+      `<button class="sf-pick" data-act="pick">${esc(f.name)}</button>` +
+      `<button class="sf-del" data-act="forget" title="Remove from the list">×</button>` +
+    `</span>`).join('');
+  box.querySelectorAll('.saved-folder').forEach(chip => {
+    const path = chip.dataset.path;
+    chip.querySelector('[data-act="pick"]').addEventListener('click', () => {
+      const field = $('#gitGhDir');
+      if (field) field.value = path;
+      note('clone into ' + path);
+    });
+    chip.querySelector('[data-act="forget"]').addEventListener('click', async () => {
+      const res = await api('/api/folders/remove', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      note(res.ok ? 'removed from the list' : (res.error || 'could not remove it'), !res.ok);
+      refreshSavedFolders();
+    });
+  });
+}
+
+async function rememberFolder(path) {
+  if (!path) return;
+  await api('/api/folders', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  refreshSavedFolders();
+}
+
 async function refreshIdentity() {
   const sel = $('#gitIdSelect');
   const status = $('#gitIdentity');
@@ -206,25 +247,26 @@ async function refreshIdentity() {
 
   const label = (i, tag) => `${i.name} <${i.email}> — ${tag}`;
   idOptions = [];
+  if (r.default) idOptions.push({ text: label(r.default, 'default'), ident: r.default });
+  if (r.github) idOptions.push({ text: label(r.github, 'your account'), ident: r.github });
   if (r.repository) idOptions.push({ text: label(r.repository, 'repository config'), ident: r.repository });
-  if (r.settings) idOptions.push({ text: label(r.settings, 'saved here'), ident: r.settings });
-  if (r.github) idOptions.push({ text: label(r.github, 'GitHub account'), ident: r.github });
   if (r.environment) idOptions.push({ text: label(r.environment, 'environment'), ident: r.environment });
 
   const cur = r.effective;
   const same = (a, b) => a && b && a.name === b.name && a.email === b.email;
-  sel.innerHTML = idOptions.map((o, i) =>
-    `<option value="${i}"${same(o.ident, cur) ? ' selected' : ''}>${esc(o.text)}</option>`
-  ).join('') + `<option value="custom"${cur ? '' : ' selected'}>Write my own…</option>`;
+  const matched = idOptions.some((o) => same(o.ident, cur));
+  sel.innerHTML = idOptions.map((o) =>
+    `<option value="${idOptions.indexOf(o)}"${same(o.ident, cur) ? ' selected' : ''}>${esc(o.text)}</option>`
+  ).join('') + `<option value="custom"${matched ? '' : ' selected'}>Write my own…</option>`;
 
   if (cur) {
     status.innerHTML = `<span class="git-badge repo">${esc(cur.name)}</span>` +
       `<span class="git-badge">${esc(cur.email)}</span>` +
       `<span class="git-badge">from ${esc(cur.source)}</span>`;
   } else {
-    status.innerHTML = '<span class="git-badge none">none set — commits will be refused until you pick one</span>';
+    status.innerHTML = '<span class="git-badge none">none set</span>';
   }
-  // keep the custom fields showing whatever is saved, not a stale value
+  // the custom fields carry whatever is saved, so editing starts from it
   if (r.settings) {
     const n = $('#gitIdName'), e = $('#gitIdEmail');
     if (n) n.value = r.settings.name;
@@ -271,6 +313,7 @@ async function refresh() {
     }
     renderAll();
     refreshIdentity();
+    refreshSavedFolders();
     if (st.isRepo === false && st.error) note(st.error, false);
   } finally {
     busy = false;
@@ -490,6 +533,7 @@ async function cloneRepo(repo) {
   wdOverride = r.target;
   if ($('#gitWorkdir')) $('#gitWorkdir').value = r.target;
   note('cloned → ' + r.target);
+  rememberFolder(r.dir);
   refresh();
 }
 function wireGithub() {
@@ -550,6 +594,7 @@ function wireGithub() {
       onPick: (p) => {
         if ($('#gitGhDir')) $('#gitGhDir').value = p;
         note('clone into ' + p);
+        rememberFolder(p);
       },
     });
   });

@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, config, hosting, mcp_registry, memory_store, metrics, plugin_manager, skills, store, vcs
+from .. import agent, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, skills, store, vcs
 from .. import tokens as token_mod
 from ..ai import engine, prompts
 
@@ -368,6 +368,63 @@ async def snapshot_restore(request: Request):
     return _ok(message=out, name=name, project=project)
 
 
+@router.get("/api/assistant/{sid}")
+async def assistant_state(sid: str):
+    """The side conversation, its settings, and what those settings cost."""
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    cfg = assistant.settings_of(rec)
+    return {"ok": True, "messages": rec.get("assistant") or [], "settings": cfg,
+            "preview": assistant.preview(rec, cfg),
+            "models": config.model_list(), "thinking_levels": THINKING_LEVELS,
+            "session_model": rec.get("model") or "",
+            "session_thinking": rec.get("thinking") or "medium"}
+
+
+@router.post("/api/assistant/{sid}/settings")
+async def assistant_settings(sid: str, request: Request):
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    cfg = assistant.save_settings(rec, await request.json())
+    store.save(rec)
+    return {"ok": True, "settings": cfg, "preview": assistant.preview(rec, cfg)}
+
+
+@router.delete("/api/assistant/{sid}")
+async def assistant_clear(sid: str):
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    assistant.clear(rec)
+    store.save(rec)
+    return {"ok": True, "preview": assistant.preview(rec)}
+
+
+@router.get("/api/folders")
+async def list_folders():
+    """Folders the user has used before, for the directory pickers."""
+    return _ok(folders=folders.list_folders())
+
+
+@router.post("/api/folders")
+async def remember_folder(request: Request):
+    body = await request.json()
+    res = folders.add(body.get("path") or "")
+    return res if res.get("ok") else _fail(res.get("error") or "could not save that folder")
+
+
+@router.post("/api/folders/remove")
+async def forget_folder(request: Request):
+    body = await request.json()
+    res = folders.remove(body.get("path") or "")
+    return res if res.get("ok") else _fail(res.get("error") or "could not remove that folder")
+
+
 @router.get("/api/sessions")
 async def list_sessions():
     return {"sessions": store.list_sessions()}
@@ -450,6 +507,19 @@ async def set_context_files(request: Request):
     body = await request.json()
     config.save_prefs({"noContextFiles": bool(body.get("no_context_files"))})
     return _ok()
+
+
+@router.get("/api/harness/version-control")
+async def get_version_control():
+    """Whether the agent may run version-control commands. Off by default."""
+    return _ok(allow_version_control=config.allow_vcs())
+
+
+@router.post("/api/harness/version-control")
+async def set_version_control(request: Request):
+    body = await request.json()
+    config.save_prefs({"allowVersionControl": bool(body.get("allow"))})
+    return _ok(allow_version_control=config.allow_vcs())
 
 
 @router.get("/api/tools")

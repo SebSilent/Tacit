@@ -1,5 +1,11 @@
 from .. import config
 
+_VCS_OFF = """- Version control is a human action here. Do not run version-control commands; the workspace
+  provides a panel for them."""
+
+_VCS_ON = """- Version control is available to you here. Use it only when the task calls for it, keep
+  commits small and meaningful, and never commit or push unless you were asked to."""
+
 BASE = """You are Tacit, a coding agent working inside a web workspace.
 
 You have tools for exploring and changing files and for running shell commands. Work by
@@ -15,8 +21,7 @@ Rules:
 - If a command fails, read the error and change approach. Do not retry variants of a command
   the platform does not have.
 - Report what you actually did, including anything that failed.
-- Version control is a human action here. Do not run version-control commands; the workspace
-  provides a panel for them."""
+{vcs}"""
 
 PROJECT = """Working project: {project}
 
@@ -58,7 +63,10 @@ SUMMARISED = "[Compacted history of earlier work]"
 
 def system_prompt(project: str | None = None, readonly: bool = False,
                   subagent: bool = False, chat: bool = False) -> str:
-    parts = [(SUBAGENT if subagent else BASE).format(platform=config.PLATFORM)]
+    # The version-control rule tracks the setting, so the prompt never claims
+    # something the shell guard would refuse, or vice versa.
+    vcs = _VCS_ON if config.allow_vcs() else _VCS_OFF
+    parts = [(SUBAGENT if subagent else BASE).format(platform=config.PLATFORM, vcs=vcs)]
     if project:
         parts.append(PROJECT.format(project=project))
     if chat:

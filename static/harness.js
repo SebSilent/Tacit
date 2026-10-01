@@ -325,6 +325,7 @@ async function renderTools() {
   const panel = $('#panel-tools');
   panel.innerHTML = '<div class="ho-loading">Loading tools…</div>';
   const d = await api('/api/tools');
+  const vcs = await api('/api/harness/version-control');
 
   const toolRow = t => `
     <div class="tool-row ${t.enabled ? '' : 'off'}" data-name="${esc(t.name)}">
@@ -335,10 +336,33 @@ async function renderTools() {
       </button>
     </div>`;
 
+  const on = !!vcs.allow_version_control;
   panel.innerHTML = `
     <div class="ho-toolbar"><span class="ho-sub">${esc(d.note || '')}</span></div>
+    <div class="ho-section">Permissions</div>
+    <div class="tool-row ${on ? '' : 'off'}" data-perm="version-control">
+      <span class="tool-name">Version control</span>
+      <span class="tool-desc">Off by default. Left to itself a model commits and pushes far more than
+        anyone asked for. The Git panel is the deliberate route; turn this on to let the agent run
+        git commands on its own.</span>
+      <button class="tgl ${on ? 'on' : ''}" data-act="toggle-vcs" role="switch" aria-checked="${on}" title="${on ? 'Disable' : 'Enable'}">
+        <span class="tgl-knob"></span>
+      </button>
+    </div>
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>
     <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>`;
+
+  panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-act="toggle-vcs"]');
+    const enable = !btn.classList.contains('on');
+    const r = await post('/api/harness/version-control', { allow: enable });
+    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
+    btn.classList.toggle('on', enable);
+    btn.setAttribute('aria-checked', enable);
+    btn.closest('.tool-row').classList.toggle('off', !enable);
+    setNote(enable ? 'the agent may now run version-control commands'
+                   : 'version control is off for the agent');
+  });
 
   panel.querySelectorAll('.tool-row [data-act="toggle"]').forEach(btn => {
     btn.addEventListener('click', async e => {

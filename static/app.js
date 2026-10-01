@@ -299,6 +299,31 @@ function inlineRename(host, current, commit) {
   input.addEventListener('dblclick', e => e.stopPropagation());
 }
 
+const EMPTY_TAGS = [
+  'Pick a workspace and say what you need.',
+  'Read first. Then change one thing.',
+  'Small steps, each one checked.',
+  'Understand it before you change it.',
+  'Ask a real question, get a real answer.',
+  'One change at a time.',
+  'Say what you want, then check it yourself.',
+  'Slow is smooth. Smooth is fast.',
+  'Your machine, your files, your call.',
+  'Nothing here is watching you.',
+  'The best bug is the one you never shipped.',
+  'Good tools stay out of the way.',
+  'Start where you are.',
+  'Write it down before you build it.',
+  'A clear question is half the work.',
+  'Measure twice, edit once.',
+];
+
+function pickTagline() {
+  const el = document.getElementById('emptyTag');
+  if (!el) return;
+  el.textContent = EMPTY_TAGS[Math.floor(Math.random() * EMPTY_TAGS.length)];
+}
+
 function startRenameTop() {
   const s = cur();
   if (!s) return;
@@ -344,6 +369,9 @@ function connect() {
 
 // attach current session over the already-open socket
 function attachCurrent() {
+  if (window.TacitAssistant && window.TacitAssistant.sessionChanged) {
+    window.TacitAssistant.sessionChanged(activeId);
+  }
   const s = cur();
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'switch', sid: s.id, model: s.model,
@@ -587,6 +615,14 @@ function handle(m) {
     case 'fatal':
       endStream();
       toast('Fatal: ' + m.error, true);
+      break;
+    default:
+      // The side assistant owns its own events; it must never touch the main
+      // conversation's streaming state.
+      if (m && typeof m.type === 'string' && m.type.indexOf('assistant') === 0
+          && window.TacitAssistant && window.TacitAssistant.handle) {
+        window.TacitAssistant.handle(m);
+      }
       break;
   }
 }
@@ -1536,6 +1572,7 @@ $('#newChatBtn').addEventListener('click', () => {
   renderModelChip();
   renderTokMeter();
   attachCurrent();
+  pickTagline();
   inputEl.focus();
 });
 
@@ -1962,11 +1999,15 @@ updateSteerHint();
 })();
 
 // Public surface for sibling panels (harness.js, git.js). Both load after this file.
+pickTagline();
+
 window.Tacit = Object.assign(window.Tacit || {}, {
   getSid: () => activeId,
   getWorkdir: () => { const s = cur(); return (s && s.workdir) || ''; },
   refreshInfo: () => loadInfo(),
   pickDir: ({ key = 'workspace', ...opts } = {}) => openFsPicker(key, opts),
+  // the assistant panel shares this one socket rather than opening its own
+  sendMessage: (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); },
   toast,
 });
 })();
