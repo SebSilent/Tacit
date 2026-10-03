@@ -20,8 +20,8 @@ Three properties decide what an agent costs you and what it can do to you. Tacit
 three, and every number below is measured rather than asserted.
 
 1. **The fixed cost per turn is the smallest here.** About 980 characters of standing instructions
-   plus the tool descriptions for your profile. Roughly 710 tokens on the Minimal profile, about
-   2,100 on the default. Compare with roughly 8,400 for DSH and 19,000 for Hermes.
+   plus the tool descriptions for your profile. Roughly 745 tokens on the Minimal profile, about
+   2,150 on the default. Compare with roughly 8,400 for DSH and 19,000 for Hermes.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
    sandboxing and autonomous learning are all off or proposal-only until you turn them on. An
    approved rule goes back through the same budgets as everything else, never around them.
@@ -39,9 +39,9 @@ token meter, so nothing is measured by a standard it does not already apply to i
 
 | System | System prompt | Tools | Tool schemas | Fixed cost per turn |
 |---|---|---|---|---|
-| **Tacit, Minimal** | **979 chars** | **7** | **1.9 KB** | **~710 tokens** |
+| **Tacit, Minimal** | **979 chars** | **7** | **2.0 KB** | **~745 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **979 chars** | **24** | **7.2 KB** | **~2,100** |
+| **Tacit, default profile** | **979 chars** | **24** | **7.6 KB** | **~2,150** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
@@ -57,9 +57,9 @@ list and glob, and nothing else.
 
 | Same seven capabilities | Tacit | Pi |
 |---|---|---|
-| Tool schemas | **1,852 chars** | 4,626 chars |
+| Tool schemas | **2,001 chars** | 4,626 chars |
 | System prompt | **979 chars** | 1,352 chars |
-| **Fixed cost per turn** | **~710 tokens** | **~1,600** |
+| **Fixed cost per turn** | **~745 tokens** | **~1,600** |
 
 Same tools, less than half the cost. Two things account for it. Pi's descriptions are longer: its
 `read` tool takes the same three parameters as Tacit's and still costs 182 tokens against 67. And
@@ -71,7 +71,7 @@ so that one is not a fair fight, but the rest are.
 | Property | Tacit | DSH | Hermes Agent |
 |---|---|---|---|
 | Runtime dependency on another harness | **none** | plugin runtime | gateway ecosystem |
-| Fixed cost per turn | **~710 to ~2,100** | ~8,390 | ~18,970 |
+| Fixed cost per turn | **~745 to ~2,565** | ~8,390 | ~18,970 |
 | Memory in the prompt | **off by default, hard token budget** | not applicable | accumulated in the system prompt |
 | Learning that changes behaviour | **approval first, proposal state by default** | not applicable | automatic |
 | Isolation on Windows | **reported honestly as unavailable** | not verified here | not applicable |
@@ -115,6 +115,71 @@ python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; pri
 
 ---
 
+## How context is managed, against the alternatives
+
+Prompt size is half of it. The other half is what happens when a session gets long, and that is
+where the designs differ most. Everything below was read out of the programs themselves, on this
+machine, not from their marketing.
+
+| | Tacit | Claude Code | Hermes | little-coder | DSH |
+|---|---|---|---|---|---|
+| Standing prompt | **979 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
+| Tool schemas | **7.6 KB / 24** | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
+| External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
+| Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
+| Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | — | — |
+| Tail kept | **token budget, 4–40 msgs** | — | token budget, floor 8 | — | — |
+| Cheap pre-pass before summarising | **yes** | — | yes | — | — |
+| Summariser model | **nominatable** | — | cheap auxiliary | — | — |
+| Fallback if summarising fails | **deterministic digest** | — | digest + cooldown | — | — |
+| Compaction mid-turn | **yes** | — | yes | — | — |
+| Task pinned against elision | **yes** | — | head protected | — | — |
+| Per-turn guidance, appended | **yes** | — | — | yes (originated it) | — |
+| Project instructions | **indexed, 48 tokens** | inlined always | a prompt section | guidance hint | a prompt section |
+| Task state outside the window | **plugin, off by default** | todo list | state store | — | — |
+| Concurrent sub-agents | **yes** | yes | yes | up to 4 | — |
+| Prompt-cache breakpoints | **sent on Anthropic** | yes | — | — | — |
+| Cost reported while running | **yes** | percentage only | — | — | — |
+
+### What Tacit took from each
+
+None of this was invented here, and it is worth saying where it came from.
+
+- **The reserve model is Claude Code's.** Its trigger is not a percentage: it is the window minus a
+  roughly fixed ~33K-token reserve, which works out to about 83% of a 200K window and 97% of a 1M
+  one. Tacit used a flat 0.65 and was wrong at both ends — it compacted a 1M-token model at 650,000,
+  throwing away 350,000 tokens of usable context, and an 8K model at 5,200, leaving too little to
+  answer in. Adopting the reserve model is worth **317,000 extra usable tokens** on a 1M window, and
+  the numbers now agree with Claude Code's exactly.
+- **The compaction mechanics are Hermes'.** Its `context_compressor.py` was well ahead of what was
+  here: a token-budget tail rather than a fixed message count, a cheap pre-pass that clears old tool
+  output before paying a model to summarise it, iterative summaries that refine one handover note
+  instead of stacking, headings marked *reference only* so the summary is not read as new
+  instructions, and a deterministic fallback when the summariser fails. Tacit previously kept a fixed
+  six messages, had no pre-pass, and returned nothing at all on a failed summary — which meant the
+  transcript stayed full and the window cap silently elided it instead.
+- **The per-turn guidance was already little-coder's**, and is credited as such in the source.
+
+### Where Tacit is still behind
+
+- **Prompt caching is now directed where it can be.** Anthropic does not cache automatically — a
+  request has to mark where the cacheable prefix ends — so Tacit speaks the native Messages API for
+  Anthropic endpoints and places those breakpoints itself. Everywhere else it adds nothing, because
+  OpenAI-compatible servers cache the prefix on their own and an unrecognised field can get a request
+  rejected outright. Which applies is detected, reported in **Settings > Tokens**, overridable, and a
+  rejection is retried once without the markers so caching can never be the reason a turn fails.
+  What Tacit still does not do is place breakpoints on the growing transcript for Anthropic — two marks
+  cover the stable prefix and the last message, which is the documented pattern, but a longer rolling
+  strategy is possible.
+- **No task-state panel.** The Task List plugin keeps the remaining work outside the window as data,
+  and it survives compaction because it was never in the transcript. What Tacit has no equivalent of is
+  Claude Code's *visible* todo rendering in the interface — the list is the model's own record here,
+  shown in the dashboard rather than drawn as a progress UI.
+- **Retrieval is keyword-only.** SQLite full-text search where the build has it, plain matching where
+  it does not. No embeddings, deliberately, but that is a ceiling as well as a choice.
+
+---
+
 ## Why the cost stays low
 
 Every message carries a fixed overhead: the instructions the assistant always follows, plus the
@@ -130,14 +195,114 @@ Most tools do not show you this number. Tacit does, and then gives you the switc
   fetched only when it is used.
 - **Heavy exploration goes to a sub-agent.** The `task` tool runs in its own fresh context with a
   separate step budget, and returns only its report. Reading a large codebase costs the main
-  conversation the summary, not the reading.
+  conversation the summary, not the reading. The report is trimmed from both ends inward, so its
+  conclusion survives, and the tokens the sub-agent spent out of your window are counted in
+  **Settings > Tokens** rather than vanishing.
 - **Memory is capped and retrieved, not carried.** A fixed token budget, default 120, enforced. The
-  rest is searched and injected only when relevant.
-- **Older turns compact in place**, and a window cap decides what is sent.
+  rest is searched and injected only when relevant, and what the budget held back is reported.
+- **Older turns compact in place.** The trigger counts the whole transcript — tool results and
+  reasoning included, which is where the size actually is — and the summary is written from a digest
+  of what ran, not just what was said.
+- **The trigger is a reserve, not a percentage.** What has to stay free is room for the next turn's
+  work, and that is roughly constant rather than proportional, so compaction fires at the window minus
+  about 33,000 tokens: near 83% of a 200K window and 97% of a 1M one. A flat fraction got both ends
+  wrong — it cost a 1M-token model 350,000 tokens of usable context and left an 8K model too little to
+  answer in. Below a window the reserve exceeds, it floors at half.
+- **Old tool output is cleared before anything is summarised.** A cheap pre-pass, and often the whole
+  job: if dropping the bodies of results already being folded away brings the transcript back under
+  budget, no model is paid to write a summary at all.
+- **A failed summary still leaves a note.** If the summariser errors or answers with nothing, a
+  deterministic digest of the paths touched, the calls that failed and the most recent activity takes
+  its place. It used to return nothing, which left the transcript full for the window cap to elide.
+- **The summary is framed as a record, not an instruction.** A handover note that reads as a task list
+  gets acted on, which is how a compacted session restarts work it already finished.
+- **The tail is kept by token budget, not message count.** Six messages is six huge tool results on
+  one turn and six one-line answers on the next; the first overflows the summariser and the second
+  discards recent work that was cheap to keep. The task and any earlier summary are pinned through
+  every compaction, and repeated compaction refines one handover note instead of stacking them.
+- **Compaction happens during a turn, not only between them.** Checking the size once, before a turn
+  begins, is what let one investigation reach 1.9M prompt tokens with nothing ever reclaimed. A turn
+  that outgrows its budget is summarised as it goes, which keeps information the window cap would
+  otherwise throw away.
+- **The window cap follows the model.** What is sent is bounded by the model's own context window
+  where it is known, not by one flat number that suits neither a 1M-token model nor an 8k one. When
+  something must still be elided, the standing prompt, the task and any compaction summary are
+  pinned: the agent is never left holding instructions it can no longer see the question for.
+- **Cost is reported while the turn is running.** Crossing 25%, 50% or 75% of the model's window
+  raises a warning in the interface, so a runaway turn is visible before it finishes rather than in
+  a dashboard afterwards. `TACIT_TURN_TOKEN_BUDGET` sets a hard ceiling that stops the turn and asks
+  for a report instead; it is off by default, like every other constraint here.
 - **Off by default.** Memory, plugins, external tool servers and sandboxing are disabled until you
   enable them, and can be disabled again at any time.
 
 Nothing above is a claim about the model. It is about what Tacit chooses to put in front of it.
+
+---
+
+## Your project's own instructions
+
+Most projects state their rules somewhere, and an agent that does not read them works against the
+grain of the codebase. Tacit looks for `AGENTS.md`, `CLAUDE.md`, `TACIT.md`, `.cursorrules`,
+`.tacit/instructions.md` and `.github/copilot-instructions.md` in the project root, plus `README.md`,
+`SPEC.md` and `CONTRIBUTING.md` as documentation.
+
+Root only, and deliberately so: walking the tree for instruction files in every subdirectory is how a
+harness ends up reading a vendored copy of someone else's rules, and it costs a scan on every turn.
+
+What it does with them is the interesting part, because inlining them is exactly the thing this whole
+design is trying not to do. Three modes:
+
+| Mode | What is injected | Measured on one project |
+|---|---|---|
+| `off` | nothing | 0 tokens |
+| `index` (default) | the names found and their sizes | **48 tokens** |
+| `inline` | the full text, up to a budget | 3,340 tokens |
+
+The index is the default because it is nearly free and it removes the guesswork: the model is told
+that a 3,340-token `README.md` exists and can decide to read it, instead of being handed a vague
+instruction to "read the project's own instructions if it has them" and spending a tool call finding
+out whether any do. Inline mode is there when you would rather pay every turn than spend the call,
+is budgeted, and reports what the budget held back.
+
+The block goes into the standing prefix before the transcript, because it depends only on the folder
+— putting it there keeps a provider's prefix cache intact instead of invalidating it. Its cost is a
+line of its own in **Settings > Tokens**, never folded into the base prompt figure.
+
+---
+
+## Prompt caching, per provider
+
+An agent loop re-sends its whole transcript on every step. On a long session that is the entire bill:
+one measured run showed a 108,000-token transcript costing 1.9M prompt tokens, because it was sent
+about eighteen times. Caching is what makes that cheap, and providers do not agree on how it works.
+
+So Tacit picks the best strategy the endpoint actually supports, rather than applying one everywhere:
+
+| Endpoint | Strategy | What is sent |
+|---|---|---|
+| Anthropic (`api.anthropic.com`) | native Messages API | breakpoints on tools, system and the last message |
+| OpenRouter | OpenAI shape, passthrough | one breakpoint on the system block |
+| Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
+
+The last row is the important one. Automatic prefix caching needs no markers, and a server that has
+never seen `cache_control` may reject the body outright — so adding markers there would risk a working
+setup to gain nothing. Tacit adds them only where they are understood.
+
+Anthropic needs a native transport for this, and it is a real translation rather than a rename:
+`system` is a top-level parameter instead of a message, tools carry `input_schema` instead of
+`parameters`, a tool result is a `tool_result` block inside a *user* message so a run of consecutive
+results has to be merged into one turn, `max_tokens` is required, temperature must be omitted while
+extended thinking is on, and the stream is a sequence of typed events rather than OpenAI's deltas.
+
+Three guarantees around it, because an optimisation must never be a new way to fail:
+
+- **A rejection is retried once without the markers.** It is detected from the HTTP status line,
+  before any event has streamed, so nothing is ever half-sent and then repeated.
+- **`TACIT_PROMPT_CACHE=off` disables it** for a provider that misbehaves.
+- **What is in force is reported**, in **Settings > Tokens**, as `breakpoints sent` or
+  `provider-side` — along with the hit rate actually observed. A measured run on an OpenAI-compatible
+  endpoint reported **71.1%** of prompt tokens served from cache; that figure used to be computed and
+  thrown away, so the field had always been blank.
 
 ---
 
@@ -151,15 +316,47 @@ It does not describe a boundary it cannot enforce.
 | Linux | `bubblewrap` | read-only or read-write project bind, private temp, network namespace, process isolation |
 | macOS | `sandbox-exec` | no network, writes confined to the workspace and temp |
 | Windows | none available | timeout and change reporting only |
-| Any | container, opt-in | Docker or Podman, if you install one |
+| Any | `container`, opt-in | Docker or Podman: network namespace, read-only bind, memory and CPU ceilings, PID limit, private `/tmp`, no privilege escalation |
 
 On Windows the answer is `mechanism: none`, and the interface says so in as many words. That is the
 honest result: the base system offers no equivalent primitive, and a container runtime is the way to
 get one. A container is never required and is never installed for you.
 
+The container backend is the one place where real isolation exists on every platform, because the
+runtime enforces it rather than Tacit approximating it. Three things about it are deliberate:
+
+- **The project is bind-mounted, not copied**, so the change report and snapshot/restore describe the
+  files you actually have rather than a copy nobody will look at again.
+- **Nothing is downloaded for you.** A missing image is reported with the exact `docker pull` command
+  that would fetch it. Pulling automatically is installing something, so it is opt-in.
+- **A timeout kills the container, not just the client.** `docker run` dying leaves the container
+  alive, so without an explicit `docker kill` the command would carry on after Tacit reported it
+  stopped — the one thing a sandbox must never do.
+
+All three were checked against a **real daemon**, by hand, on Docker Engine 29.8.1 with a WSL2
+backend — not only against a stub. A container was started and these were read back from it: `--network none` really refuses a connection to `1.1.1.1:53`, a
+read-only bind is rejected by the kernel (`cannot create /workspace/…: Read-only file system`), a
+write from inside lands on the host and shows up in the change report, `/tmp` is a `tmpfs`,
+`NoNewPrivs:\t1` is present, `pids.max` reads back `64` when 64 was asked for and `memory.max` reads
+back `268435456` for `memory_mb=256`, nothing of the host filesystem is reachable, and after a
+timeout the container is gone from `docker ps -a`. A 4-second timeout returned in 5.8 seconds with exit 124 and no surviving
+container. These checks are **not in the suite**: there is no live-daemon test file, so they were
+true when measured and are not re-verified on every commit. `test_isolation.py` covers the same
+ground against a stubbed runtime.
+
+**The timeout is enforced, not merely reported.** `TACIT_SHELL_TIMEOUT` is documented as the seconds a
+command may run, and on Windows it was not: killing a `cmd /c` or `.bat` wrapper left its grandchildren
+alive holding the captured pipe, so the call blocked long after the timeout fired. Measured at the
+time — two orphaned processes still running minutes later, and a shell tool that took 180 seconds to
+return from a command that should have died in three. The whole tree is now killed and the drain is
+bounded, so a timeout returns in about the time it names.
+
 **The audit ledger.** Every tool call, sandbox decision, memory injection, learning proposal and
 approval is appended to `~/.tacit/audit.jsonl`. It is a plain JSONL file you can read, search or
-delete. Credentials are masked on the way in, at any depth. Nothing in it is ever edited or removed.
+delete. Credentials are masked on the way in, at any depth — including a token carried in a URL's
+query string, which is the shape that usually reaches a log. Nothing in it is ever edited or removed:
+the interface's own *clear* action retires the file under a timestamped name and records the rotation
+as the first entry of the new one, so the history stays complete.
 
 ---
 
@@ -221,12 +418,18 @@ several things each time you change how you are working. Switching applies immed
 
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
-| **minimal** | 7 | none | off | propose | ~710 tokens |
-| **silent** (default) | 24 | none | off | propose | ~2,100 tokens |
-| **safe** | 24 | tacit-micro | explicit | propose | ~2,100 tokens |
-| **power-isolation** | 24 | tacit-micro | explicit | propose | ~2,100 tokens |
-| **power-memory** | 24 | none | full, budgeted | propose | ~2,100 tokens + budget |
-| **full** | 24 | tacit-micro | full, budgeted | propose | ~2,100 tokens + budget |
+| **minimal** | 7 | none | off | propose | ~745 tokens |
+| **silent** (default) | 24 | none | off | propose | ~2,150 tokens |
+| **safe** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
+| **power-isolation** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
+| **power-memory** | 24 | none | full, budgeted | propose | ~2,565 tokens + budget |
+| **full** | 24 | tacit-micro | full, budgeted | propose | ~2,565 tokens + budget |
+
+The four profiles that turn the Memory Vault on cost about 419 tokens more than `silent`, because
+the vault contributes five tool schemas of its own. That is the whole difference between the rows:
+they are identical in prompt cost and differ only in what is switched on. Every figure here is
+recomputed from the live configuration by **Settings > Tokens**, so the table cannot drift without
+the interface disagreeing with it.
 
 No profile enables automatic learning. That is a deliberate choice: a profile sets cost and
 containment, and does not decide what Tacit is allowed to remember on its own.
@@ -335,7 +538,12 @@ existing installation, set `TACIT_PLAYWRIGHT_PATH` to point at it.
 - **Plan first.** Plan mode researches your project, asks clarifying questions, and drafts an
   approach for you to approve before any files are changed.
 - **Delegate.** A sub-agent reads a large amount of material in its own separate context and returns
-  only a summary, so the main conversation stays small.
+  only a summary, so the main conversation stays small. Several asked for in one step run
+  concurrently, since they are independent and read-only.
+- **Work with the project's own rules.** Instruction files are found rather than guessed at, and
+  indexed rather than inlined by default — see below.
+- **Keep the remaining work in view.** An optional task list holds the steps of a multi-part job
+  outside the transcript, where a compaction cannot summarise them away.
 
 ---
 
@@ -360,7 +568,9 @@ copy-pasting that involves.
 Three things make it useful rather than annoying:
 
 - **It can read the session.** It sees what you asked and what the agent answered, so you never have
-  to paste context into it.
+  to paste context into it. A further switch adds a one-line digest of the tools behind each answer,
+  which is what makes "explain what the agent just did" answerable; it is off by default because tool
+  results are the expensive part of a transcript.
 - **The agent cannot see it.** The Assistant is invisible to the main agent. Nothing it says reaches
   the agent unless you copy it across yourself, so your notes, hesitations and half-formed ideas
   stay between you and it.
@@ -375,11 +585,14 @@ shown before anything is sent:
    you 20   persona 162   history 0   tools 0
 
    [x] Your prompts     [x] Agent replies     [x] Session info
-   [ ] Read-only tools
+   [ ] Tool calls       [ ] Read-only tools
    Last [20] turns
 ```
 
-Read-only tools add roughly **1,450 tokens** on their own, which is why they are off by default. The
+Read-only tools add roughly **1,130 tokens** on their own, which is why they are off by default, and
+they are read-only in fact and not only by label: the switches that write — snapshots, delegation,
+`benchmark set`, `evidence add`, and any external tool call — are refused at the point of the call,
+not merely hidden from the schema. Hiding a tool does not stop a model that remembers its name. The
 Assistant has its own provider, model and thinking level as well, so pointing a reasoning-heavy
 model at the thinking and a cheap one at the code is a couple of clicks.
 
@@ -463,11 +676,17 @@ Plugins add tools, connections or panels. They are disabled by default, and each
 tokens it would add to your prompt before you enable it. A plugin's code is loaded only after you
 enable it.
 
-Manage them in **Settings > Plugins**. Tacit ships with one:
+Manage them in **Settings > Plugins**. Tacit ships with two:
 
-| Plugin | Purpose | Default |
-|---|---|---|
-| **Memory Vault** | Persistent memory with a token budget | Off |
+| Plugin | Purpose | Cost when enabled | Default |
+|---|---|---|---|
+| **Memory Vault** | Persistent memory with a token budget | 419 tokens | Off |
+| **Task List** | The turn's remaining work, kept outside the context window | 132 tokens | Off |
+
+Both figures are measured from the schemas the plugin actually contributes, not from a budget it
+declares about itself — a plugin that declared zero used to show zero in the panel while really
+adding its tools to every request. Disabled plugins are priced too, since that is the number you need
+in order to decide.
 
 Anything else is a plugin you write or install yourself. There is no bundled plugin that reaches
 outside your machine.
@@ -480,6 +699,9 @@ outside your machine.
 selector described above.
 
 - tokens sent and received
+- what the provider served from its own cache, and the hit rate — a turn re-sends its transcript on
+  every step, so on a long session this is most of the bill and the difference between a cheap run
+  and an expensive one
 - the composition of the starting prompt: base instructions, built-in tools, external tool schemas,
   and memory
 - the estimated full-context baseline, which is what the prompt would cost with everything loaded up
@@ -501,7 +723,10 @@ comparison table above were read from those products' own diagnostics and logs.
 - **compare** it with the project as it is now, listing changed, added and removed files
 - **restore** it, after a confirmation prompt
 
-The agent takes a snapshot before risky edits, and you can request one at any time.
+The agent takes a snapshot automatically before the first edit of a turn, and you can request one at
+any time. It used to be offered the choice and left to take one; across two real sessions it never
+did, so the undo timeline was empty at exactly the moment it would have been needed. One snapshot per
+turn keeps it cheap, and a snapshot that fails is reported without blocking the edit.
 
 ---
 
@@ -521,6 +746,7 @@ and nothing is written into another tool's directory.
 ├─ learning.json      learning proposals    (Settings > Capabilities)
 ├─ capabilities.json  capability selections
 ├─ audit.jsonl        append-only ledger of what happened
+├─ audit.jsonl.<ts>   retired ledgers, kept rather than deleted
 ├─ mcp.json           external tool servers (Settings > MCP)
 ├─ plugins.json       plugin state          (Settings > Plugins)
 ├─ mcp_audit.jsonl    external tool activity log
@@ -528,6 +754,7 @@ and nothing is written into another tool's directory.
 ├─ evidence.jsonl     recorded citable facts
 ├─ checkpoints/       project snapshots for undo
 ├─ plans/             approved plans
+├─ tasks/             per-session task lists  (Task List plugin, off by default)
 ├─ sessions/          transcripts + metadata
 └─ github.json        hosting panel state
 ```
@@ -557,7 +784,9 @@ backend/
 ├─ plugin_manager.py  plugins: discovery, enable/disable, token impact
 ├─ mcp_client.py      MCP transports (stdio and streamable HTTP)
 ├─ mcp_registry.py    external servers: lifecycle, policy, audit, lazy activation
+├─ anthropic.py       the native Messages API, and where cache breakpoints go
 ├─ profiles.py        named capability bundles
+├─ project_context.py your project's own instruction files: found, indexed, budgeted
 ├─ skills.py          skills + knowledge, progressive disclosure
 ├─ plan.py            plan mode: decompose, explore, ask, draft
 ├─ research.py        multi-source research with citations
@@ -600,6 +829,22 @@ is the intended route for the person using Tacit. If you would rather the agent 
 The learning analyzer and the migration importer deliberately have no tools at all. They are driven
 from the interface, so they cost nothing in the schema budget and cannot be invoked by a model.
 
+### How the file tools report themselves
+
+A tool result is the only feedback the model gets, so it has to say where it stopped. Two rules
+follow from that, and both exist because a session showed what happens without them:
+
+- **`read_file` ends with the range it actually delivered** — `lines 211-334 of 658 shown; pass
+  offset=334 for the next 324` — and that trailer survives the output limit. An `offset` past the end
+  of the file is an error rather than an empty page. Reading a long file in chunks used to leave the
+  model guessing where the cut fell, and it answered by re-reading the same span five times.
+- **`grep_files` searches what it is pointed at.** A file path searches that file; a directory path
+  searches that tree; a path that does not exist is an error. It used to fall back to the parent
+  directory for a file path, so grepping one module returned matches from its neighbours — and a
+  mistyped path silently searched somewhere else. Both read as real answers.
+
+Every result is clipped to `TACIT_TOOL_OUTPUT_LIMIT`, grep included.
+
 ---
 
 ## Configuration
@@ -613,9 +858,32 @@ from the interface, so they cost nothing in the schema budget and cannot be invo
 | `TACIT_PLAYWRIGHT_PATH` | auto-detected | an existing playwright installation |
 | `TACIT_MAX_STEPS` | `24` | tool steps per turn |
 | `TACIT_SUBAGENT_STEPS` | `12` | steps per sub-agent |
-| `TACIT_COMPACT_AT` | `0.65` | compact at this fraction of the window |
+| `TACIT_COMPACT_AT` | `0` (reserve model) | set a flat fraction of the window instead |
+| `TACIT_CONTEXT_RESERVE` | `33000` | tokens left free for the next turn's work |
+| `TACIT_CONTEXT_FILL_FLOOR` | `0.5` | never compact below this fraction, for small windows |
+| `TACIT_COMPACT_TAIL_TOKENS` | `8000` | recent transcript kept verbatim through a compaction |
+| `TACIT_COMPACT_TAIL_SHARE` | `0.4` | cap on that tail as a share of the fill target |
+| `TACIT_COMPACT_TAIL_MIN` / `_MAX` | `4` / `40` | message bounds on the tail |
+| `TACIT_COMPACT_PRUNE_KEEP` | `400` | head of an old tool result kept by the pre-pass |
+| `TACIT_COMPACT_MODEL` | none | a cheap model to write summaries with |
+| `TACIT_SUMMARY_INPUT_MAX` | `160000` | cap on what the summariser is sent |
+| `TACIT_CONTEXT_BUDGET` | `120000` | characters of transcript sent when the model's window is unknown |
+| `TACIT_CONTEXT_BUDGET_MIN` | `24000` | floor for the derived cap, so a small window is still usable |
+| `TACIT_CONTEXT_BUDGET_MAX` | `2000000` | ceiling for the derived cap, so a huge window is not filled |
+| `TACIT_COMPACT_MID_TURN` | `1` | compact a growing turn in place rather than only between turns |
+| `TACIT_COST_WARN` | `0.25,0.5,0.75` | fractions of the window at which a turn warns you what it is costing |
+| `TACIT_PROMPT_CACHE` | `auto` | `auto` marks only endpoints known to understand it; `on` forces; `off` never |
+| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | default output ceiling; the Messages API requires one |
+| `TACIT_ANTHROPIC_THINKING` | `4096` | base extended-thinking budget, scaled by the level picked |
+| `TACIT_TURN_TOKEN_BUDGET` | `0` | hard token ceiling per turn; `0` means no ceiling |
+| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | default output ceiling for the Messages API, which requires one |
+
+Container isolation is configured in **Settings > Capabilities** rather than by environment, since it
+is a capability choice: the image (default `python:3.12-slim`), whether a missing image may be pulled
+(default no), and the PID ceiling (default 256).
 | `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a tool result |
-| `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run |
+| `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
+| `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
 
 ---
@@ -624,7 +892,9 @@ from the interface, so they cost nothing in the schema budget and cannot be invo
 
 - There is no telemetry, no analytics and no remote tracking anywhere in the codebase.
 - **There is no authentication.** Tacit binds `0.0.0.0`, so anyone who can reach the port can drive
-  the agent. Run it on a trusted network, or set `TACIT_HOST=127.0.0.1` to keep it local.
+  the agent. Run it on a trusted network, or set `TACIT_HOST=127.0.0.1` to keep it local. Binding to
+  a non-loopback address prints a warning at startup naming that variable, because the person who can
+  still act on it is the one starting the server.
 - **API keys** are stored in `~/.tacit/.env`, are masked in the interface, and are never written
   into a project or into a log.
 - The agent's file tools refuse the key store.
@@ -647,11 +917,48 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite:
+The repository includes an automated test suite — 527 tests, no network and no real model. None of
+them skip: the suite needs neither a container daemon nor a benchmark runner, and Tacit installs
+neither.
 
 ```sh
 python -m unittest discover -s tests -t .
 ```
+
+| File | What it holds down |
+|---|---|
+| `test_platform.py` | tokens, plugins, MCP over a real subprocess, the memory vault, thinking levels |
+| `test_capabilities.py` | the capability registry, isolation, profiles, learning, migration |
+| `test_contracts.py` | the wire shapes the browser reads, and the shell guardrails |
+| `test_claims.py` | each behaviour this README claims, including the agent loop end to end |
+| `test_engine.py` | the provider stream protocol, the Anthropic transport, and a full turn over the WebSocket |
+| `test_isolation.py` | the container backend and the timeout guarantee, with a stubbed runtime |
+
+`test_claims.py` exists because a documented behaviour and the running program disagreed, and the
+disagreement was only visible in a transcript: an agent re-reading the same file five times, a
+sub-agent that had forgotten what it was asked, two dashboard rows that could not leave zero. Each
+test there is named for the claim it enforces, so the next refactor cannot quietly drop one.
+
+### Known limits
+
+Stated plainly, because a list of what works is not much use without one:
+
+- **No authentication, and it binds `0.0.0.0`.** Anyone who can reach the port can drive the agent.
+  Startup warns when the address is not loopback; `TACIT_HOST=127.0.0.1` closes it.
+- **Windows has no isolation primitive.** `mechanism: none` is the honest answer there, and the
+  timeout plus the change report are all that is enforced. A container is the way to get more.
+- **Token counts are estimates without `tiktoken`.** Every figure is marked `~` when it is, and no
+  number for another product is estimated at all.
+- **A hung shell command used to cost far more than its timeout.** Fixed: the process tree is killed
+  and the drain bounded. What remains is that the default is 180s, so a genuinely slow command still
+  owns those three minutes; lower `TACIT_SHELL_TIMEOUT` if you would rather fail faster.
+- **Container isolation needs a runtime you install yourself.** It is implemented and was checked by
+  hand against a real daemon, but Tacit will not fetch Docker or an image for you, and on a machine
+  without one the backend reports itself unavailable rather than quietly falling back to `none`.
+  No live-daemon test is shipped, so those checks are not re-run on every commit.
+- **There is no benchmark harness in this repository.** Terminal-Bench integration was built and
+  run externally, then removed; nothing here claims a benchmark score, and no published number for
+  another harness has been reproduced under conditions controlled by us.
 
 ## License
 

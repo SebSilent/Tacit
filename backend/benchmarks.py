@@ -47,5 +47,5 @@ def listing() -> str:
     rows = all_profiles()
     if not rows:
         return (f"no profiles yet - stored in {config.BENCHMARK_FILE}\n"
-                "set one with benchmark_set(model='provider/id', temperature=0.1)")
+                "set one with benchmark(action='set', model='provider/id', temperature=0.1)")
     return "\n".join(f"{k}: {json.dumps(v)}" for k, v in sorted(rows.items()))

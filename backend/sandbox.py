@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -57,6 +58,9 @@ def _macos_iso() -> str:
 
 def mechanism() -> str:
     """Which isolation primitive would actually be used right now."""
+    if str((providers.load() or {}).get("sandbox", {}).get("backend") or "") == "container" \
+            and _container_runtime():
+        return "container"
     if sys.platform.startswith("linux"):
         return "bubblewrap" if _linux_iso() else "posix-limits"
     if sys.platform == "darwin":
@@ -67,6 +71,13 @@ def mechanism() -> str:
 def platform_capabilities() -> dict:
     """What this operating system can actually enforce, right now."""
     mech = mechanism()
+    if mech == "container":
+        # A container runtime enforces all of it, on every platform including
+        # Windows — which is the whole reason it is offered as an option.
+        return {"mechanism": "container", "timeout": True, "cpu_limit": True,
+                "memory_limit": True, "file_size_limit": False, "network": True,
+                "readonly_project": True, "overlay_writes": False,
+                "private_tmp": True, "process_isolation": True}
     return {
         "mechanism": mech,
         "timeout": True,
@@ -249,6 +260,8 @@ def run(command: str, project: str | None = None, backend: str | None = None,
 
     if chosen == "tacit-micro":
         return _run_micro(cmd, root, box, limit, session)
+    if chosen == "container":
+        return _run_container(cmd, root, box, limit, session)
     return _run_none(cmd, root, limit, session)
 
 
@@ -266,20 +279,83 @@ def _result(ok: bool, text: str = "", **fields) -> dict:
     return out
 
 
+GRACE_SECONDS = 10
+
+
+def _kill_tree(proc) -> None:
+    """Kill the process and everything it started.
+
+    Killing only the direct child is not enough. On Windows a ``.bat`` or
+    ``cmd /c`` wrapper leaves its grandchildren running, and they keep the captured
+    pipe open, so the reader blocks long after the timeout fired — measured here as
+    two orphaned processes still alive minutes later. A timeout that a command can
+    outrun is not a timeout, and this is the one guarantee the sandbox makes on a
+    platform where it can enforce nothing else.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if IS_POSIX:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=15)
+    except Exception:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False,
+                  preexec_fn=None) -> tuple[int, str, str, bool]:
+    """Run a command and capture it, with a timeout that actually returns.
+
+    Returns ``(code, stdout, stderr, timed_out)``; a timeout reports exit 124, the
+    same convention `timeout(1)` uses. The bounded second read is what makes the
+    timeout real: after the tree is killed, draining is given a short grace period
+    and then abandoned rather than waited on indefinitely.
+    """
+    kwargs: dict = {"cwd": cwd, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
+                    "text": True, "env": env}
+    if shell:
+        kwargs["shell"] = True
+    if preexec_fn is not None:
+        kwargs["preexec_fn"] = preexec_fn
+    if IS_POSIX:
+        # Its own process group, so the whole tree can be signalled at once.
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(argv if not shell else argv, **kwargs)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out or "", err or "", False
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=GRACE_SECONDS)
+        except Exception:  # noqa: BLE001
+            out, err = "", ""
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        return 124, out or "", err or "", True
+    except Exception as exc:  # noqa: BLE001
+        _kill_tree(proc)
+        return 1, "", f"ERROR: {exc}", False
+
+
 def _run_none(cmd: str, root: Path, limit: int, session: str) -> dict:
     started = time.time()
-    try:
-        r = subprocess.run(cmd, shell=True, cwd=str(root), capture_output=True,
-                           text=True, timeout=limit)
-        code, out, err = r.returncode, r.stdout or "", r.stderr or ""
-    except subprocess.TimeoutExpired:
+    code, out, err, timed_out = _run_captured(cmd, cwd=str(root), timeout=limit, shell=True)
+    if timed_out:
         res = _result(False, f"ERROR: timed out after {limit}s", backend="none",
                       cwd=str(root))
         audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
                      status="timeout", timeout=limit, command=cmd)
         return res
-    except Exception as exc:  # noqa: BLE001
-        return _result(False, f"ERROR: {exc}", backend="none", cwd=str(root))
 
     res = _result(True, backend="none", cwd=str(root), code=code, stdout=out, stderr=err,
                   duration_ms=int((time.time() - started) * 1000))
@@ -302,14 +378,11 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str) -> dic
     before = _scan(root)
 
     argv, kwargs, notes = _spawn(cmd, str(root), limit, limits, network, readonly)
-    code, out, err, timed_out = 0, "", "", False
-    try:
-        r = subprocess.run(argv, **kwargs)
-        code, out, err = r.returncode, r.stdout or "", r.stderr or ""
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    except Exception as exc:  # noqa: BLE001
-        return _result(False, f"ERROR: {exc}", backend="tacit-micro", cwd=str(root))
+    code, out, err, timed_out = _run_captured(
+        argv, cwd=kwargs.get("cwd") or str(root), env=kwargs.get("env"),
+        timeout=limit, preexec_fn=kwargs.get("preexec_fn"))
+    if code == 1 and not out and str(err).startswith("ERROR:"):
+        return _result(False, err, backend="tacit-micro", cwd=str(root))
 
     changed = _diff(before, _scan(root))
     enforced = {
@@ -350,6 +423,175 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str) -> dic
     audit.record("sandbox_run", session=session, tool="run_shell", backend="tacit-micro",
                  mode="micro", status="timeout" if timed_out else
                  ("ok" if code == 0 else f"exit {code}"),
+                 code=res["code"], timeout=limit, changed=changed["count"],
+                 enforced=enforced, network=network, command=cmd)
+    return res
+
+
+def _container_runtime() -> str:
+    """The container CLI on PATH, if one is installed. Docker first, then Podman.
+
+    Both take the same flags for everything used here, and both are accepted
+    because which one a person has is a matter of platform and taste, not of
+    trustworthiness.
+    """
+    return shutil.which("docker") or shutil.which("podman") or ""
+
+
+def _runtime_label(runtime: str) -> str:
+    """The runtime's name as a person would type it: ``docker``, not ``docker.EXE``.
+
+    Used in messages that tell the user a command to run, where the Windows
+    extension is noise at best and wrong to copy at worst.
+    """
+    return Path(runtime).stem if runtime else "docker"
+
+
+DEFAULT_IMAGE = "python:3.12-slim"
+
+
+def container_settings() -> dict:
+    """Image and pull policy, from the capability registry.
+
+    Pulling defaults to off. Downloading an image is installing something, and the
+    rule everywhere else in Tacit is that nothing is installed for you — so a
+    missing image is reported with the exact command rather than fetched silently.
+    """
+    cfg = (providers.load() or {}).get("sandbox") or {}
+    return {
+        "image": str(cfg.get("container_image") or DEFAULT_IMAGE),
+        "auto_pull": bool(cfg.get("container_auto_pull", False)),
+        "pids_limit": int(cfg.get("container_pids_limit") or 256),
+    }
+
+
+def container_argv(command: str, cwd: str, image: str, *, network: bool, readonly: bool,
+                   limits: dict, name: str, pids_limit: int = 256) -> list[str]:
+    """The full argv for one sandboxed command.
+
+    Everything the platform primitives could not enforce on Windows is enforceable
+    here, and by the runtime rather than by us: a real network namespace, a
+    genuinely read-only bind, real memory and CPU ceilings, a PID ceiling, and no
+    privilege escalation.
+    """
+    runtime = _container_runtime()
+    argv = [runtime or "docker", "run", "--rm", "--name", name,
+            "--workdir", "/workspace",
+            # The project is bind-mounted, not copied, so the change report and
+            # snapshot/restore describe the files the user actually has.
+            "--mount", f"type=bind,source={cwd},target=/workspace"
+                       + (",readonly" if readonly else ""),
+            "--tmpfs", "/tmp",
+            "--security-opt", "no-new-privileges",
+            "--pids-limit", str(max(1, int(pids_limit)))]
+    if not network:
+        argv += ["--network", "none"]
+    mem_mb = int(limits.get("memory_mb") or 0)
+    if mem_mb > 0:
+        argv += ["--memory", f"{mem_mb}m"]
+    cpu = float(limits.get("cpu_seconds") or 0)
+    if cpu > 0:
+        # cpu_seconds is a budget, not a rate; one core is the honest reading of it
+        # as a container limit.
+        argv += ["--cpus", "1"]
+    argv += [image, "/bin/sh", "-c", command]
+    return argv
+
+
+def _image_present(image: str) -> bool:
+    runtime = _container_runtime()
+    if not runtime:
+        return False
+    try:
+        r = subprocess.run([runtime, "image", "inspect", image],
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _kill_container(name: str) -> None:
+    """Stop the container itself, not just the CLI that started it.
+
+    Killing `docker run` leaves the container running: the timeout would be
+    reported to the user while the command carried on underneath, which is the one
+    thing a sandbox must never do.
+    """
+    runtime = _container_runtime()
+    if not runtime:
+        return
+    try:
+        subprocess.run([runtime, "kill", name], capture_output=True, timeout=20)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str) -> dict:
+    started = time.time()
+    runtime = _container_runtime()
+    if not runtime:
+        return _result(False, "ERROR: no container runtime on PATH. Install Docker or "
+                              "Podman, or choose none / tacit-micro in Settings.",
+                       backend="container", cwd=str(root))
+    settings = container_settings()
+    image = settings["image"]
+    if not _image_present(image):
+        if not settings["auto_pull"]:
+            return _result(False, f"ERROR: the image '{image}' is not present locally, and "
+                                  f"Tacit does not download images for you. Run: "
+                                  f"{_runtime_label(runtime)} pull {image}  — or set a "
+                                  f"different image in Settings.",
+                           backend="container", cwd=str(root))
+        try:
+            pull = subprocess.run([runtime, "pull", image], capture_output=True,
+                                  text=True, timeout=1800)
+            if pull.returncode != 0:
+                return _result(False, f"ERROR: could not pull '{image}': "
+                                      f"{(pull.stderr or pull.stdout or '')[:300]}",
+                               backend="container", cwd=str(root))
+        except Exception as exc:  # noqa: BLE001
+            return _result(False, f"ERROR: pull failed: {exc}",
+                           backend="container", cwd=str(root))
+
+    network = bool(box.get("network"))
+    readonly = bool(box.get("readonly_project"))
+    limits = {"cpu_seconds": box.get("cpu_seconds") or 0,
+              "memory_mb": box.get("memory_mb") or 0}
+    name = f"tacit-{int(started * 1000) % 10**8}-{os.getpid() % 1000}"
+    argv = container_argv(cmd, str(root), image, network=network, readonly=readonly,
+                          limits=limits, name=name, pids_limit=settings["pids_limit"])
+    before = _scan(root)
+    code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit)
+    if timed_out:
+        # The runtime, not just the client: `docker run` dying leaves the container
+        # alive, so the command would carry on after Tacit reported it stopped.
+        _kill_container(name)
+
+    changed = _diff(before, _scan(root))
+    notes = [f"ran in {_runtime_label(runtime)} image '{image}'"]
+    if timed_out:
+        notes.append(f"timed out after {limit}s; the container was killed, not just the client")
+    enforced = {
+        "mechanism": "container",
+        "timeout": True,
+        "cpu_limit": bool(limits["cpu_seconds"]),
+        "memory_limit": bool(limits["memory_mb"]),
+        "network": not network,
+        "readonly_project": readonly,
+        "private_tmp": True,
+        "process_isolation": True,
+        "pids_limit": True,
+        "no_new_privileges": True,
+    }
+    res = _result(True, backend="container", cwd=str(root),
+                  code=124 if timed_out else code, stdout=out,
+                  stderr=(f"ERROR: timed out after {limit}s" if timed_out else err),
+                  changed=changed, notes=notes, enforced=enforced,
+                  requested={"network": network, "timeout": limit, "image": image, **limits},
+                  duration_ms=int((time.time() - started) * 1000), container=name)
+    audit.record("sandbox_run", session=session, tool="run_shell", backend="container",
+                 mode="container", image=image,
+                 status="timeout" if timed_out else ("ok" if code == 0 else f"exit {code}"),
                  code=res["code"], timeout=limit, changed=changed["count"],
                  enforced=enforced, network=network, command=cmd)
     return res

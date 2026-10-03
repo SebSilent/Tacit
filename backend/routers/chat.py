@@ -4,11 +4,19 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import agent, assistant, config, mcp_registry, memory_modes, metrics, plan, plugin_manager, store
+from .. import (agent, assistant, audit, config, mcp_registry, memory_modes, memory_store,
+                metrics, plan, plugin_manager, project_context, store)
 from .. import tokens as token_mod
 from ..ai import prompts
 
 router = APIRouter()
+
+# Bounds for transcript fields a browser may push back. Stored tool results are
+# what the agent reads as its own memory next turn, so they are kept, but clipped
+# to the same limit a live tool result already carries.
+MAX_REASON = 8000
+MAX_TOOLS_PER_STEP = 20
+MAX_TOOL_RESULT = 6000
 
 
 def _json(msg: dict) -> str:
@@ -27,11 +35,13 @@ def _usage_snapshot(rec: dict) -> dict:
             window = 0
     if window and not ctx.get("window"):
         ctx["window"] = window
-        ctx["reserve"] = int(window * (1 - config.COMPACT_AT))
+        ctx["reserve"] = max(0, window - config.context_fill_target(window))
     return {
         "tokens": {"input": toks.get("input") or 0,
                    "output": toks.get("output") or 0,
-                   "total": toks.get("total") or 0},
+                   "total": toks.get("total") or 0,
+                   "cacheRead": toks.get("cacheRead") or 0,
+                   "cacheWrite": toks.get("cacheWrite") or 0},
         "context": {"tokens": ctx.get("tokens"), "window": ctx.get("window") or 0,
                     "percent": ctx.get("percent"), "reserve": ctx.get("reserve") or 0},
         "compacting": bool(u.get("compacting")),
@@ -44,7 +54,7 @@ def _meta(rec: dict, running: dict | None = None) -> dict:
     starting = bool(running and running.get("starting"))
     return {
         "sid": rec["id"], "model": rec.get("model") or "",
-        "mode": rec.get("mode") or "agent", "thinking": rec.get("thinking") or "medium",
+        "mode": rec.get("mode") or "agent", "thinking": rec.get("thinking") or "default",
         "workdir": rec.get("project") or "", "name": rec.get("title") or "New session",
         "allowed_tools": "", "excluded_tools": "", "permission_mode": "accept-all",
         "busy": busy, "starting": starting,
@@ -72,43 +82,65 @@ def _stats_payload(rec: dict) -> dict:
     }
 
 
-def _usage_event(rec: dict, usage: dict) -> dict:
+def _usage_event(rec: dict, usage: dict, subagent: bool = False) -> dict:
     u = rec.setdefault("usage", {})
-    tok = u.setdefault("tokens", {"input": 0, "output": 0, "total": 0})
+    tok = u.setdefault("tokens", {"input": 0, "output": 0, "total": 0,
+                                  "cacheRead": 0, "cacheWrite": 0})
     in_tok = int(usage.get("input") or 0)
     out_tok = int(usage.get("output") or 0)
     tok["input"] += in_tok
     tok["output"] += out_tok
     tok["total"] += int(usage.get("total") or 0) or (in_tok + out_tok)
+    # The names the token meter already reads. A turn re-sends its transcript on
+    # every step, so these two numbers are the difference between a cheap long
+    # session and an expensive one — and they were always blank.
+    cache_read = int(usage.get("cache_read") or 0)
+    cache_write = int(usage.get("cache_write") or 0)
+    tok["cacheRead"] = int(tok.get("cacheRead") or 0) + cache_read
+    tok["cacheWrite"] = int(tok.get("cacheWrite") or 0) + cache_write
+    if cache_read:
+        metrics.bump(rec, cached_tokens=cache_read)
 
-    window = 0
-    try:
-        window = (config.resolve_model(rec.get("model")) or {}).get("contextWindow") or 0
-    except Exception:
-        window = 0
+    prev = dict(u.get("context") or {})
+    window = prev.get("window") or 0
+    if not window:
+        try:
+            window = (config.resolve_model(rec.get("model")) or {}).get("contextWindow") or 0
+        except Exception:
+            window = 0
+    # A call that reported no usage used to write None over the meter, so the
+    # interface showed no context percentage at all on a session that had just
+    # billed half a million tokens. Keep the last real figure, and fall back to a
+    # local measure of the transcript so the number is never simply absent.
     ctx_tokens = (in_tok + out_tok) or None
+    if subagent:
+        # Billed here, but it says nothing about how full the main window is.
+        ctx_tokens = prev.get("tokens")
+    if not ctx_tokens:
+        ctx_tokens = prev.get("tokens") or max(
+            1, agent._chars(rec.get("messages") or []) // token_mod.CHARS_PER_TOKEN)
     percent = round(ctx_tokens / window * 100, 1) if (window and ctx_tokens) else None
     ctx = {"tokens": ctx_tokens, "window": window, "percent": percent,
-           "reserve": int(window * (1 - config.COMPACT_AT)) if window else 0}
+           "reserve": max(0, window - config.context_fill_target(window)) if window else 0}
     u["context"] = ctx
     u["compacting"] = False
     u["speed"] = 0
     metrics.bump(rec, prompt_tokens=in_tok, completion_tokens=out_tok)
-    return {"type": "usage", "tokens": tok, "context": ctx, "compacting": False, "speed": 0}
+    return {"type": "usage", "tokens": tok, "context": ctx, "compacting": False, "speed": 0,
+            "subagent": subagent}
 
 
 def _history(rec: dict) -> list[dict]:
-    out = []
-    for m in rec.get("messages") or []:
-        role = m.get("role")
-        body = m.get("content") or ""
-        if not body.strip():
-            continue
-        if role == "summary":
-            out.append({"role": "system", "content": f"{prompts.SUMMARISED}\n{body}"})
-        elif role in ("user", "assistant"):
-            out.append({"role": role, "content": body})
-    return out
+    """Rebuild the model's view of the conversation from the stored transcript.
+
+    The transcript is a display record, so calls and results live on the assistant
+    message that made them. They are expanded back into the protocol shape here:
+    an assistant message carrying tool_calls, followed by one tool message per call.
+    Without that the model could not see anything it had done, and would read its
+    own completed work as a promise it had not kept.
+    """
+    return agent.transcript_messages(rec.get("messages") or [],
+                                     reasoning=agent.model_reasons(rec.get("model")))
 
 
 def _clean_history(items) -> list[dict]:
@@ -127,6 +159,28 @@ def _clean_history(items) -> list[dict]:
         ts = m.get("ts")
         if isinstance(ts, (int, float)):
             row["ts"] = ts
+        # reason and tools are kept, because dropping them erased the history that
+        # lets the agent remember its own work. A client may push anything here, so
+        # they are reduced to known fields and clipped rather than passed through.
+        reason = m.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            row["reason"] = reason[:MAX_REASON]
+        tools = m.get("tools")
+        if isinstance(tools, list):
+            kept = []
+            for t in tools[:MAX_TOOLS_PER_STEP]:
+                if not isinstance(t, dict) or not t.get("id"):
+                    continue          # an unpaired call would break the transcript
+                args = t.get("args")
+                kept.append({
+                    "id": str(t["id"])[:64],
+                    "name": str(t.get("name") or "")[:64],
+                    "args": args if isinstance(args, dict) else {},
+                    "result": str(t.get("result") or "")[:MAX_TOOL_RESULT],
+                    "is_error": bool(t.get("is_error")),
+                })
+            if kept:
+                row["tools"] = kept
         out.append(row)
     return out
 
@@ -142,16 +196,18 @@ def _content_parts(text: str, images) -> list:
     return parts
 
 
-def _memory_block(project: str | None) -> str:
-    """The budgeted memory block, or '' when memory is off.
+def _memory_block(project: str | None) -> dict:
+    """The budgeted memory selection, or an empty one when memory is off.
 
     The mode decides what may be injected, and every item is explained by the
-    module that produced it. Memory never merges into the base prompt.
+    module that produced it. Memory never merges into the base prompt. The whole
+    selection is returned rather than just its text, so the caller can report what
+    the budget held back as well as what it let through.
     """
     try:
-        return memory_modes.startup(project or "").get("text") or ""
+        return memory_modes.startup(project or "") or {}
     except Exception:  # noqa: BLE001
-        return ""
+        return {}
 
 
 def _account_context(rec: dict) -> None:
@@ -199,7 +255,7 @@ async def ws_session(ws: WebSocket, sid: str):
         rec = store.create(title=q.get("name") or "New session",
                            model=q.get("model") or "",
                            mode=q.get("mode") or "agent",
-                           thinking=q.get("thinking") or "medium",
+                           thinking=q.get("thinking") or "default",
                            project=q.get("workdir") or "", sid=sid)
         sid = rec["id"]
     else:
@@ -279,14 +335,12 @@ async def ws_session(ws: WebSocket, sid: str):
         running["assistant_stop"] = threading.Event()
 
         queue: asyncio.Queue = asyncio.Queue()
-        collected = []
+        trace: list[dict] = []
 
         def worker():
             try:
                 for ev in assistant.run_turn(rec, text, cfg, ref=rec.get("model") or None,
-                                             stop=running["assistant_stop"]):
-                    if ev.get("type") == "text":
-                        collected.append(ev["delta"])
+                                             stop=running["assistant_stop"], trace=trace):
                     loop.call_soon_threadsafe(
                         queue.put_nowait,
                         {**ev, "type": "assistant_" + str(ev.get("type")), "sid": rec["id"]})
@@ -300,8 +354,16 @@ async def ws_session(ws: WebSocket, sid: str):
         threading.Thread(target=worker, daemon=True).start()
         await pump(queue)
         running["assistant"] = False
-        if collected:
-            assistant.append(rec, "assistant", "".join(collected))
+        if trace:
+            for step in trace:
+                extra = {}
+                if step.get("reason"):
+                    extra["reason"] = step["reason"]
+                if step.get("tools"):
+                    extra["tools"] = step["tools"]
+                if not (step.get("text") or "").strip() and not extra:
+                    continue
+                assistant.append(rec, "assistant", step.get("text") or "", extra)
         store.save(rec)
         await ws.send_text(_json({"type": "assistant_saved", "sid": rec["id"],
                                   "preview": assistant.preview(rec)}))
@@ -343,12 +405,55 @@ async def ws_session(ws: WebSocket, sid: str):
         chat = (rec.get("mode") or "agent") == "chat"
         messages = [{"role": "system",
                      "content": prompts.system_prompt(rec.get("project"), False, chat=chat)}]
+        # The project's own instructions go in the standing prefix, before the
+        # transcript: they depend only on the folder, so putting them here keeps
+        # the cached prefix stable across turns instead of invalidating it.
+        instructions = {} if chat else project_context.block(rec.get("project"))
+        if instructions.get("text"):
+            messages.append({"role": "system", "content": instructions["text"]})
+            metrics.bump(rec, instruction_tokens=instructions.get("tokens") or 0)
+            audit.record("project_instructions", session=rec["id"], backend="context",
+                         mode=str(instructions.get("mode") or ""),
+                         tokens=int(instructions.get("tokens") or 0),
+                         files=[f["name"] for f in instructions.get("files") or []],
+                         held_back=int(instructions.get("held_back") or 0))
         messages.extend(_history(rec))
 
-        block = "" if chat else _memory_block(rec.get("project"))
-        if block:
-            messages.append({"role": "system", "content": block})
-            metrics.bump(rec, memory_tokens=token_mod.estimate_tokens(block))
+        # The task list is session state, not transcript, so it survives compaction
+        # by construction. Injected only when there is something in it: an unused
+        # list costs nothing at all.
+        task_block = {}
+        if not chat and plugin_manager.is_enabled("task_list"):
+            try:
+                from ..plugins import task_list as _tl
+                task_block = _tl.block(rec["id"])
+            except Exception:  # noqa: BLE001
+                task_block = {}
+        if task_block.get("text"):
+            messages.append({"role": "system", "content": task_block["text"]})
+            metrics.bump(rec, task_tokens=task_block.get("tokens") or 0)
+
+        block = {} if chat else _memory_block(rec.get("project"))
+        text_block = (block or {}).get("text") or ""
+        if text_block:
+            messages.append({"role": "system", "content": text_block})
+            injected = token_mod.estimate_tokens(text_block)
+            metrics.bump(rec, memory_tokens=injected)
+            # What the budget refused is as much a fact as what it allowed. This
+            # is the number behind the dashboard's "saved by memory budgeting"
+            # row, which was permanently zero because nothing ever recorded it.
+            try:
+                available = int(memory_store.stats(rec.get("project") or "").get("total_tokens") or 0)
+            except Exception:  # noqa: BLE001
+                available = 0
+            held = max(0, available - injected)
+            if held:
+                metrics.bump(rec, saved_memory_budget=held)
+            audit.record("memory_injection", session=rec["id"], backend="memory_vault",
+                         mode=str(block.get("mode") or ""), tokens=injected,
+                         count=int(block.get("count") or 0),
+                         held_back=int(block.get("held_back") or 0),
+                         budget=int(block.get("budget") or 0))
 
         if not chat:
             _account_context(rec)
@@ -367,18 +472,38 @@ async def ws_session(ws: WebSocket, sid: str):
         queue: asyncio.Queue = asyncio.Queue()
         project = rec.get("project") or None
         ref = rec.get("model") or None
-        collected = []
+        trace: list[dict] = []
 
         def worker():
             try:
                 for ev in agent.run_turn(messages, project=project, ref=ref, chat=chat,
+                                         session=rec["id"],
+                                         has_instructions=bool(instructions.get("text")),
                                          stop=running["stop"], steer=running["steer"],
-                                         reasoning=config.reasoning_for(rec.get("thinking"))):
+                                         reasoning=config.reasoning_for(rec.get("thinking")),
+                                         trace=trace):
                     kind = ev.get("type")
-                    if kind == "text":
-                        collected.append(ev["delta"])
-                    elif kind == "usage":
-                        ev = _usage_event(rec, ev.get("usage") or {})
+                    if kind == "usage":
+                        ev = _usage_event(rec, ev.get("usage") or {},
+                                          subagent=bool(ev.get("subagent")))
+                    elif kind == "delegation":
+                        metrics.bump(rec, saved_subagent=int(ev.get("saved") or 0))
+                        ev = {"type": "notify", "level": "info",
+                              "message": ("sub-agent spent "
+                                          f"{token_mod.label(ev.get('spent') or 0)} tokens in its "
+                                          "own context; "
+                                          f"{token_mod.label(ev.get('saved') or 0)} kept out of "
+                                          "this one")}
+                    elif kind == "compaction":
+                        # Mid-turn compaction is a real saving and has to reach the
+                        # ledger, or the dashboard's row stays at zero while the
+                        # turn it describes actually reclaimed the tokens.
+                        metrics.bump(rec, saved_compaction=int(ev.get("saved") or 0))
+                        rec.setdefault("usage", {})["compacting"] = False
+                        ev = {"type": "notify", "level": "info",
+                              "message": (f"compacted {ev.get('compacted')} earlier steps "
+                                          f"({ev.get('chars_before')} → {ev.get('chars_after')} "
+                                          "chars)")}
                     elif kind == "tool_start":
                         rec["tool_calls"] = int(rec.get("tool_calls") or 0) + 1
                     if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
@@ -395,8 +520,18 @@ async def ws_session(ws: WebSocket, sid: str):
         t.start()
         await pump(queue)
         running["busy"] = False
-        if collected:
-            store.append(rec, "assistant", "".join(collected))
+        # One transcript entry per step, tools and reasoning attached to the step
+        # that produced them. Flattening a whole turn into one text message is what
+        # erased the agent's own history.
+        for step in trace:
+            extra = {}
+            if step.get("reason"):
+                extra["reason"] = step["reason"]
+            if step.get("tools"):
+                extra["tools"] = step["tools"]
+            if not (step.get("text") or "").strip() and not extra:
+                continue
+            store.append(rec, "assistant", step.get("text") or "", extra or None)
         store.save(rec)
 
     try:
@@ -445,9 +580,17 @@ async def ws_session(ws: WebSocket, sid: str):
             elif kind == "switch":
                 target = msg.get("sid") or ""
                 nxt = store.get(target) if target else None
-                if nxt:
-                    rec = nxt
-                    sid = rec["id"]
+                if not nxt:
+                    # The settings in this message belong to the session named in it.
+                    # Writing them onto whichever session happens to be open is how a
+                    # stale or mistyped id silently reconfigured a different
+                    # conversation, and nothing was ever wrong on the surface.
+                    await ws.send_text(_json({
+                        "type": "error", "sid": rec["id"],
+                        "message": "unknown session: " + str(target)[:40]}))
+                    continue
+                rec = nxt
+                sid = rec["id"]
                 for key in ("model", "mode", "thinking"):
                     if msg.get(key):
                         rec[key] = msg[key]
@@ -475,7 +618,7 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind in ("new_session", "client_new_session"):
                 fresh = store.create(model=rec.get("model") or "", mode=rec.get("mode") or "agent",
-                                     thinking=rec.get("thinking") or "medium",
+                                     thinking=rec.get("thinking") or "default",
                                      project=rec.get("project") or "")
                 rec = fresh
                 sid = rec["id"]
@@ -582,7 +725,7 @@ async def ws_session(ws: WebSocket, sid: str):
                     # discussion (and its explorers) behind.
                     fresh = store.create(model=rec.get("model") or "",
                                          mode=rec.get("mode") or "agent",
-                                         thinking=rec.get("thinking") or "medium",
+                                         thinking=rec.get("thinking") or "default",
                                          project=rec.get("project") or "")
                     rec = fresh
                     sid = rec["id"]

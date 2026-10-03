@@ -1059,5 +1059,697 @@ class TestSessionCreationRule(Isolated):
         self.assertEqual(store._index_path(), moved / "index.json")
 
 
+class TestTurnHistory(Isolated):
+    """A turn's tool calls must survive into the next turn's context.
+
+    They used to be thrown away: a whole multi-step turn was flattened into one
+    string of narration, so on the next turn the agent could not see anything it
+    had done and would begin the same work again.
+    """
+
+    def _scripted(self):
+        first = [
+            {"type": "text", "delta": "first I look"},
+            {"type": "reason", "delta": "let me inspect"},
+            {"type": "tool_calls", "calls": [
+                {"id": "a", "name": "list_files", "arguments": '{"path": "."}'}]},
+            {"type": "done", "model": None},
+        ]
+        second = [
+            {"type": "text", "delta": "now I am done"},
+            {"type": "done", "finish": "stop", "model": None},
+        ]
+        turns = iter([first, second])
+        return lambda *a, **k: iter(next(turns))
+
+    def _trace(self):
+        from backend import agent
+        orig = agent.engine.stream_chat
+        trace = []
+        agent.engine.stream_chat = self._scripted()
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=3, trace=trace))
+        finally:
+            agent.engine.stream_chat = orig
+        return trace
+
+    def test_each_step_is_recorded_separately(self):
+        trace = self._trace()
+        self.assertEqual(len(trace), 2, "the two steps were merged")
+        self.assertEqual(trace[0]["text"], "first I look")
+        self.assertEqual(trace[0]["reason"], "let me inspect")
+        self.assertEqual([t["name"] for t in trace[0]["tools"]], ["list_files"])
+        self.assertEqual(trace[1]["text"], "now I am done")
+        self.assertEqual(trace[1]["tools"], [])
+
+    def test_no_single_message_holds_two_steps_of_narration(self):
+        """The old bug stored one message per turn, so two steps shared a string.
+
+        Checked on the stored transcript, not by re-joining it by hand.
+        """
+        trace = self._trace()
+        rec = store.create(title="glue")
+        store.append(rec, "user", "go")
+        for s in trace:
+            store.append(rec, "assistant", s["text"])
+        store.save(rec)
+        bodies = [m["content"] for m in store.get(rec["id"])["messages"]
+                  if m["role"] == "assistant"]
+        self.assertEqual(len(bodies), 2)
+        for b in bodies:
+            self.assertFalse("first I look" in b and "now I am done" in b,
+                             f"two steps landed in one message: {b!r}")
+
+    def test_the_call_and_its_result_both_reach_the_transcript(self):
+        from backend.routers import chat as ch
+        trace = self._trace()
+        rec = store.create(title="hist")
+        store.append(rec, "user", "go")
+        for s in trace:
+            extra = {}
+            if s["reason"]:
+                extra["reason"] = s["reason"]
+            if s["tools"]:
+                extra["tools"] = s["tools"]
+            store.append(rec, "assistant", s["text"], extra or None)
+        store.save(rec)
+        hist = ch._history(store.get(rec["id"]))
+        calls = [c for h in hist if h["role"] == "assistant"
+                 for c in (h.get("tool_calls") or [])]
+        results = [h for h in hist if h["role"] == "tool"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r["tool_call_id"] for r in results], [c["id"] for c in calls])
+
+    def test_history_rebuilds_the_protocol_shape(self):
+        from backend.routers import chat as ch
+        rec = store.create(title="rebuild")
+        store.append(rec, "user", "explore this")
+        store.append(rec, "assistant", "looking", {"tools": [
+            {"id": "c1", "name": "list_files", "args": {"path": "."},
+             "result": "FILE a.py", "is_error": False},
+            {"id": "c2", "name": "grep_files", "args": {"pattern": "x"},
+             "result": "a.py:1", "is_error": True}]})
+        store.save(rec)
+        hist = ch._history(store.get(rec["id"]))
+        asst = next(h for h in hist if h["role"] == "assistant")
+        self.assertEqual(len(asst["tool_calls"]), 2)
+        self.assertEqual(json.loads(asst["tool_calls"][0]["function"]["arguments"]),
+                         {"path": "."})
+        tools = [h for h in hist if h["role"] == "tool"]
+        self.assertEqual([t["tool_call_id"] for t in tools], ["c1", "c2"])
+        self.assertEqual(tools[0]["content"], "FILE a.py")
+
+    def test_a_silent_step_that_ran_tools_is_not_dropped(self):
+        """Silent work is still work, and the agent must be able to remember it."""
+        from backend.routers import chat as ch
+        rec = store.create(title="silent")
+        store.append(rec, "user", "go")
+        store.append(rec, "assistant", "", {"tools": [
+            {"id": "s1", "name": "list_files", "args": {}, "result": "FILE a",
+             "is_error": False}]})
+        store.save(rec)
+        hist = ch._history(store.get(rec["id"]))
+        self.assertEqual(len([h for h in hist if h["role"] == "tool"]), 1)
+
+    def test_a_call_is_never_emitted_without_its_result(self):
+        """An unanswered call makes the API reject the whole request."""
+        from backend.routers import chat as ch
+        rec = store.create(title="pair")
+        store.append(rec, "user", "go")
+        store.append(rec, "assistant", "x", {"tools": [{"name": "list_files", "args": {}}]})
+        store.save(rec)
+        hist = ch._history(store.get(rec["id"]))
+        ids = [c["id"] for h in hist if h["role"] == "assistant"
+               for c in (h.get("tool_calls") or [])]
+        answers = [t["tool_call_id"] for t in hist if t["role"] == "tool"]
+        self.assertEqual(ids, answers)
+
+    def test_the_sync_path_does_not_strip_the_history(self):
+        from backend.routers import chat as ch
+        rows = [{"role": "assistant", "content": "looked", "reason": "because",
+                 "tools": [{"id": "z", "name": "list_files", "args": {},
+                            "result": "FILE a", "is_error": False}]}]
+        kept = ch._clean_history(rows)
+        self.assertEqual(kept[0]["tools"][0]["id"], "z")
+        self.assertEqual(kept[0]["reason"], "because")
+
+
+class TestGuidance(Isolated):
+    """Little-coder style behaviour: act, and be told the thing you need when you
+    need it, instead of carrying a prompt that grows for every edge case."""
+
+    def test_a_plan_is_recognised_as_a_plan(self):
+        from backend import guidance
+        self.assertTrue(guidance.plan_like("I'll start by exploring the project structure."))
+        self.assertTrue(guidance.plan_like("Let me check the README first."))
+        self.assertTrue(guidance.plan_like("I will now look at the tests."))
+
+    def test_an_answer_is_not_mistaken_for_a_plan(self):
+        from backend import guidance
+        self.assertFalse(guidance.plan_like("There are 32 modules in backend/."))
+        self.assertFalse(guidance.plan_like("Done. The fix is in chat.py."))
+        self.assertFalse(guidance.plan_like("```\nimport os\n```"))
+        self.assertFalse(guidance.plan_like("- read_file\n- edit_file"))
+        self.assertFalse(guidance.plan_like("This route returned an error and I explained why."))
+        self.assertFalse(guidance.plan_like(""))
+        self.assertFalse(guidance.plan_like("x" * 500))
+
+    def test_failure_outranks_everything_else(self):
+        from backend import guidance
+        b = guidance.for_step(step=0, steps=24, errors=[("edit_file", "no match")],
+                              repeated=["read_file"], first=True, project=True)
+        self.assertIn("edit_file", b)
+        self.assertIn("The last step's tool call failed", b)
+
+    def test_priority_is_error_then_repeat_then_budget_then_discovery(self):
+        from backend import guidance
+        self.assertIn("already ran", guidance.for_step(step=0, steps=24,
+                                                       repeated=["read_file"], first=True,
+                                                       project=True))
+        self.assertIn("step(s) left", guidance.for_step(step=22, steps=24, first=True,
+                                                        project=True))
+        self.assertIn("project's own instructions", guidance.for_step(step=0, steps=24,
+                                                                      first=True, project=True))
+        self.assertEqual(guidance.for_step(step=5, steps=24), "")
+
+    def test_a_block_is_not_repeated_while_it_still_applies(self):
+        from backend import guidance
+        first = guidance.for_step(step=22, steps=24)
+        self.assertTrue(first)
+        self.assertEqual(guidance.for_step(step=22, steps=24, previous=first), "",
+                         "the same block was billed twice in a row")
+
+    def test_blocks_stay_short(self):
+        from backend import guidance
+        cases = [
+            guidance.for_step(step=0, steps=24, errors=[("run_shell", "x") * 4]),
+            guidance.for_step(step=0, steps=24, repeated=["a"] * 30),
+            guidance.for_step(step=0, steps=24, first=True, project=True),
+            guidance.nudge(), guidance.closing(),
+        ]
+        for c in cases:
+            self.assertLessEqual(len(c), guidance.MAX_BLOCK)
+
+    def test_the_standing_prompt_never_carries_guidance(self):
+        """The whole point: the cached prompt stays 979 chars."""
+        from backend import guidance
+        from backend.ai import prompts
+        p = prompts.system_prompt("", False, chat=False)
+        self.assertEqual(len(p), 979)
+        for frag in ("Do it now", "project's own instructions", "step(s) left",
+                     "Out of steps"):
+            self.assertNotIn(frag, p)
+        src = (Path("backend/agent.py")).read_text(encoding="utf-8")
+        self.assertIn("ctx_msgs = ctx_msgs + ", src,
+                      "guidance must be appended per step, not merged into the prompt")
+
+    def test_a_planning_step_is_pushed_back_into_action(self):
+        from backend import agent
+        orig = agent.engine.stream_chat
+        turns = iter([
+            [{"type": "text", "delta": "I'll start by exploring the project structure."},
+             {"type": "done", "model": None}],
+            [{"type": "text", "delta": "There are 32 modules."},
+             {"type": "done", "model": None}],
+        ])
+        agent.engine.stream_chat = lambda *a, **k: iter(next(turns))
+        trace, events = [], []
+        try:
+            events = list(agent.run_turn([{"role": "user", "content": "go"}],
+                                         project=None, max_steps=5, trace=trace))
+        finally:
+            agent.engine.stream_chat = orig
+        self.assertIn("planning detected", json.dumps(events))
+        self.assertEqual(len(trace), 2)
+        self.assertEqual(trace[1]["text"], "There are 32 modules.")
+
+    def test_the_nudge_is_not_stored_as_something_the_user_said(self):
+        from backend import agent
+        from backend.routers import chat as ch
+        orig = agent.engine.stream_chat
+        turns = iter([
+            [{"type": "text", "delta": "I'll start by exploring."},
+             {"type": "done", "model": None}],
+            [{"type": "text", "delta": "Found 32 modules."},
+             {"type": "done", "model": None}],
+        ])
+        agent.engine.stream_chat = lambda *a, **k: iter(next(turns))
+        rec = store.create(title="nudge")
+        store.append(rec, "user", "go")
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=5, trace=[]))
+        finally:
+            agent.engine.stream_chat = orig
+        store.save(rec)
+        roles = [m["role"] for m in ch._history(store.get(rec["id"]))]
+        self.assertEqual(roles.count("user"), 1,
+                         "the harness nudge leaked into the user's voice")
+
+    def test_running_out_of_steps_still_produces_an_answer(self):
+        """Before, the turn ended on a tool result and the user got nothing."""
+        from backend import agent
+        orig = agent.engine.stream_chat
+        seen = {"tools": 0, "none": 0}
+
+        def fake(*a, **k):
+            if k.get("tools") is None:
+                seen["none"] += 1
+                return iter([{"type": "text", "delta": "Ran out. I changed two files."},
+                             {"type": "done", "model": None}])
+            seen["tools"] += 1
+            n = seen["tools"]
+            return iter([
+                {"type": "text", "delta": "working"},
+                {"type": "tool_calls", "calls": [
+                    {"id": f"c{n}", "name": "read_file", "arguments": '{"path": "x"}'}]},
+                {"type": "done", "model": None}])
+
+        agent.engine.stream_chat = fake
+        trace = []
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=2, trace=trace))
+        finally:
+            agent.engine.stream_chat = orig
+        self.assertEqual(seen["none"], 1, "no closing call was made")
+        self.assertEqual(trace[-1]["text"], "Ran out. I changed two files.")
+
+
+    def test_discovery_is_offered_once_per_task_not_once_per_turn(self):
+        from backend import agent
+        seen = []
+        orig = agent.engine.stream_chat
+        turns = iter([[{"type": "text", "delta": "found it"}, {"type": "done", "model": None}]] * 6)
+
+        def fake(msgs, **k):
+            seen.append([m for m in msgs if m.get("role") == "system"
+                         and "project's own instructions" in (m.get("content") or "")])
+            return iter(next(turns))
+
+        agent.engine.stream_chat = fake
+        try:
+            msgs = [{"role": "system", "content": "base"}, {"role": "user", "content": "go"}]
+            list(agent.run_turn(msgs, project=r"C:\proj", max_steps=24))
+            msgs.append({"role": "assistant", "content": "found it"})
+            msgs.append({"role": "user", "content": "and now?"})
+            list(agent.run_turn(msgs, project=r"C:\proj", max_steps=24))
+        finally:
+            agent.engine.stream_chat = orig
+        self.assertEqual(len(seen[0]), 1, "the first turn never got the discovery note")
+        self.assertEqual(len(seen[1]), 0, "discovery was repeated on a later turn")
+
+
+    def test_a_turn_that_stops_talking_still_leaves_an_answer(self):
+        """The 24-step live probe ended on a tool result with no final text."""
+        from backend import agent
+        orig = agent.engine.stream_chat
+        n = {"tools": 0, "none": 0}
+
+        def fake(*a, **k):
+            if k.get("tools") is None:
+                n["none"] += 1
+                return iter([{"type": "text", "delta": "Read 4 files. No changes made."},
+                             {"type": "done", "model": None}])
+            n["tools"] += 1
+            if n["tools"] == 1:
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "c1", "name": "read_file", "arguments": '{"path": "x"}'}]},
+                    {"type": "done", "model": None}])
+            return iter([{"type": "done", "finish": "stop", "model": None}])
+
+        agent.engine.stream_chat = fake
+        trace = []
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=6, trace=trace))
+        finally:
+            agent.engine.stream_chat = orig
+        self.assertEqual(n["none"], 1, "a silent ending produced no closing call")
+        self.assertTrue(trace, "nothing was recorded")
+        self.assertTrue(trace[-1]["text"], "the turn ended with no answer to read")
+
+    def test_a_failing_closing_call_says_so(self):
+        from backend import agent
+        from backend.ai import engine as eng
+        orig = agent.engine.stream_chat
+        orig_err = eng.EngineError
+
+        def fake(*a, **k):
+            if k.get("tools") is None:
+                raise eng.EngineError("context too long")
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": "c1", "name": "read_file", "arguments": '{"path": "x"}'}]},
+                {"type": "done", "model": None}])
+
+        agent.engine.stream_chat = fake
+        try:
+            events = list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                         max_steps=1))
+        finally:
+            agent.engine.stream_chat = orig
+        errs = [e for e in events if e.get("type") == "error"]
+        self.assertTrue(errs, "the failure was swallowed and the turn just looked short")
+        self.assertIn("no closing report", errs[0]["message"])
+
+
+    def test_an_empty_closing_call_still_leaves_something_to_read(self):
+        """The live probe returned no text from its closing call. Blank is not ok."""
+        from backend import agent
+        orig = agent.engine.stream_chat
+        n = {"tools": 0, "none": 0}
+
+        def fake(*a, **k):
+            if k.get("tools") is None:
+                n["none"] += 1
+                return iter([{"type": "done", "finish": "stop", "model": None}])
+            n["tools"] += 1
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": f"c{n['tools']}", "name": "read_file",
+                 "arguments": '{"path": "x"}'}]},
+                {"type": "done", "model": None}])
+
+        agent.engine.stream_chat = fake
+        trace = []
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=2, trace=trace))
+        finally:
+            agent.engine.stream_chat = orig
+        self.assertTrue(n["none"], "no closing call was made")
+        self.assertTrue(trace[-1]["text"], "the turn ended blank again")
+        self.assertIn("tool calls", trace[-1]["text"])
+
+
+class TestThinkingLevels(Isolated):
+    """The thinking control has to reach the provider or it is decoration.
+
+    Measured on the live endpoint: every named effort produced 1.5k to 1.8k chars of
+    reasoning while 'none' produced zero, so a level that is never sent leaves a
+    model that thinks by default thinking away, whatever the UI says.
+    """
+
+    def test_off_maps_to_a_value_that_actually_disables(self):
+        from backend import config
+        self.assertEqual(config.reasoning_for("off"), "none")
+        self.assertIsNone(config.reasoning_for(""))
+
+    def test_named_levels_are_passed_through_unchanged(self):
+        from backend import config
+        for lvl in ("minimal", "low", "medium", "high", "xhigh", "max"):
+            self.assertEqual(config.reasoning_for(lvl), lvl,
+                             f"{lvl} was renamed before the provider could map it")
+
+    def _payload(self, engine, reasoning_flag, effort):
+        model = {"model": "m", "maxTokens": 100, "reasoning": reasoning_flag}
+        return engine._payload(model, [{"role": "user", "content": "x"}], False,
+                               None, None, None, effort)
+
+    def test_a_reasoning_model_gets_its_effort(self):
+        from backend.ai import engine
+        body = self._payload(engine, True, "max")
+        self.assertEqual(body.get("reasoning_effort"), "max")
+
+    def test_off_is_sent_even_when_the_model_is_not_marked_reasoning(self):
+        """The flag is a claim about capability. Turning thinking off cannot require it."""
+        from backend.ai import engine
+        body = self._payload(engine, False, "none")
+        self.assertEqual(body.get("reasoning_effort"), "none")
+
+    def test_an_unmarked_model_is_not_asked_to_grade_its_thinking(self):
+        from backend.ai import engine
+        body = self._payload(engine, False, "high")
+        self.assertNotIn("reasoning_effort", body)
+
+    def test_the_tools_loop_sends_the_chain_of_thought_back(self):
+        """With tools attached the reasoning of earlier turns has to travel too."""
+        from backend import agent
+        orig = agent.engine.stream_chat
+        sent = []
+        turns = iter([
+            [{"type": "reason", "delta": "I should list files first"},
+             {"type": "tool_calls", "calls": [
+                 {"id": "a", "name": "list_files", "arguments": '{}'}]},
+             {"type": "done", "model": None}],
+            [{"type": "text", "delta": "two files"}, {"type": "done", "model": None}],
+        ])
+
+        def fake(msgs, **k):
+            sent.append(msgs)
+            return iter(next(turns))
+
+        agent.engine.stream_chat = fake
+        try:
+            list(agent.run_turn([{"role": "user", "content": "go"}], project=None,
+                                max_steps=4))
+        finally:
+            agent.engine.stream_chat = orig
+        first = sent[1]
+        asst = next(m for m in first if m["role"] == "assistant" and m.get("tool_calls"))
+        self.assertEqual(asst.get("reasoning_content"), "I should list files first")
+
+    def test_stored_reasoning_is_replayed_only_for_a_thinking_model(self):
+        rows = [{"role": "user", "content": "go"},
+                {"role": "assistant", "content": "looked", "reason": "because",
+                 "tools": [{"id": "c1", "name": "list_files", "args": {},
+                            "result": "FILE a", "is_error": False}]}]
+        plain = __import__("backend.agent", fromlist=["x"]).transcript_messages(rows)
+        replayed = __import__("backend.agent", fromlist=["x"]).transcript_messages(
+            rows, reasoning=True)
+        a_plain = next(m for m in plain if m["role"] == "assistant")
+        a_rep = next(m for m in replayed if m["role"] == "assistant")
+        self.assertNotIn("reasoning_content", a_plain)
+        self.assertEqual(a_rep["reasoning_content"], "because")
+
+
+    def test_an_unsupported_name_is_clamped_to_one_the_model_lists(self):
+        """ollama resolves a name a model does not list to that model's default,
+        silently. deepseek-v4.1-flash lists low/high/max and nothing else."""
+        from backend import thinking
+        model = {"reasoning": True, "thinkingValues": [False, "low", "high", "max"]}
+        self.assertEqual(thinking.send(model, "max"), "max")
+        self.assertEqual(thinking.send(model, "high"), "high")
+        self.assertEqual(thinking.send(model, "low"), "low")
+        self.assertIn(thinking.send(model, "medium"), ("low", "high"))
+        self.assertNotIn(thinking.send(model, "xhigh"), ("xhigh", None),
+                         "xhigh is not in this model's list and would become its default")
+
+    def test_a_model_without_max_is_not_asked_for_max(self):
+        from backend import thinking
+        model = {"thinkingValues": ["low", "medium", "high"]}
+        self.assertEqual(thinking.send(model, "max"), "high")
+
+    def test_a_boolean_switch_is_passed_through(self):
+        """Values [false, true] means on or off, no ladder to clamp onto."""
+        from backend import thinking
+        model = {"thinkingValues": [False, True]}
+        self.assertEqual(thinking.send(model, "medium"), "medium")
+        self.assertEqual(thinking.send(model, "none"), "none")
+
+    def test_off_is_reported_as_unavailable_when_the_model_has_no_off(self):
+        from backend import thinking
+        self.assertFalse(thinking.supports_off({"thinkingValues": ["low", "high", "max"]}))
+        self.assertTrue(thinking.supports_off({"thinkingValues": [False, "low"]}))
+        self.assertTrue(thinking.supports_off({}), "never probed: ask anyway")
+
+    def test_the_discovery_is_cached_on_the_model(self):
+        """resolve_model must carry the probed values through, or the clamp has
+        nothing to read. Written here rather than read from a real models.json,
+        because this fixture runs with a temporary home."""
+        from backend import config
+        path = config.MODELS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"default": "p/m", "providers": {"p": {
+            "baseUrl": "https://example.invalid/v1", "apiKey": "k", "models": [
+                {"id": "m", "reasoning": True,
+                 "thinkingValues": [False, "low", "high", "max"],
+                 "thinkingDefault": "high"}]}}}, indent=2), encoding="utf-8")
+        model = config.resolve_model("p/m")
+        self.assertIn("thinkingValues", model)
+        self.assertIn("low", model["thinkingValues"])
+        self.assertEqual(model["thinkingDefault"], "high")
+        from backend import thinking
+        self.assertEqual(thinking.send(model, "xhigh"), "high")
+
+    def test_nothing_invented_when_a_model_was_never_probed(self):
+        from backend import thinking
+        self.assertEqual(thinking.send({"reasoning": True}, "high"), "high")
+        self.assertIsNone(thinking.send({"reasoning": True}, None))
+
+
+class TestThinkingDiscovery(Isolated):
+    """Levels are measured, not assumed. Each provider shape is simulated here so the
+    measuring logic is tested without a network."""
+
+    def _patch(self, thinking, table):
+        orig = thinking._ask
+        thinking._ask = lambda ref, effort, tokens=1500: table.get(
+            effort or "__none__", {"ok": False, "error": "simulated down"})
+        self.addCleanup(setattr, thinking, "_ask", orig)
+
+    def test_a_graded_provider_is_offered_a_ladder(self):
+        from backend import thinking
+        self._patch(thinking, {
+            "__none__": {"ok": True, "reasoning": 700, "content": 40},
+            "none": {"ok": True, "reasoning": 0, "content": 30},
+            "low": {"ok": True, "reasoning": 300, "content": 40},
+            "high": {"ok": True, "reasoning": 900, "content": 40},
+        })
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"})
+        self.assertTrue(found["ok"])
+        self.assertEqual(found["source"], "probe")
+        self.assertTrue(found["graded"])
+        self.assertIn(False, found["values"])
+        self.assertIn("low", found["values"])
+        self.assertEqual(thinking.levels({"thinkingValues": found["values"]}),
+                         ["default", "off", "low", "high"])
+
+    def test_a_provider_that_accepts_words_and_ignores_them_gets_no_ladder(self):
+        """This is the old bug in provider form: identical traces for every name."""
+        from backend import thinking
+        same = {"ok": True, "reasoning": 512, "content": 20}
+        self._patch(thinking, {"__none__": same, "low": same, "high": same,
+                               "none": {"ok": True, "reasoning": 0, "content": 20}})
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"})
+        self.assertFalse(found["graded"], "equal traces were called a ladder")
+        self.assertEqual(found["values"], [True, False],
+                         "names that did nothing were still offered as levels")
+        self.assertEqual(thinking.levels({"thinkingValues": found["values"]}),
+                         ["default", "off", "on"],
+                         "a boolean switch offers on and off, and nothing else")
+
+    def test_a_provider_that_rejects_the_parameter_offers_only_default(self):
+        from backend import thinking
+        self._patch(thinking, {"__none__": {"ok": True, "reasoning": 0, "content": 12},
+                               "low": {"ok": False, "status": 400, "error": "unknown field"},
+                               "high": {"ok": False, "status": 400, "error": "unknown field"},
+                               "none": {"ok": False, "status": 400, "error": "unknown field"}})
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"})
+        self.assertTrue(found["ok"])          # a refusal is an answer
+        self.assertEqual(found["values"], [])
+        self.assertEqual(thinking.levels({"thinkingValues": [], "thinkingSource": "probe"}),
+                         ["default"], "only 'default' is honest here")
+
+    def test_a_model_that_thinks_unasked_is_recorded_as_thinking(self):
+        from backend import thinking
+        self._patch(thinking, {
+            "__none__": {"ok": True, "reasoning": 900, "content": 20},
+            "none": {"ok": True, "reasoning": 0, "content": 20},
+            "low": {"ok": True, "reasoning": 400, "content": 20},
+            "high": {"ok": True, "reasoning": 1000, "content": 20}})
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"})
+        self.assertIn(True, found["values"], "thinking by default was lost")
+
+    def test_an_unreachable_model_fails_loudly(self):
+        from backend import thinking
+        self._patch(thinking, {})
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"})
+        self.assertFalse(found["ok"])
+
+    def test_no_published_list_and_probe_declined_costs_nothing(self):
+        """Bulk import must not spend requests per model."""
+        from backend import thinking
+        self._patch(thinking, {"__none__": {"ok": True, "reasoning": 5, "content": 5}})
+        found = thinking.detect({"baseUrl": "https://api.example.invalid/v1"}, probe=False)
+        self.assertFalse(found["ok"])
+        self.assertIn("probing was declined", found["error"])
+
+    def test_detection_is_written_once_and_read_back(self):
+        from backend import config, thinking
+        path = config.MODELS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"default": "p/m", "providers": {"p": {
+            "baseUrl": "https://api.example.invalid/v1", "apiKey": "k", "models": [
+                {"id": "m"}]}}}, indent=2), encoding="utf-8")
+        self.assertFalse(thinking.known("p/m"))
+        self._patch(thinking, {"__none__": {"ok": True, "reasoning": 800, "content": 9},
+                               "none": {"ok": True, "reasoning": 0, "content": 9},
+                               "low": {"ok": True, "reasoning": 200, "content": 9},
+                               "high": {"ok": True, "reasoning": 900, "content": 9}})
+        first = thinking.ensure("p/m")
+        self.assertTrue(first["ok"]) and self.assertFalse(first["cached"])
+        again = thinking.ensure("p/m")
+        self.assertTrue(again["cached"], "a cached model was measured twice")
+        self.assertEqual(thinking.levels("p/m"), ["default", "off", "low", "high"])
+        # a saved preference naming a rung the model lacks is clamped, not forwarded
+        self.assertEqual(thinking.send("p/m", "xhigh"), "high")
+
+
+    def test_the_whole_record_survives_the_registry(self):
+        """resolve_model projects a small list of keys. A field it drops is a field
+        no caller can read, which is how 'published' looked like nothing at all."""
+        from backend import config, thinking
+        path = config.MODELS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"default": "p/m", "providers": {"p": {
+            "baseUrl": "https://ollama.com/v1", "apiKey": "k", "models": [
+                {"id": "m", "reasoning": True, "thinkingValues": [False, "low", "max"],
+                 "thinkingDefault": "low", "thinkingSource": "show",
+                 "thinkingGraded": True}]}}}, indent=2), encoding="utf-8")
+        m = thinking.meta("p/m")
+        self.assertEqual(m["source"], "show")
+        self.assertTrue(m["graded"])
+        self.assertEqual(m["default"], "low")
+        self.assertTrue(m["known"])
+
+
+class TestSwitchHandler(Isolated):
+    """A settings message names the session it belongs to, over a real socket.
+
+    switch used to apply model/mode/thinking to whichever session was open when the
+    target id could not be found, so a stale or mistyped id quietly reconfigured a
+    different conversation. There was no websocket test anywhere, so nothing could
+    notice; this builds one.
+    """
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        return TestClient(app)
+
+    def _until(self, ws, want, limit=10):
+        for _ in range(limit):
+            msg = ws.receive_json()
+            if msg.get("type") == want:
+                return msg
+        self.fail("never saw a " + want + " message")
+
+    def test_an_unknown_target_leaves_the_open_session_alone(self):
+        keep = "ollama_cloud/deepseek-v4.1-flash"
+        rec = store.create(title="mine", model=keep, mode="agent", thinking="high")
+        store.save(rec)
+        with self._client() as c:
+            with c.websocket_connect("/ws/" + rec["id"]) as ws:
+                self._until(ws, "session_ready")
+                ws.send_json({"type": "switch", "sid": "no-such-session",
+                              "model": "evil/model", "mode": "chat",
+                              "thinking": "off"})
+                # Take the single reply and look at it, rather than scanning for the
+                # message I expect. Waiting for a message that a broken build never
+                # sends hangs the test instead of failing it.
+                reply = ws.receive_json()
+        self.assertEqual(reply.get("type"), "error", str(reply)[:120])
+        self.assertIn("unknown session", reply.get("message", ""))
+        after = store.get(rec["id"])
+        self.assertEqual(after["model"], keep)
+        self.assertEqual(after["mode"], "agent")
+        self.assertEqual(after["thinking"], "high")
+
+    def test_a_real_target_is_the_one_that_gets_the_settings(self):
+        a = store.create(title="a", model="m/a", thinking="high")
+        b = store.create(title="b", model="m/b", thinking="high")
+        store.save(a)
+        store.save(b)
+        with self._client() as c:
+            with c.websocket_connect("/ws/" + a["id"]) as ws:
+                self._until(ws, "session_ready")
+                ws.send_json({"type": "switch", "sid": b["id"], "thinking": "off"})
+                self._until(ws, "hello")
+        self.assertEqual(store.get(b["id"])["thinking"], "off")
+        self.assertEqual(store.get(a["id"])["thinking"], "high",
+                         "the session left behind was the one edited")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -314,14 +314,28 @@ def call_tool(name: str, args: dict, ctx: dict):
 
 
 def token_impact() -> dict:
-    """Startup-prompt cost of the enabled plugins, for the dashboard."""
+    """Startup-prompt cost of the plugins, measured for the dashboard.
+
+    Measured from the schemas a plugin actually contributes, not from the budget it
+    declares. Both bundled plugins declare zero, so the panel reported a false zero
+    for an enabled plugin that was really adding 132 or 419 tokens — and the whole
+    point of showing the number is that you see it before you switch it on.
+    Disabled plugins are priced too, since that is the figure you need in order to
+    decide.
+    """
     rows = []
     total = 0
     for meta in list_plugins():
-        cost = int(meta.get("token_budget") or 0) if meta.get("enabled") else 0
-        total += cost
+        measured = tokens.estimate_tools_tokens(tool_schemas(meta["id"]))
+        # A plugin may inject more than its tools, and its own declaration is the
+        # only place it can say so; take whichever is larger rather than guess.
+        priced = max(measured, int(meta.get("token_budget") or 0))
+        if meta.get("enabled"):
+            total += priced
         rows.append({"id": meta["id"], "name": meta["name"],
-                     "enabled": meta["enabled"], "tokens": cost})
+                     "enabled": bool(meta.get("enabled")),
+                     "tokens": priced if meta.get("enabled") else 0,
+                     "tokens_if_enabled": priced})
     return {"rows": rows, "total": total,
             "tools_tokens": tokens.estimate_tools_tokens(collect_tools()),
             "exact": tokens.exact()}

@@ -38,7 +38,7 @@ def list_sessions() -> list[dict]:
 
 
 def create(title: str = "New session", model: str = "", mode: str = "agent",
-           thinking: str = "medium", project: str = "", sid: str = "") -> dict:
+           thinking: str = "default", project: str = "", sid: str = "") -> dict:
     """Make a session. Only ever called for an explicit request.
 
     A session exists because the user started one. Nothing on a page load, a
@@ -106,7 +106,7 @@ def duplicate(sid: str, suffix: str = " (copy)", up_to=None) -> dict | None:
         msgs = msgs[:up_to]
     rec = create(title=f"{(src.get('title') or 'Session')}{suffix}",
                  model=src.get("model") or "", mode=src.get("mode") or "agent",
-                 thinking=src.get("thinking") or "medium",
+                 thinking=src.get("thinking") or "default",
                  project=src.get("project") or "")
     rec["messages"] = [dict(m) for m in msgs]
     return save(rec)

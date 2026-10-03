@@ -281,18 +281,31 @@ class TestSandbox(Isolated):
                          "the project is writable and that must be reported, not hidden")
         self.assertTrue(res["notes"], "limits that are not enforced must be stated")
 
-    def test_a_backend_with_no_adapter_refuses_and_does_not_run(self):
+    def test_a_refused_backend_does_not_run_the_command(self):
+        # The container backend has an adapter now, so unavailability has to be
+        # forced rather than assumed from the host: on a machine with Docker
+        # installed this command would otherwise really run. What is being pinned
+        # down is that a refusal has no side effects.
         from backend import sandbox
+        orig = sandbox._container_runtime
+        sandbox._container_runtime = lambda: ""
+        self.addCleanup(setattr, sandbox, "_container_runtime", orig)
         marker = self.proj / "should-not-exist.txt"
         res = sandbox.run(f"echo x > {marker.name}", project=str(self.proj),
                           backend="container")
         self.assertFalse(res["ok"])
         self.assertFalse(marker.exists(), "a refused command must not have run")
 
-    def test_an_unavailable_backend_refuses(self):
+    def test_an_unavailable_backend_refuses_and_says_how_to_fix_it(self):
         from backend import sandbox
+        orig = sandbox._container_runtime
+        sandbox._container_runtime = lambda: ""
+        self.addCleanup(setattr, sandbox, "_container_runtime", orig)
         res = sandbox.run("echo x", project=str(self.proj), backend="container")
         self.assertFalse(res["ok"])
+        # A dead end with no exit is worse than the refusal itself.
+        self.assertIn("container", res["stderr"])
+        self.assertTrue(res["blocked"], "the reason must reach the user, not just the log")
 
     def test_an_unknown_backend_refuses(self):
         from backend import sandbox

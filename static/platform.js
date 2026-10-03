@@ -149,6 +149,8 @@
         ${row('Prompt tokens billed', d.prompt_tokens_display)}
         ${row('Completion tokens billed', d.completion_tokens_display)}
         ${row('Total billed', d.total_tokens_display)}
+        ${row('Served from provider cache', d.cached_tokens_display,
+              (d.cache_hit_rate || 0) + '% of prompt tokens')}
         ${row('MCP tool calls', d.mcp_calls)}
       </div>
       <div class="ho-section">Startup prompt</div>
@@ -157,6 +159,12 @@
         ${row('Built-in tool schemas', d.tool_schema_tokens_display, d.tool_count + ' tools')}
         ${row('MCP schemas injected', d.mcp_injected_tokens_display, 'activated or pinned')}
         ${row('Memory block', d.memory_tokens_display, d.memory_enabled ? 'vault on' : 'vault off')}
+        ${row('Project instructions', d.instruction_tokens_display,
+              ((d.instructions || {}).mode || 'index') + ' mode · ' + ((d.instructions || {}).note || ''))}
+        ${row('Task list', d.task_tokens_display, 'session state, survives compaction')}
+        ${row('Prompt caching', (d.caching || {}).active ? 'active' : 'off',
+              ((d.caching || {}).sends_markers ? 'breakpoints sent · ' : 'provider-side · ')
+              + ((d.caching || {}).summary || ''))}
       </div>
       <div class="ho-section">Context discipline</div>
       <div class="tok-table">
@@ -211,6 +219,7 @@
     const gw = await api('/api/gateways');
     const lg = await api('/api/learning');
     const an = await api('/api/analyzer').catch(() => ({ enabled: false }));
+    const gu = await api('/api/guidance').catch(() => ({ enabled: true, prompt_chars: 979 }));
     const dp = await api('/api/deps');
     const mg = await api('/api/migrate/hint');
     const sm = c.sandbox_mode || {};
@@ -299,6 +308,11 @@
         <div class="tok-row"><span class="tok-label">Proposals made</span><span class="tok-value">${an.proposals_made || 0}</span></div>
         <div class="tok-row"><span class="tok-label">Rules seen before</span><span class="tok-value">${an.rules_seen || 0}</span></div>
       </div>
+
+      <div class="mcp-add">
+        <label class="ho-sub sm"><input type="checkbox" id="capGuidance"${gu.enabled ? ' checked' : ''}> Guide the agent mid-turn</label>
+      </div>
+      <div class="ho-sub sm">Adds a short note on the step that needs one: after a tool fails, when the same call comes again, as the step budget runs out, and when a step plans instead of acting. Standing prompt ${gu.prompt_chars || 979} chars, unchanged by this.</div>
 
       <div class="ho-section">Proposals <span class="ho-count">${(lg.artifacts || []).length}</span></div>
       <div class="mem-list">${(lg.artifacts || []).map((p) =>
@@ -417,6 +431,14 @@
       if (!r.ok) { toast(r.error || 'could not save', true); return; }
       toast('learning set to ' + r.learning.id);
       renderCapabilities();
+    });
+
+    // ── per-turn guidance ──
+    const guBox = $('#capGuidance');
+    if (guBox) guBox.addEventListener('change', async () => {
+      const r = await post('/api/guidance', { enabled: guBox.checked });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('mid-turn guidance ' + (r.enabled ? 'on' : 'off'));
     });
 
     // ── the background analyzer ──

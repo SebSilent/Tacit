@@ -97,12 +97,41 @@ def count() -> int:
         return 0
 
 
-def clear() -> dict:
+def archives() -> list[dict]:
+    """Retired ledgers, newest first. Nothing is deleted, only turned over."""
+    out = []
     try:
-        config.AUDIT_FILE.unlink(missing_ok=True)
+        for p in sorted(config.HOME.glob(config.AUDIT_FILE.name + ".*"), reverse=True):
+            try:
+                out.append({"name": p.name, "bytes": p.stat().st_size,
+                            "modified": p.stat().st_mtime})
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def clear() -> dict:
+    """Retire the active ledger by renaming it, then start a fresh one.
+
+    The ledger is described as append-only and nothing in it is ever edited or
+    removed, so "clear" cannot mean delete. The old file is kept under a
+    timestamped name and the rotation itself is the first entry in the new one,
+    so the history stays complete and the fact that it was turned over is on the
+    record too.
+    """
+    try:
+        if not config.AUDIT_FILE.exists():
+            return {"ok": True, "rotated": "", "rows": 0}
+        rows = count()
+        archived = config.AUDIT_FILE.with_name(f"{config.AUDIT_FILE.name}.{int(time.time())}")
+        config.AUDIT_FILE.replace(archived)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
-    return {"ok": True}
+    record("audit_rotated", backend="audit", status="ok",
+           archived=archived.name, rows=rows)
+    return {"ok": True, "rotated": archived.name, "rows": rows}
 
 
 def export(limit: int = LIMIT) -> str:

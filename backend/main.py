@@ -69,9 +69,24 @@ if config.STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(config.STATIC_DIR)), name="static")
 
 
+def _loopback(host: str) -> bool:
+    return str(host or "").strip().lower() in ("127.0.0.1", "localhost", "::1", "")
+
+
 def main():
     import uvicorn
-    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="info")
+    host = config.HOST
+    if not _loopback(host):
+        # There is no authentication, and startup is the moment the person running
+        # it can still do something about that. The README says so in prose; a
+        # banner says it where it is actionable, and names the variable to set.
+        # Their own access log showing a LAN address driving the agent is the
+        # reason this is printed rather than left to the documentation.
+        print(f"[tacit] WARNING: bound to {host} and Tacit has no authentication.")
+        print("[tacit]          Anyone who can reach this port can drive the agent, "
+              "read your files and run commands.")
+        print("[tacit]          Set TACIT_HOST=127.0.0.1 to keep it on this machine.")
+    uvicorn.run(app, host=host, port=config.PORT, log_level="info")
 
 
 if __name__ == "__main__":

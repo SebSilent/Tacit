@@ -179,7 +179,7 @@ function newSession(silent) {
     id: uuid(), title: 'New session',
     model: localStorage.getItem('tacit.model') || info.default || '',
     mode: localStorage.getItem('tacit.mode') || 'chat',
-    thinking: localStorage.getItem('tacit.thinking') || info.default_thinking || 'medium',
+    thinking: localStorage.getItem('tacit.thinking') || info.default_thinking || 'default',
     // No project ⇒ no working directory at all. Nothing directory-related is
     // sent to the server or injected into the prompt; the model picks its own
     // paths. (localStorage holds a choice only if the user actually made one.)
@@ -616,7 +616,10 @@ function handle(m) {
       handleRpcResponse(m);
       break;
     case 'notify':
-      toast(m.message);
+      // A cost warning and a compaction notice are not the same kind of thing as
+      // ordinary chatter. The governor's warnings are the ones worth noticing
+      // while a turn is still running, so they get the emphatic toast.
+      toast(m.message, m.level === 'warn');
       break;
     case 'log':
       // raw agent stderr — surface only when clearly an error
@@ -1541,20 +1544,45 @@ function renderModelSelect() {
 }
 function renderModelPickers() { renderProviderSelect(); renderModelSelect(); }
 
-function renderThinkSelect() {
-  const levels = (info.thinking_levels && info.thinking_levels.length)
-    ? info.thinking_levels
-    : ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-  if (thinkSelect.options.length !== levels.length) {
+// Levels are per model, learned once, cached here so switching back does not ask
+// again. There is deliberately no preset list to fall back to: a guessed rung is
+// what this replaced.
+const thinkCache = {};
+async function renderThinkSelect() {
+  const s = cur();
+  const ref = (s && s.model) || info.default || '';
+  let levels = thinkCache[ref];
+  if (!levels) {
+    try {
+      const r = await fetch('/api/harness/thinking?ensure=1&ref=' + encodeURIComponent(ref));
+      const d = await r.json();
+      levels = (d.thinking_levels && d.thinking_levels.length) ? d.thinking_levels : ['default'];
+    } catch (e) {
+      levels = ['default'];
+    }
+    thinkCache[ref] = levels;
+  }
+  if (thinkSelect.dataset.ref !== ref || thinkSelect.options.length !== levels.length) {
+    thinkSelect.dataset.ref = ref;
     thinkSelect.innerHTML = '';
     for (const l of levels) {
       const opt = document.createElement('option');
-      opt.value = l; opt.textContent = l;
+      opt.value = l;
+      opt.textContent = l === 'default' ? 'model default' : l;
       thinkSelect.appendChild(opt);
     }
   }
-  const s = cur();
-  if (s && s.thinking) thinkSelect.value = s.thinking;
+  const want = (s && s.thinking && levels.indexOf(s.thinking) >= 0) ? s.thinking : levels[0];
+  thinkSelect.value = want;
+  // The record is what gets sent, so a record naming a rung this model does not have
+  // would run at a level the interface is not showing. Adopt what is displayed.
+  if (s && s.thinking !== want) {
+    s.thinking = want;
+    localStorage.setItem('tacit.thinking', want);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'set_thinking_level', level: want }));
+    }
+  }
 }
 
 async function loadInfo() {

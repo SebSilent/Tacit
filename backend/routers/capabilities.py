@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import audit, config, providers
+from .. import audit, config, project_context, providers
 
 router = APIRouter()
 
@@ -97,6 +97,34 @@ async def set_learning(request: Request):
     providers.save({"learning": {"mode": mode}})
     audit.record("learning_mode_changed", backend=mode, mode=mode, status="ok")
     return _ok(learning=providers.resolve("learning"))
+
+
+@router.get("/api/context/instructions")
+async def instructions_state(project: str = ""):
+    """What the project's own instruction files would cost, in each mode.
+
+    The price is reported before the mode is switched on, which is the rule every
+    other prompt-enlarging feature here follows.
+    """
+    return _ok(settings=project_context.settings(),
+               preview=project_context.cost_preview(project or None))
+
+
+@router.post("/api/context/instructions")
+async def set_instructions(request: Request):
+    body = await request.json()
+    mode = str(body.get("instructions") or "").strip().lower()
+    if mode and mode not in project_context.MODES:
+        return _fail(f"instructions must be one of: {', '.join(project_context.MODES)}")
+    before = project_context.settings()
+    now = project_context.save({k: v for k, v in
+                                (("instructions", mode),
+                                 ("instruction_budget", body.get("instruction_budget")))
+                                if v not in (None, "")})
+    audit.record("project_instructions_changed", backend="context", mode=now["mode"],
+                 status="ok", was=before["mode"], budget=now["budget"])
+    return _ok(settings=now,
+               preview=project_context.cost_preview(body.get("project") or None))
 
 
 @router.post("/api/capabilities/profile")
@@ -237,6 +265,30 @@ async def learning_delete(artifact_id: str):
     return res if res.get("ok") else _fail(res.get("error") or "could not delete it")
 
 
+# ── per-turn guidance ────────────────────────────────────────────────
+# Short blocks appended at the step that needs one: after a tool fails, when work
+# is being repeated, as the step budget runs out, and when a step planned instead
+# of acting. The standing prompt carries none of it, which is why turning this on
+# or off changes no byte of the system prompt.
+
+@router.get("/api/guidance")
+async def guidance_status():
+    from ..ai import prompts
+
+    cfg = providers.load().get("guidance") or {}
+    return _ok(enabled=bool(cfg.get("enabled", True)),
+               prompt_chars=len(prompts.system_prompt("", False, chat=False)))
+
+
+@router.post("/api/guidance")
+async def guidance_configure(request: Request):
+    body = await request.json()
+    on = bool(body.get("enabled"))
+    providers.save({"guidance": {"enabled": on}})
+    audit.record("guidance_settings", backend="guidance", status="ok", enabled=on)
+    return _ok(enabled=on)
+
+
 # ── the background analyzer ───────────────────────────────────────────
 # It finds learning moments and writes proposals. Approving one is the only thing
 # that ever reaches memory or a skill, and that stays a person's click.
@@ -335,9 +387,13 @@ async def gateway_run(gateway_id: str, request: Request):
 
 @router.get("/api/audit")
 async def read_audit(limit: int = 200, session: str = "", event: str = ""):
-    return _ok(entries=audit.recent(limit, session, event), total=audit.count())
+    return _ok(entries=audit.recent(limit, session, event), total=audit.count(),
+               archives=audit.archives())
 
 
 @router.post("/api/audit/clear")
 async def clear_audit():
-    return audit.clear()
+    # Rotates the ledger rather than deleting it. The README's claim is that
+    # nothing in it is ever edited or removed, so this endpoint has to honour it.
+    res = audit.clear()
+    return res if res.get("ok") else _fail(res.get("error") or "could not rotate the ledger")

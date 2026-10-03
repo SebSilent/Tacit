@@ -3,13 +3,32 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, skills, store, vcs
+from .. import agent, anthropic, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, project_context, skills, store, vcs
 from .. import tokens as token_mod
 from ..ai import engine, prompts
 
 router = APIRouter()
 
-THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+# The old fixed vocabulary. Nothing in the interface is built from it any more: a
+# level is offered only after the model has been seen to accept it. It survives so a
+# preference saved before this change is not rejected as invalid input.
+THINKING_LEVELS = ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+def thinking_meta(ref: str | None = None) -> dict:
+    from .. import thinking
+
+    return thinking.meta(ref)
+
+
+def _thinking_block(ref: str | None = None) -> dict:
+    from .. import thinking
+
+    return {
+        "thinking_levels": thinking.levels(ref),
+        "thinking_info": thinking.meta(ref),
+        "thinking_supports_off": thinking.supports_off(ref),
+    }
 
 
 def _ok(**kw):
@@ -39,8 +58,9 @@ async def info():
         "providers": list((reg.get("providers") or {}).keys()),
         "llm_url": (resolved or {}).get("baseUrl", ""),
         "llm_online": True,
-        "thinking_levels": THINKING_LEVELS,
-        "default_thinking": config.prefs().get("thinking", "medium"),
+        "thinking_levels": _thinking_block(default or (resolved or {}).get("ref"))["thinking_levels"],
+        "thinking_info": thinking_meta(default or (resolved or {}).get("ref")),
+        "default_thinking": config.prefs().get("thinking", "default"),
     }
 
 
@@ -169,7 +189,39 @@ async def probe_provider(name: str):
     except engine.EngineError as e:
         return {"ok": False, "error": str(e), "ids": []}
     have = {m.get("id") for m in (spec.get("models") or [])}
-    return _ok(ids=ids, models=ids, new=[i for i in ids if i not in have])
+    # Reconcile in both directions. Additions are offered for import; entries the
+    # provider stopped listing are marked, because a retired model left in the picker
+    # fails only later, at send time, with a status code nobody explains.
+    gone = sorted(str(mid) for mid in have if mid and mid not in ids)
+    changed = False
+    for m in (spec.get("models") or []):
+        want = m.get("id") in gone
+        if bool(m.get("stale")) != want:
+            m["stale"] = want
+            changed = True
+    if changed:
+        config.save_registry(reg)
+    return _ok(ids=ids, models=ids, new=[i for i in ids if i not in have], gone=gone)
+
+
+@router.post("/api/providers/{name}/prune")
+async def prune_models(name: str):
+    """Drop the entries this provider stopped listing.
+
+    Marking happens automatically on probe; deleting stays a click. A model that
+    comes back should not have to be re-imported, and a person may still want the
+    row for the history that references it.
+    """
+    reg = config.registry()
+    spec = (reg.get("providers") or {}).get(name)
+    if not spec:
+        return _fail("provider not found")
+    rows = spec.get("models") or []
+    removed = [m.get("id") for m in rows if m.get("stale")]
+    if removed:
+        spec["models"] = [m for m in rows if not m.get("stale")]
+        config.save_registry(reg)
+    return _ok(removed=removed, left=len(spec["models"]))
 
 
 @router.post("/api/providers/{name}/import")
@@ -198,6 +250,17 @@ async def import_models(name: str, request: Request):
                                    "maxTokens": d.get("maxTokens") or 0})
             added.append(mid)
     config.save_registry(reg)
+    # Published thinking controls are attached for free where the provider exposes
+    # them. The probe path is deliberately not used here: importing thirty models
+    # should not silently spend thirty sets of requests.
+    if added and "ollama" in str(spec.get("baseUrl") or ""):
+        from .. import thinking
+        for mid in added:
+            try:
+                ref = f"{name}/{mid}"
+                thinking.save(ref, thinking.detect(ref, probe=False))
+            except Exception:  # noqa: BLE001
+                pass
     return _ok(added=added)
 
 
@@ -208,8 +271,21 @@ async def set_default(request: Request):
     reg = config.registry()
     if not ref or not config.resolve_model(ref):
         return _fail("unknown model")
+    pid, _, mid = ref.partition("/")
+    entry = next((m for m in ((reg.get("providers") or {}).get(pid) or {}).get("models") or []
+                  if m.get("id") == mid), {})
+    if entry.get("stale"):
+        # Better to say it now than to fail mid-turn with a 410 nobody explains.
+        return _fail("%s is no longer offered by %s" % (mid, pid))
     reg["default"] = ref
     config.save_registry(reg)
+    # Learning what this model can do is worth a few small requests the first time
+    # a person chooses it, and only the once: the answer is cached on the model.
+    try:
+        from .. import thinking
+        thinking.ensure(ref)
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "default": ref}
 
 
@@ -325,13 +401,58 @@ async def token_dashboard(sid: str = "", project: str = ""):
         dash["actual_startup"] -= dash["memory_tokens"]
         dash["memory_tokens"] = 0
         dash["saved_by_discipline"] = max(0, dash["full_context_baseline"] - dash["actual_startup"])
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "base_prompt_tokens",
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
+                "base_prompt_tokens",
                 "tool_schema_tokens", "mcp_discovered_tokens", "mcp_injected_tokens",
                 "memory_tokens", "saved_lazy_tools", "saved_memory_budget",
                 "saved_compaction", "saved_subagent", "saved_total",
                 "full_context_baseline", "actual_startup", "saved_by_discipline"):
         dash[key + "_display"] = token_mod.label(dash.get(key) or 0)
     dash["exact"] = token_mod.exact()
+    dash["cache_hit_rate"] = dash.get("cache_hit_rate") or 0.0
+    # Both of these enlarge the starting prompt, so both are reported rather than
+    # folded silently into the base figure. The instruction block is per-project;
+    # the task list exists only once something is in it.
+    m = metrics.get(rec or {})
+    dash["instruction_tokens"] = m["instruction_tokens"]
+    dash["instruction_tokens_display"] = token_mod.label(m["instruction_tokens"])
+    dash["task_tokens"] = m["task_tokens"]
+    dash["task_tokens_display"] = token_mod.label(m["task_tokens"])
+    try:
+        dash["instructions"] = project_context.cost_preview(project or None)
+    except Exception:  # noqa: BLE001
+        dash["instructions"] = {}
+    # Which caching strategy applies to the model in use, and why. A provider that
+    # caches automatically needs nothing sent; one that does not gets breakpoints;
+    # and saying which is which is the same rule the sandbox follows when it reports
+    # `mechanism: none` rather than implying a boundary it cannot enforce.
+    try:
+        resolved = config.resolve_model((rec or {}).get("model")) or {}
+        kind = anthropic.flavour(resolved)
+        markers = anthropic.cache_enabled(resolved)
+        dash["caching"] = {
+            "mode": config.PROMPT_CACHE,
+            "flavour": kind,
+            "breakpoints": bool(markers and kind == "anthropic"),
+            "passthrough": bool(markers and kind == "openrouter"),
+            "automatic": kind == "openai",
+            # "active" means caching is in play by some mechanism, not that Tacit
+            # sent markers. An OpenAI-compatible endpoint caches its prefix on its
+            # own — a measured 71% hit rate on one — and reporting that as inactive
+            # would understate what the user is actually getting.
+            "active": bool(markers or kind == "openai"),
+            "sends_markers": bool(markers),
+            "summary": {
+                "anthropic": "native Messages API — cache breakpoints sent on tools, "
+                             "system and the last message",
+                "openrouter": "OpenAI shape — one breakpoint on the system block, "
+                              "forwarded to Anthropic models",
+                "openai": "OpenAI shape — the provider caches the prefix itself; "
+                          "nothing added to the request",
+            }.get(kind, ""),
+        }
+    except Exception:  # noqa: BLE001
+        dash["caching"] = {}
     dash["mcp"] = mcp
     dash["memory"] = mem_stats
     dash["plugins"] = plugin_manager.token_impact()
@@ -378,9 +499,11 @@ async def assistant_state(sid: str):
     cfg = assistant.settings_of(rec)
     return {"ok": True, "messages": rec.get("assistant") or [], "settings": cfg,
             "preview": assistant.preview(rec, cfg),
-            "models": config.model_list(), "thinking_levels": THINKING_LEVELS,
+            "models": config.model_list(),
+            "thinking_levels": _thinking_block(rec.get("model") or None)["thinking_levels"],
+            "thinking_info": thinking_meta(rec.get("model") or None),
             "session_model": rec.get("model") or "",
-            "session_thinking": rec.get("thinking") or "medium"}
+            "session_thinking": rec.get("thinking") or "default"}
 
 
 @router.post("/api/assistant/{sid}/settings")
@@ -482,19 +605,55 @@ async def delete_session(sid: str):
 
 
 @router.get("/api/harness/thinking")
-async def get_thinking():
-    return {"default_thinking": config.prefs().get("thinking", "medium"),
-            "levels": THINKING_LEVELS}
+async def get_thinking(ref: str = "", ensure: int = 0):
+    from .. import thinking
+
+    chosen = ref or config.prefs().get("model") or config.registry().get("default") or ""
+    found = None
+    if ensure and chosen and not thinking.known(chosen):
+        # Asked for explicitly by the picker the first time a model is shown, so the
+        # cost of measuring is paid once, in the view that needs the answer.
+        found = thinking.ensure(chosen)
+    return {"default_thinking": config.prefs().get("thinking", "default"),
+            "ref": chosen, **_thinking_block(chosen),
+            "detected": bool(found and found.get("ok") and not found.get("cached")),
+            "thinking_info": thinking.meta(chosen)}
 
 
 @router.post("/api/harness/thinking")
 async def set_thinking(request: Request):
+    from .. import thinking
+
     body = await request.json()
     level = body.get("default_thinking") or body.get("level")
-    if level not in THINKING_LEVELS:
-        return _fail("unknown level")
+    ref = body.get("ref") or config.registry().get("default") or ""
+    allowed = thinking.levels(ref)
+    if level not in allowed and level not in THINKING_LEVELS:
+        return _fail("this model does not offer " + str(level))
     config.save_prefs({"thinking": level})
-    return _ok(default_thinking=level)
+    return _ok(default_thinking=level, thinking_levels=allowed,
+               will_send=thinking.send(ref, config.reasoning_for(level)))
+
+
+@router.post("/api/thinking/detect")
+async def detect_thinking(request: Request):
+    """Ask the model what it can do, and cache the answer on it.
+
+    Free for ollama, which publishes a list. A handful of small requests for anyone
+    else, because an OpenAI-compatible endpoint that accepts a word and ignores it is
+    indistinguishable from one that supports it without trying it.
+    """
+    from .. import thinking
+
+    body = await request.json()
+    ref = (body.get("ref") or "").strip()
+    if not ref or not config.resolve_model(ref):
+        return _fail("unknown model")
+    found = thinking.detect(ref, deep=bool(body.get("deep")))
+    if not found.get("ok"):
+        return _fail(found.get("error") or "the model did not answer")
+    saved = thinking.save(ref, found)
+    return _ok(ref=ref, **saved, **_thinking_block(ref))
 
 
 @router.get("/api/harness/context-files")

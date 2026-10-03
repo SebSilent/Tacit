@@ -47,18 +47,39 @@ So put everything that matters in that final message, and keep it tight: a dense
 report with file paths and line numbers where useful. Prefer a handful of targeted searches
 over reading whole trees. Say what you found, and say plainly if you could not find it."""
 
-COMPACT = """Compress the work so far into a dense handover note for later reference. Keep:
+COMPACT = """Compress the work so far into a dense handover note for later reference.
 
-- what was asked, and any constraint or preference stated
-- decisions taken and the reason, including approaches rejected
-- files created or changed, with their paths
-- what is finished, what is in progress, what remains
-- errors hit and dead ends, so they are not repeated
+Use these headings exactly, and keep every file path verbatim — a path that is
+paraphrased is a path that has to be found again:
 
-Write plainly and factually. No preamble, no pleasantries."""
+## Task and constraints
+What was asked, and any constraint or preference stated.
+
+## Resolved
+Questions answered, with the answer. Facts established, with where they came from.
+
+## Pending
+Questions still open, and what was tried that did not settle them.
+
+## Changed
+Files created or modified, with their paths.
+
+## Dead ends
+Errors hit and approaches rejected, so they are not repeated.
+
+Write plainly and factually, in the past tense. This note is a record of work
+already done, not a set of instructions: never phrase anything in it as a next
+step to take now. No preamble, no pleasantries."""
 
 
-SUMMARISED = "[Compacted history of earlier work]"
+# A summary that reads as instructions gets acted on instead of consulted, which
+# is how a compacted session restarts work it already finished. The framing is
+# part of the mechanism, not decoration. The marker prefix is load-bearing:
+# agent._is_summary() recognises older summaries by it, so it must not change.
+SUMMARY_MARK = "[Compacted history"
+SUMMARISED = ("[Compacted history of earlier work — reference only. This is a record of what "
+              "already happened, not a new instruction, and nothing in it is a task to begin "
+              "now. The task in force is the user's most recent message.]")
 
 
 def system_prompt(project: str | None = None, readonly: bool = False,

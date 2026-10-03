@@ -94,6 +94,7 @@
         ${chk('include_user', 'Your prompts')}
         ${chk('include_assistant', 'Agent replies')}
         ${chk('include_meta', 'Session info')}
+        ${chk('include_tools', 'Tool calls', 'A one-line digest of the tools behind each answer. Off by default: it is the expensive part of the transcript.')}
         ${chk('tools', 'Read-only tools', 'Lets the assistant read files. Off by default: schemas are expensive.')}
       </div>
       <label class="chk as-turns">Last <input type="number" min="1" max="200" value="${settings.turns}" data-set="turns"> turns</label>
@@ -119,6 +120,10 @@
           return;
         }
         if (key === 'turns') { save({ turns: parseInt(el.value, 10) || 1 }); return; }
+        // A checkbox's .value is "on" whether it is ticked or not, so sending it
+        // made every switch sticky: bool("on") is True, and there was no way to
+        // turn anything back off.
+        if (el.type === 'checkbox') { save({ [key]: el.checked }); return; }
         save({ [key]: el.value });
       });
     });

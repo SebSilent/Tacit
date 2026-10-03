@@ -49,6 +49,11 @@ PORT = int(os.environ.get("TACIT_PORT", "8550"))
 
 AGENT_MAX_STEPS = int(os.environ.get("TACIT_MAX_STEPS", "24"))
 AGENT_CONTEXT_BUDGET = int(os.environ.get("TACIT_CONTEXT_BUDGET", "120000"))
+# Fallback above is used only when a model's window is unknown. When it is known
+# the window decides, clamped to these so a 1M-token model is not sent an
+# unbounded transcript and an 8k one is not sent more than it can hold.
+CONTEXT_BUDGET_MIN = int(os.environ.get("TACIT_CONTEXT_BUDGET_MIN", "24000"))
+CONTEXT_BUDGET_MAX = int(os.environ.get("TACIT_CONTEXT_BUDGET_MAX", "2000000"))
 TEMPERATURE = float(os.environ.get("TACIT_TEMPERATURE", "0.2"))
 TOOL_OUTPUT_LIMIT = int(os.environ.get("TACIT_TOOL_OUTPUT_LIMIT", "6000"))
 SHELL_TIMEOUT = int(os.environ.get("TACIT_SHELL_TIMEOUT", "180"))
@@ -57,8 +62,56 @@ SUBAGENT_MAX_STEPS = int(os.environ.get("TACIT_SUBAGENT_STEPS", "12"))
 SUBAGENT_RESULT_LIMIT = int(os.environ.get("TACIT_SUBAGENT_RESULT_LIMIT", "4000"))
 SUBAGENT_MAX_DEPTH = int(os.environ.get("TACIT_SUBAGENT_DEPTH", "1"))
 
-COMPACT_AT = float(os.environ.get("TACIT_COMPACT_AT", "0.65"))
+COMPACT_AT = float(os.environ.get("TACIT_COMPACT_AT", "0"))
+# What has to stay free is room for the next turn's work — the summary the model
+# has to write plus whatever the current step still produces. That is roughly
+# CONSTANT in tokens, not a fraction of the window, so a flat percentage is wrong
+# at both ends: 0.65 compacted a 1M-token model at 650K (throwing away 350K of
+# usable context) and an 8K model at 5.2K (leaving too little to answer in).
+# Claude Code derives its trigger the same way, at a ~33K reserve. Set
+# TACIT_COMPACT_AT explicitly to go back to a flat fraction.
+CONTEXT_RESERVE_TOKENS = int(os.environ.get("TACIT_CONTEXT_RESERVE", "33000"))
+# A floor, not a ceiling. On a large window the reserve is the binding constraint
+# and needs no cap on top — leaving 33K free *is* the safety margin, and capping at
+# 95% would override the reserve model exactly where it works best. The floor only
+# matters where the reserve exceeds the window itself, so a small model still gets
+# half its context to work in rather than a negative budget.
+CONTEXT_FILL_FLOOR = float(os.environ.get("TACIT_CONTEXT_FILL_FLOOR", "0.5"))
+
+# The tail is kept by token budget, not by message count. Six messages is six
+# huge tool results on one turn and six one-line answers on another; the first
+# blows the summary's input and the second throws away usable recent work.
+COMPACT_TAIL_TOKENS = int(os.environ.get("TACIT_COMPACT_TAIL_TOKENS", "8000"))
+COMPACT_TAIL_MIN_MESSAGES = int(os.environ.get("TACIT_COMPACT_TAIL_MIN", "4"))
+COMPACT_TAIL_MAX_MESSAGES = int(os.environ.get("TACIT_COMPACT_TAIL_MAX", "40"))
+# At most this share of the fill target is kept verbatim. The share is what makes
+# the tail work on a small window: an absolute 8,000-token tail is larger than an
+# 8K model's whole usable budget, and a tail that swallows everything leaves
+# nothing to summarise.
+COMPACT_TAIL_SHARE = float(os.environ.get("TACIT_COMPACT_TAIL_SHARE", "0.4"))
+# Old tool output is cleared before paying a model to summarise it. Often that
+# alone brings the transcript back under budget and the summary call is skipped.
+COMPACT_PRUNE_KEEP_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_KEEP", "400"))
+COMPACT_PRUNE_MIN_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_MIN", "1200"))
+# Summarising with the working model is expensive and can fail. A cheap model can
+# be nominated for the job alone, and a deterministic digest is the floor.
+COMPACT_MODEL = os.environ.get("TACIT_COMPACT_MODEL", "")
+# The summariser call must not itself overflow the window it is relieving.
+SUMMARY_INPUT_MAX_CHARS = int(os.environ.get("TACIT_SUMMARY_INPUT_MAX", "160000"))
 COMPACT_KEEP_TAIL = int(os.environ.get("TACIT_COMPACT_KEEP", "6"))
+# Compaction used to be checked once, before a turn began. A 134-call turn then
+# grew without anything ever re-measuring it, which is how one session reached
+# 1.9M prompt tokens with the dashboard's "saved by compaction" row still at zero.
+COMPACT_MID_TURN = os.environ.get("TACIT_COMPACT_MID_TURN", "1") not in ("0", "false", "")
+# Hard ceiling on tokens one turn may bill, 0 for none. Off by default like every
+# other constraint here; the fractions below are the always-on part, and they only
+# report.
+COST_WARN_FRACTIONS = tuple(
+    float(part) for part in
+    (p.strip() for p in os.environ.get("TACIT_COST_WARN", "0.25,0.5,0.75").split(","))
+    if part
+)
+TURN_TOKEN_BUDGET = int(os.environ.get("TACIT_TURN_TOKEN_BUDGET", "0"))
 
 PLAN_MAX_TASKS = int(os.environ.get("TACIT_PLAN_TASKS", "4"))
 PLAN_MAX_QUESTIONS = int(os.environ.get("TACIT_PLAN_QUESTIONS", "4"))
@@ -103,6 +156,31 @@ SNAPSHOT_MAX_FILES = int(os.environ.get("TACIT_SNAPSHOT_MAX_FILES", "3000"))
 
 
 
+def context_fill_target(window: int) -> int:
+    """How many tokens of conversation to allow before compacting.
+
+    The reserve model: fill the window up to a fixed token reserve, because what
+    must stay free is room for the next turn's work, and that is roughly constant
+    rather than proportional. Floored at half the window, where the reserve is
+    larger than the window itself. ``TACIT_COMPACT_AT`` set explicitly overrides
+    the whole thing with a flat fraction.
+
+        1,000,000 window ->   967,000  (96.7%)
+          200,000 window ->   167,000  (83.5%)
+           32,000 window ->    16,000  (50%, floored)
+            8,000 window ->     4,000  (50%, floored)
+    """
+    try:
+        window = int(window or 0)
+    except (TypeError, ValueError):
+        return 0
+    if window <= 0:
+        return 0
+    if COMPACT_AT > 0:
+        return max(1, int(window * min(COMPACT_AT, 1.0)))
+    return max(int(window * CONTEXT_FILL_FLOOR), window - CONTEXT_RESERVE_TOKENS)
+
+
 def load_env() -> None:
     try:
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
@@ -126,7 +204,7 @@ def ensure_home() -> None:
         MODELS_FILE.write_text(json.dumps({"default": "", "providers": {}}, indent=2), encoding="utf-8")
     if not PREFS_FILE.exists():
         PREFS_FILE.write_text(json.dumps({
-            "projectRoots": [], "model": "", "mode": "agent", "thinking": "medium",
+            "projectRoots": [], "model": "", "mode": "agent", "thinking": "default",
         }, indent=2), encoding="utf-8")
 
 
@@ -199,6 +277,7 @@ def model_list() -> list[dict]:
                 "provider": pid,
                 "model": m.get("id"),
                 "reasoning": bool(m.get("reasoning")),
+                "stale": bool(m.get("stale")),
                 "contextWindow": m.get("contextWindow") or 0,
                 "maxTokens": m.get("maxTokens") or 0,
                 "baseUrl": spec.get("baseUrl") or "",
@@ -229,6 +308,16 @@ def resolve_model(ref: str | None = None) -> dict | None:
         "contextWindow": meta.get("contextWindow") or 0,
         "maxTokens": meta.get("maxTokens") or 0,
         "reasoning": bool(meta.get("reasoning")),
+        # Read from /api/show and cached: what a model accepts, and what it does when
+        # nothing is sent. Without these a level the model does not list would be
+        # passed through and resolved to its default in silence.
+        "thinkingValues": meta.get("thinkingValues") or [],
+        "thinkingDefault": meta.get("thinkingDefault") or None,
+        # Both halves of the provenance, not just the list: "published" and "measured"
+        # are different claims, and an interface that cannot tell them apart cannot
+        # say how much to trust the menu it is showing.
+        "thinkingSource": meta.get("thinkingSource") or None,
+        "thinkingGraded": bool(meta.get("thinkingGraded")),
     }
 
 
@@ -327,10 +416,28 @@ def list_projects(roots: list[str]) -> list[dict]:
     return out
 
 
+# Levels are passed through under the provider's own names where it has them, so
+# its table decides what a level means. One translation is ours and it is the one
+# that was wrong: "off" must send a value that actually turns thinking off. Sending
+# nothing does not disable thinking, it leaves thinking on, which is the opposite of
+# what the control claims. Measured on ollama.com: every named effort produced 1.5k
+# to 1.8k characters of reasoning, while "none" and "off" produced zero.
 REASONING_EFFORT = {
-    "off": None, "minimal": "minimal", "low": "low", "medium": "medium",
-    "high": "high", "xhigh": "high", "max": "high",
+    "off": "none", "minimal": "minimal", "low": "low", "medium": "medium",
+    "high": "high", "xhigh": "xhigh", "max": "max",
 }
+
+# Prompt caching. "auto" puts cache breakpoints where the endpoint is known to
+# understand them and does nothing elsewhere, because an OpenAI-compatible server
+# that has never seen `cache_control` may reject the request outright. "on" forces
+# them for a gateway that supports them but is not recognised; "off" never sends
+# them. Either way a rejection is retried once without them, so enabling caching
+# cannot be the reason a turn fails.
+PROMPT_CACHE = os.environ.get("TACIT_PROMPT_CACHE", "auto").strip().lower()
+# Anthropic requires max_tokens and requires a thinking budget below it.
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("TACIT_ANTHROPIC_MAX_TOKENS", "8192"))
+ANTHROPIC_VERSION = os.environ.get("TACIT_ANTHROPIC_VERSION", "2023-06-01")
+ANTHROPIC_THINKING_BUDGET = int(os.environ.get("TACIT_ANTHROPIC_THINKING", "4096"))
 
 
 def model_inputs(ref: str | None = None) -> list[str]:
@@ -347,4 +454,9 @@ def accepts_images(ref: str | None = None) -> bool:
 
 
 def reasoning_for(level: str | None) -> str | None:
-    return REASONING_EFFORT.get((level or "").lower())
+    """Map a picker value to the name to ask for. Unknown names pass through, so a
+    level discovered from a model is not dropped by a table that predates it."""
+    lv = (level or "").strip().lower()
+    if not lv:
+        return None
+    return REASONING_EFFORT.get(lv, lv)

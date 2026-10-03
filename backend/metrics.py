@@ -11,6 +11,9 @@ from __future__ import annotations
 FIELDS = (
     "prompt_tokens",        # input tokens billed
     "completion_tokens",    # output tokens billed
+    "cached_tokens",        # input tokens the provider served from its own cache
+    "instruction_tokens",   # the project's own instruction files, injected at startup
+    "task_tokens",          # the session task list, injected only when non-empty
     "tool_schema_tokens",   # tool schemas injected into requests
     "memory_tokens",        # memory block injected at startup
     "mcp_tool_tokens",      # MCP schemas injected (activated or pinned)
@@ -66,6 +69,12 @@ def dashboard(rec: dict, *, base_prompt_tokens: int = 0, tools: int = 0,
         "prompt_tokens": m["prompt_tokens"],
         "completion_tokens": m["completion_tokens"],
         "total_tokens": m["prompt_tokens"] + m["completion_tokens"],
+        # A turn re-sends its whole transcript on every step, so what the provider
+        # served from cache is most of the bill on a long session. Reporting it is
+        # the only way to tell a cheap long session from an expensive one.
+        "cached_tokens": m["cached_tokens"],
+        "cache_hit_rate": (round(m["cached_tokens"] / m["prompt_tokens"] * 100, 1)
+                           if m["prompt_tokens"] else 0.0),
         "base_prompt_tokens": base_prompt_tokens,
         "tool_schema_tokens": tools,
         "mcp_discovered_tokens": mcp_discovered,

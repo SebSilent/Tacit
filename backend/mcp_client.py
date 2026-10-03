@@ -30,11 +30,20 @@ DEFAULT_TIMEOUT = 30.0
 
 _SECRET_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH")
 _URL_CREDS = re.compile(r"//[^/@\s]+@")
+# A credential in a query string is the shape that actually reaches a log: it is
+# how a fetch or browser URL is usually written. Masking only the
+# `//user:pass@host` form left `?token=...` in the ledger in plain text, which is
+# the one thing the ledger promises never to hold.
+_URL_SECRET_PARAM = re.compile(
+    r"([?&;][^=&;#\s]*(?:" + "|".join(h.lower() for h in _SECRET_HINTS)
+    + r")[^=&;#\s]*=)([^&#\s]+)", re.I)
 
 
 def mask_url(url) -> str:
-    """Strip credentials embedded in a URL (``https://token@host``)."""
-    return _URL_CREDS.sub("//***@", str(url or ""))
+    """Strip credentials from a URL: the ``//user:pass@host`` form, and any
+    secret-looking query parameter."""
+    text = _URL_CREDS.sub("//***@", str(url or ""))
+    return _URL_SECRET_PARAM.sub(r"\1***", text)
 
 
 class McpError(RuntimeError):

@@ -24,13 +24,12 @@ DEFAULTS = {
     "include_user": True,       # what the person asked for
     "include_assistant": True,  # what the agent answered
     "include_meta": True,       # session name, project, model, mode
+    "include_tools": False,     # a digest of the tool calls behind each answer
     "turns": 20,                # how many recent turns to include
     "tools": False,             # read-only tool access, off by default
     "model": "",                # empty means: same as the session
     "thinking": "",            # empty means: same as the session
 }
-
-THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 PERSONA = """You are the Assistant, a second set of eyes beside a coding agent.
 
@@ -45,6 +44,8 @@ for the person, not for the agent.
 Be direct and brief. If they ask for something to paste into the main chat, give the text on its
 own with nothing wrapped around it."""
 
+# No preset list here. What the Assistant may be told to think with comes from the
+# model it is using, discovered and cached on that model: see backend/thinking.py.
 TOOL_LIMIT = 6
 
 
@@ -91,12 +92,38 @@ def _turns(rec: dict) -> list[list[dict]]:
     return turns
 
 
+def _tool_digest(m: dict) -> str:
+    """One line per tool call behind an answer: name, key argument, outcome.
+
+    "Explain what the agent just did" is one of the jobs this panel is for, and
+    prose alone cannot answer it. The digest is deliberately terse — a name and
+    the argument that identifies the target — because the full results are what
+    filled the agent's window in the first place.
+    """
+    rows = []
+    for t in m.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        args = t.get("args") or {}
+        key = ""
+        for field in ("path", "pattern", "command", "url", "prompt", "question",
+                      "name", "label", "action"):
+            if args.get(field):
+                key = f" {str(args[field])[:80]}"
+                break
+        rows.append(f"  · {t.get('name')}{key}"
+                    + (" [failed]" if t.get("is_error") else ""))
+    return "\n".join(rows)
+
+
 def digest(rec: dict, cfg: dict | None = None) -> str:
     """The part of the session the Assistant is allowed to read.
 
-    Only what is stored is available: prompts, replies and session facts.
-    Reasoning and tool calls are not written to the transcript, so they are not
-    here, and no switch can conjure them.
+    Only what the switches allow is included. Prompts and replies are on by
+    default; the tool calls behind them are stored on the transcript but stay out
+    unless asked for, because they are the expensive part and most questions do
+    not need them. Reasoning is never included: it is the agent's private draft,
+    and quoting it back as an answer would be worse than not having it.
     """
     cfg = cfg or settings_of(rec)
     lines = []
@@ -114,12 +141,15 @@ def digest(rec: dict, cfg: dict | None = None) -> str:
         for m in group:
             role = m.get("role")
             body = (m.get("content") or "").strip()
-            if not body:
-                continue
-            if role == "user" and cfg["include_user"]:
+            if role == "user" and cfg["include_user"] and body:
                 lines.append("[person] " + body)
             elif role == "assistant" and cfg["include_assistant"]:
-                lines.append("[agent] " + body)
+                if body:
+                    lines.append("[agent] " + body)
+                if cfg["include_tools"]:
+                    calls = _tool_digest(m)
+                    if calls:
+                        lines.append("[agent used]\n" + calls)
     return "\n\n".join(lines)
 
 
@@ -157,7 +187,7 @@ def resolve_model(rec: dict, cfg: dict | None = None) -> str:
 def resolve_thinking(rec: dict, cfg: dict | None = None) -> str:
     """The assistant's thinking level, falling back to the session's."""
     cfg = cfg or settings_of(rec)
-    return cfg.get("thinking") or rec.get("thinking") or "medium"
+    return cfg.get("thinking") or rec.get("thinking") or "default"
 
 
 def system_prompt(rec: dict, cfg: dict | None = None) -> str:
@@ -177,15 +207,16 @@ def system_prompt(rec: dict, cfg: dict | None = None) -> str:
 def messages_for(rec: dict, cfg: dict | None = None) -> list[dict]:
     cfg = cfg or settings_of(rec)
     out = [{"role": "system", "content": system_prompt(rec, cfg)}]
-    for m in rec.get("assistant") or []:
-        role, body = m.get("role"), m.get("content")
-        if role in ("user", "assistant") and body:
-            out.append({"role": role, "content": body})
+    out.extend(agent.transcript_messages(rec.get("assistant") or [],
+                                         reasoning=agent.model_reasons(
+                                             resolve_model(rec, cfg))))
     return out
 
 
-def append(rec: dict, role: str, content: str) -> dict:
+def append(rec: dict, role: str, content: str, extra: dict | None = None) -> dict:
     row = {"role": role, "content": content, "ts": __import__("time").time()}
+    if extra:
+        row.update(extra)
     rec.setdefault("assistant", []).append(row)
     return row
 
@@ -195,18 +226,29 @@ def clear(rec: dict) -> None:
 
 
 def _run_read_tool(name: str, args: dict, rec: dict) -> str:
+    """Run one tool for the Assistant, refusing anything that could write.
+
+    Filtering the schema is not the whole guard: a model that remembers a tool
+    name can still call it, and several of these write in one action and read in
+    another. `call_tool` is told this caller is read-only so the refusal happens
+    where the call happens.
+    """
     allowed = {t["function"]["name"] for t in read_tools()}
     if name not in allowed:
         return f"ERROR: the assistant may only use read-only tools, not '{name}'"
+    refusal = agent.readonly_guard(name, args)
+    if refusal:
+        return refusal
     out: dict = {}
-    ctx = {"project": rec.get("project") or None}
+    ctx = {"project": rec.get("project") or None, "readonly": True,
+           "depth": config.SUBAGENT_MAX_DEPTH, "session": rec.get("id") or ""}
     for _ in agent.call_tool(name, args, ctx, out):
         pass
     return out.get("result", "")
 
 
 def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = None,
-             stop=None, max_steps: int = TOOL_LIMIT):
+             stop=None, max_steps: int = TOOL_LIMIT, trace: list | None = None):
     """Stream a reply from the Assistant. Yields the same event shapes as the agent."""
     cfg = cfg or settings_of(rec)
     messages = messages_for(rec, cfg)
@@ -219,6 +261,8 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
 
     for _step in range(max(1, max_steps)):
         calls: list[dict] = []
+        step_text: list[str] = []
+        step_reason: list[str] = []
         try:
             stream = engine.stream_chat(messages, ref=ref, tools=tools or None,
                                         reasoning_effort=reasoning)
@@ -233,8 +277,10 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
                     yield {"type": "done"}
                     return
                 if ev["type"] == "text":
+                    step_text.append(ev["delta"])
                     yield {"type": "text", "delta": ev["delta"]}
                 elif ev["type"] == "reason":
+                    step_reason.append(ev["delta"])
                     yield {"type": "reason", "delta": ev["delta"]}
                 elif ev["type"] == "usage":
                     yield {"type": "usage", "usage": ev["usage"]}
@@ -245,13 +291,19 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
             yield {"type": "done"}
             return
 
+        narration = "".join(step_text).strip()
+        thinking = "".join(step_reason).strip()
+
         if not calls:
+            if trace is not None:
+                trace.append({"text": narration, "reason": thinking, "tools": []})
             break
 
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
+        messages.append({"role": "assistant", "content": narration, "tool_calls": [
             {"id": c["id"], "type": "function",
              "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
             for c in calls]})
+        step_tools: list[dict] = []
         for call in calls:
             try:
                 args = __import__("json").loads(call["arguments"] or "{}")
@@ -259,8 +311,16 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
                 args = {}
             yield {"type": "tool_start", "name": call["name"], "args": args, "id": call["id"]}
             result = _run_read_tool(call["name"], args, rec)
+            result = agent._clip(str(result))
             messages.append({"role": "tool", "tool_call_id": call["id"],
-                             "content": result[:config.TOOL_OUTPUT_LIMIT]})
-            yield {"type": "tool_end", "name": call["name"], "result": result, "id": call["id"]}
+                             "content": result})
+            failed = result.startswith("ERROR:")
+            step_tools.append({"id": call["id"], "name": call["name"], "args": args,
+                               "result": result, "is_error": failed})
+            yield {"type": "tool_end", "name": call["name"], "result": result,
+                   "id": call["id"], "is_error": failed}
+
+        if trace is not None:
+            trace.append({"text": narration, "reason": thinking, "tools": step_tools})
 
     yield {"type": "done"}

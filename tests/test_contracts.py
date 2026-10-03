@@ -73,8 +73,24 @@ class TestEditAndContinue(unittest.TestCase):
         clean = chat._clean_history(incoming)
         self.assertEqual([m["role"] for m in clean], ["user", "assistant"])
         for m in clean:
-            self.assertLessEqual(set(m), {"role", "content", "ts"})
+            self.assertLessEqual(set(m), {"role", "content", "ts", "reason", "tools"})
         self.assertEqual(clean[0]["ts"], 1.0)
+        # The junk tool entry has no call id, so it cannot be paired with a result
+        # and is dropped. reason is a real field and survives.
+        self.assertNotIn("tools", clean[1])
+        self.assertEqual(clean[1]["reason"], "why")
+
+    def test_clean_history_keeps_a_real_call_but_clips_it(self):
+        big = "y" * 40000
+        incoming = [{"role": "assistant", "content": "ran it",
+                     "tools": [{"id": "c1", "name": "read_file",
+                                "args": {"path": "a.py"}, "result": big,
+                                "is_error": False, "junk": {"a": 1}}]}]
+        kept = chat._clean_history(incoming)[0]["tools"][0]
+        self.assertEqual(kept["id"], "c1")
+        self.assertEqual(kept["args"], {"path": "a.py"})
+        self.assertNotIn("junk", kept)
+        self.assertLessEqual(len(kept["result"]), 6000)
 
     def _cut(self, msgs, turn):
         seen = -1
@@ -104,6 +120,11 @@ class TestSessionStats(unittest.TestCase):
     """get_session_stats must carry the fields app.js reads."""
 
     def setUp(self):
+        # Patched and restored. Left in place it leaked into every later test in the
+        # session: config.resolve_model stayed a one-key lambda for the rest of the
+        # run, which reads as an unrelated failure in another file.
+        orig = chat.config.resolve_model
+        self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 100000}
 
     def test_shape(self):
@@ -123,6 +144,8 @@ class TestMeta(unittest.TestCase):
     """hello/get_state must report a live turn so the client can resume it."""
 
     def setUp(self):
+        orig = chat.config.resolve_model
+        self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 1000}
         self.rec = {"id": "s1", "model": "p/m", "messages": [], "title": "T"}
 
@@ -318,6 +341,75 @@ class TestRemoteParsing(unittest.TestCase):
         for url in ("https://gitlab.com/acme/widget.git", "/home/me/repos/thing", ""):
             with self.subTest(url=url):
                 self.assertIsNone(hosting.parse_remote(url))
+
+
+class TestZZModulePatchesAreRestored(unittest.TestCase):
+    """Sorted last on purpose: a patch that leaks is caught by whatever runs after it.
+
+    Two setUps in this file replaced config.resolve_model and never put it back, so
+    a test in another file later in the session saw a one-key lambda where a real
+    model dict belonged and failed for reasons that pointed nowhere near the cause.
+    """
+
+    def test_config_functions_are_the_real_ones(self):
+        for fn in (config.resolve_model, config.registry, config.save_registry, config.prefs):
+            self.assertTrue(callable(fn))
+            self.assertNotEqual(fn.__name__.startswith("<lambda>"), True,
+                                f"{fn} was left patched by an earlier test")
+        self.assertEqual(config.resolve_model.__name__, "resolve_model")
+
+    def test_engine_functions_are_the_real_ones(self):
+        self.assertEqual(engine.remote_models.__name__, "remote_models")
+        self.assertEqual(engine.remote_model_details.__name__, "remote_model_details")
+
+
+class TestProviderReconciliation(unittest.TestCase):
+    """Probe has to report both directions.
+
+    Gathering was additive only: it told you what was new and never what had gone,
+    so a model the provider retired stayed in the picker indefinitely and failed at
+    send time with a 410. Three such rows were sitting in the real registry.
+    """
+
+    def _run(self, local, remote, call, *args):
+        box = {"reg": {"default": "", "providers": {"p": {
+            "baseUrl": "http://x", "models": [dict(m) for m in local]}}}}
+        orig = (config.registry, config.save_registry, engine.remote_models)
+        config.registry = lambda: box["reg"]
+        config.save_registry = lambda r: box.__setitem__("reg", r)
+        engine.remote_models = lambda base, key="": list(remote)
+        try:
+            out = asyncio.run(call(*args))
+        finally:
+            config.registry, config.save_registry, engine.remote_models = orig
+        return out, box["reg"]["providers"]["p"]["models"]
+
+    def test_a_dropped_model_is_reported_and_marked(self):
+        r, rows = self._run([{"id": "alive"}, {"id": "dead"}], ["alive"],
+                            api.probe_provider, "p")
+        self.assertEqual(r["gone"], ["dead"])
+        self.assertEqual(r["new"], [])
+        self.assertTrue(next(m for m in rows if m["id"] == "dead").get("stale"))
+        self.assertFalse(next(m for m in rows if m["id"] == "alive").get("stale"))
+
+    def test_a_model_that_comes_back_loses_the_mark(self):
+        r, rows = self._run([{"id": "back", "stale": True}], ["back"],
+                            api.probe_provider, "p")
+        self.assertEqual(r["gone"], [])
+        self.assertFalse(rows[0].get("stale"))
+
+    def test_a_stale_model_is_not_made_the_default(self):
+        r, _ = self._run([{"id": "dead", "stale": True}], ["alive"],
+                         api.set_default, Req({"model": "p/dead"}))
+        # _fail answers with a JSONResponse, so the answer has to be read off the
+        # body. Asserting on the object itself would pass for any failure at all.
+        self.assertIn("no longer offered", r.body.decode("utf-8"))
+
+    def test_prune_removes_only_what_the_provider_dropped(self):
+        r, rows = self._run([{"id": "alive"}, {"id": "dead", "stale": True}],
+                            ["alive"], api.prune_models, "p")
+        self.assertEqual(r["removed"], ["dead"])
+        self.assertEqual([m["id"] for m in rows], ["alive"])
 
 
 if __name__ == "__main__":
