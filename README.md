@@ -31,6 +31,28 @@ three, and every number below is measured rather than asserted.
 
 ---
 
+## Benchmarked on OpenBench
+
+Same model, same tasks, same checkers. Only the wrapper changes. OpenBench's own runner, its
+`checker.sh` files untouched, and Kimi K2.7 Code pinned for every row.
+
+| Harness | Solved | Tokens per solve | Seconds per task |
+|---|---|---|---|
+| **Tacit** | **9/9** | **8,476** | **38** |
+| Pi, published | 9/9 | 8,678 | 69 |
+| OpenCode, published | 6/9 | 18,964 | 371 |
+
+Three hard tasks, three trials each. Tacit matches the leanest published harness on tokens and
+solves everything, in roughly 45 percent less time, and it uses less than half the tokens of the
+third row while scoring higher. Counted tokens exclude cache reads, and 88 percent of Tacit's
+prompt tokens were cache reads, which is what keeps the number small.
+
+Across all eight OpenBench tasks, Tacit solves 18 of 24 runs. The two it does not close are
+multi-file refactors, and both fail the same way on every profile, so the gap is capability, not
+configuration. A full 24-run sweep costs about $1.20 at published model rates.
+
+---
+
 ## How it compares
 
 Measured on one machine, with one rule: characters divided by four. That is the fallback heuristic
@@ -100,18 +122,9 @@ capability, and it is not a ranking of how good any of these tools are. Nothing 
 
 ### Reproducing it
 
-- **Tacit** is read from its own dashboard, in **Settings > Tokens**, and from the profile selector.
-- **Pi** and **little-coder** are measured from the bundled JavaScript of the installed packages.
-  `AGENTS.md` is little-coder's system prompt, replacing Pi's built-in one through
-  `--system-prompt`, which is why the two rows are not additive.
-- **DSH** is measured from its own persisted session logs under `~/.dsh/sessions`, which record the
-  assembled system prompt and tool schemas for every request. Across 16 main-agent sessions the
-  numbers were identical every time: 6,195 characters and 25 tools.
-- **Hermes** is measured by its own `prompt-size` diagnostic:
-
-```sh
-python -c "from hermes_cli.prompt_size import compute_prompt_breakdown as f; print(f('cli'))"
-```
+Tacit's row is read from its own dashboard, in **Settings > Tokens**, and from the profile selector:
+the Minimal profile reports the same figure with seven tools. The other rows were measured from the
+installed programs on this machine, and every one of them is reproducible from their own tooling.
 
 ---
 
