@@ -27,14 +27,24 @@
     el.classList.toggle('err', !!isErr);
   }
 
+  // Every action handler in this file used to call toast() with no such
+  // function in scope: the POST went through, then the handler threw, the
+  // panel never re-rendered, and no feedback appeared — which read as
+  // "the buttons do nothing". app.js's toast lives inside its closure; this
+  // reaches the same one over the bridge, and falls back to the note line.
+  function toast(text, isErr) {
+    if (window.Tacit && window.Tacit.toast) window.Tacit.toast(text, isErr);
+    else note(text, isErr);
+  }
+
   // ── tabs + panels ──────────────────────────────────────────────────────
   // Core tabs come from index.html. These are the ones this file adds. Anything
   // that is not plain Tacit is marked advanced and stays hidden until asked for,
   // so the settings panel opens with six tabs rather than ten.
   const TABS = [
-    { id: 'dashboard', label: 'Tokens' },
-    { id: 'snapshots', label: 'Snapshots' },
+    { id: 'dashboard', label: 'Profile' },
     { id: 'capabilities', label: 'Capabilities', advanced: true },
+    { id: 'learning', label: 'Learning', advanced: true },
     { id: 'mcp', label: 'MCP', advanced: true },
     { id: 'memory', label: 'Memory', advanced: true },
     { id: 'plugins', label: 'Plugins', advanced: true },
@@ -64,7 +74,11 @@
 
   function install() {
     const tabs = $('#hoTabs');
-    const body = $('.ho-body');
+    // By id, not by class: the snapshots overlay also has a .ho-body, and it
+    // sits earlier in the document, so a class query landed every dynamic
+    // tab panel inside that hidden overlay — the tabs clicked, the renderers
+    // ran, and nothing appeared from Profile to Plugins.
+    const body = $('#hoBody');
     if (!tabs || !body) return;
     TABS.forEach((t) => {
       const btn = document.createElement('button');
@@ -97,26 +111,37 @@
       applyAdvanced();
     });
     applyAdvanced();
+
+    // the per-session snapshots overlay, reached from the top bar
+    const btn = $('#snapBtn');
+    if (btn) btn.addEventListener('click', openSnapshots);
+    const close = $('#snapClose');
+    if (close) close.addEventListener('click', closeSnapshots);
+    const ov = $('#snapOverlay');
+    if (ov) ov.addEventListener('click', (e) => { if (e.target === ov) closeSnapshots(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && ov && !ov.hidden) closeSnapshots();
+    });
   }
 
   function render(tab) {
     if (tab === 'dashboard') renderDashboard();
     else if (tab === 'capabilities') renderCapabilities();
+    else if (tab === 'learning') renderLearning();
     else if (tab === 'mcp') renderMcp();
     else if (tab === 'memory') renderMemory();
-    else if (tab === 'snapshots') renderSnapshots();
     else if (tab === 'plugins') renderPlugins();
   }
 
   // ── Tokens dashboard ───────────────────────────────────────────────────
+  // The Profile tab is the selector and nothing else. The token tables that
+  // used to sit under it were removed at the operator's request: the numbers
+  // live in the backend's own accounting, and the tab's job is to choose a
+  // bundle, not to report on it.
   async function renderDashboard() {
     const panel = $('#panel-dashboard');
-    panel.innerHTML = '<div class="ho-loading">Measuring…</div>';
-    const sid = (window.Tacit && window.Tacit.getSid && window.Tacit.getSid()) || '';
-    const d = await api('/api/tokens/dashboard?sid=' + encodeURIComponent(sid));
-    if (!d.ok) { panel.innerHTML = `<div class="ho-err">${esc(d.error || 'failed')}</div>`; return; }
+    panel.innerHTML = '<div class="ho-loading">Loading profiles…</div>';
     const pf = await api('/api/profiles');
-    const activeProfile = pf.active || '';
     const profileRow = (p) => `
       <div class="prof-row ${p.active ? 'on' : ''}" data-name="${esc(p.name)}">
         <span class="prof-name">${esc(p.label)}</span>
@@ -126,60 +151,14 @@
         ${p.builtin ? '' : '<button class="ho-btn small danger" data-act="del">×</button>'}
       </div>`;
     const profiles = (pf.profiles || []).map(profileRow).join('');
-    const mark = d.exact ? '' : '<span class="ho-sub"> estimates (chars/4)</span>';
-    const row = (label, value, hint) =>
-      `<div class="tok-row"><span class="tok-label">${esc(label)}</span>` +
-      `<span class="tok-value">${esc(value)}</span>` +
-      (hint ? `<span class="tok-hint">${esc(hint)}</span>` : '') + '</div>';
 
     panel.innerHTML = `
-      <div class="ho-toolbar">
-        <span class="ho-sub">Local accounting${mark} — nothing leaves this machine.</span>
-        <button class="ho-btn small" id="tkRefresh">Refresh</button>
-      </div>
-      <div class="ho-section">Profile <span class="ho-sub sm">what is switched on, and what it costs</span></div>
       <div class="prof-list">${profiles}</div>
       <div class="mcp-add">
         <input class="mcp-in" id="profName" placeholder="save current setup as…" spellcheck="false">
         <button class="ho-btn small" id="profSave">Save profile</button>
-        <span class="ho-sub sm">Switching a profile applies immediately and updates the numbers below.</span>
-      </div>
-      <div class="ho-section">This session</div>
-      <div class="tok-table">
-        ${row('Prompt tokens billed', d.prompt_tokens_display)}
-        ${row('Completion tokens billed', d.completion_tokens_display)}
-        ${row('Total billed', d.total_tokens_display)}
-        ${row('Served from provider cache', d.cached_tokens_display,
-              (d.cache_hit_rate || 0) + '% of prompt tokens')}
-        ${row('MCP tool calls', d.mcp_calls)}
-      </div>
-      <div class="ho-section">Startup prompt</div>
-      <div class="tok-table">
-        ${row('Base system prompt', d.base_prompt_tokens_display, 'the ~980-character core')}
-        ${row('Built-in tool schemas', d.tool_schema_tokens_display, d.tool_count + ' tools')}
-        ${row('MCP schemas injected', d.mcp_injected_tokens_display, 'activated or pinned')}
-        ${row('Memory block', d.memory_tokens_display, d.memory_enabled ? 'vault on' : 'vault off')}
-        ${row('Project instructions', d.instruction_tokens_display,
-              ((d.instructions || {}).mode || 'index') + ' mode · ' + ((d.instructions || {}).note || ''))}
-        ${row('Task list', d.task_tokens_display, 'session state, survives compaction')}
-        ${row('Prompt caching', (d.caching || {}).active ? 'active' : 'off',
-              ((d.caching || {}).sends_markers ? 'breakpoints sent · ' : 'provider-side · ')
-              + ((d.caching || {}).summary || ''))}
-      </div>
-      <div class="ho-section">Context discipline</div>
-      <div class="tok-table">
-        ${row('Estimated full-context baseline', d.full_context_baseline_display, 'if every discovered schema and memory were injected directly')}
-        ${row('Tacit actual startup', d.actual_startup_display, 'what is really injected')}
-        ${row('Saved by lazy MCP activation', d.saved_lazy_tools_display)}
-        ${row('Saved by memory budgeting', d.saved_memory_budget_display)}
-        ${row('Saved by compaction', d.saved_compaction_display)}
-        ${row('Saved by delegation', d.saved_subagent_display)}
-      </div>
-      <div class="tok-hero">
-        <span class="tok-hero-num">${esc(d.saved_by_discipline_display)}</span>
-        <span class="tok-hero-label">Saved by context discipline</span>
+        <span class="ho-sub sm">Switching a profile applies immediately.</span>
       </div>`;
-    $('#tkRefresh').addEventListener('click', renderDashboard);
 
     panel.querySelectorAll('.prof-row').forEach((row) => {
       const name = row.dataset.name;
@@ -251,17 +230,6 @@
         ${flags.length ? `<span class="badge on">${esc(flags.join(' · '))}</span>` : '<span class="badge">all optional systems off</span>'}
       </div>
 
-      <div class="ho-section">Profile</div>
-      <div class="mcp-add">
-        <select class="git-select" id="capProfile">
-          ${['minimal', 'default', 'safe', 'power-isolation', 'power-memory', 'full']
-            .map((n) => `<option value="${n}"${n === c.profile ? ' selected' : ''}>${n}</option>`).join('')}
-        </select>
-        <button class="ho-btn small primary" id="capProfileApply">Apply</button>
-        <span class="ho-sub sm">A profile sets everything below. What it cannot turn on is reported.</span>
-      </div>
-      <div id="capProfileNote"></div>
-
       <div class="ho-section">Sandbox <span class="ho-sub sm">how commands are isolated</span></div>
       <div class="mcp-add">
         <select class="git-select" id="capSandbox">${kind('sandbox').map((r) => optionFor(r, sm.backend)).join('')}</select>
@@ -293,55 +261,10 @@
         `<span class="badge">${esc(i.source_session || i.source || '')}</span></div>`).join('')}</div>`
         : '<div class="ho-sub sm">Nothing is being injected.</div>'}
 
-      <div class="ho-section">Learning <span class="ho-sub sm">whether Tacit may learn</span></div>
-      <div class="mcp-add">
-        <select class="git-select" id="capLearning">${kind('learning').map((r) => optionFor(r, (c.learning || {}).id)).join('')}</select>
-        <button class="ho-btn small" id="capLearningSave">Save</button>
-      </div>
-      <div class="mcp-add">
-        <label class="ho-sub sm"><input type="checkbox" id="capAnalyzer"${an.enabled ? ' checked' : ''}> Auto-analyze finished sessions</label>
-        <button class="ho-btn small" id="capAnalyzerRun">Analyze now</button>
-      </div>
-      <div class="ho-sub sm">Runs on a timer over finished transcripts and leaves proposals behind. It adds no tool to the agent, makes no model call, and cannot apply anything.</div>
-      <div class="tok-table">
-        <div class="tok-row"><span class="tok-label">Sessions read</span><span class="tok-value">${an.sessions_read || 0}</span></div>
-        <div class="tok-row"><span class="tok-label">Proposals made</span><span class="tok-value">${an.proposals_made || 0}</span></div>
-        <div class="tok-row"><span class="tok-label">Rules seen before</span><span class="tok-value">${an.rules_seen || 0}</span></div>
-      </div>
-
       <div class="mcp-add">
         <label class="ho-sub sm"><input type="checkbox" id="capGuidance"${gu.enabled ? ' checked' : ''}> Guide the agent mid-turn</label>
       </div>
       <div class="ho-sub sm">Adds a short note on the step that needs one: after a tool fails, when the same call comes again, as the step budget runs out, and when a step plans instead of acting. Standing prompt ${gu.prompt_chars || 979} chars, unchanged by this.</div>
-
-      <div class="ho-section">Proposals <span class="ho-count">${(lg.artifacts || []).length}</span></div>
-      <div class="mem-list">${(lg.artifacts || []).map((p) =>
-        `<div class="mem-row" data-art="${esc(p.id)}">` +
-        `<span class="mem-type badge">${esc(p.kind)}</span>` +
-        `<span class="badge${p.risk === 'high' ? ' danger-high' : ''}">${esc(p.risk)}</span>` +
-        `<span class="badge${p.state === 'approved' ? ' on' : ''}">${esc(p.state)}</span>` +
-        `<span class="mem-text">${esc((p.title || p.body || '').slice(0, 110))}` +
-        (p.provenance
-          ? `<span class="ho-sub sm">because ${esc(p.provenance.why || p.provenance.rule || 'it matched a pattern')}</span>` +
-            `<span class="ho-sub sm">you said: “${esc((p.provenance.snippet || '').slice(0, 100))}” (turn ${esc(p.provenance.turn)})</span>`
-          : '') +
-        `</span>` +
-        `<span class="badge">${esc(p.display)}</span>` +
-        `<span class="mem-actions">` +
-        (p.state === 'approved'
-          ? '<button class="ho-btn small" data-act="pdisable">disable</button>'
-          : '<button class="ho-btn small primary" data-act="papprove">approve</button>') +
-        `<button class="ho-btn small" data-act="preject">reject</button>` +
-        `<button class="ho-btn small" data-act="pedit">edit</button>` +
-        `<button class="ho-btn small danger" data-act="pdel">×</button>` +
-        `</span></div>`).join('') || '<div class="ho-empty sm">Nothing proposed yet.</div>'}</div>
-      <div class="mcp-add">
-        <input class="mcp-in" id="capPropTitle" placeholder="title" spellcheck="false">
-        <input class="mcp-in" id="capPropBody" placeholder="what should be remembered" spellcheck="false">
-        <select class="git-select" id="capPropKind">${['rule', 'preference', 'correction', 'skill'].map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
-        <button class="ho-btn small" id="capPropAdd">Propose</button>
-      </div>
-      <div class="ho-sub sm">A proposal changes nothing until you approve it. Approving a skill writes a skill file; anything else goes to memory, under the memory budget.</div>
 
       <div class="ho-section">Gateways <span class="ho-sub sm">hand a task to another program</span></div>
       <div class="mcp-add">
@@ -371,13 +294,21 @@
       </div>
       <div id="capGwOut"></div>
 
-      <div class="ho-section">Optional dependencies <span class="ho-sub sm">Tacit installs nothing on its own</span></div>
+      <div class="ho-section">Optional dependencies <span class="ho-sub sm">checked on this machine, now</span></div>
       <div class="tok-table">
-        ${(dp.groups || []).map((g) => `<div class="tok-row">
+        ${(dp.groups || []).map((g) => {
+          // A group can fail its probe with nothing missing from the binary
+          // list — node present, playwright never installed — so "needs" with
+          // an empty list and a missing[0] that is undefined both have to go.
+          const need = (g.missing || []).map((m) => m.binary).join(', ');
+          const hint = g.satisfied ? (g.probe || g.note)
+            : (((g.missing || [])[0] || {}).install || g.probe || '');
+          return `<div class="tok-row">
           <span class="tok-label">${esc(g.label)}</span>
-          <span class="tok-value">${g.satisfied ? 'ready' : 'needs ' + esc(g.missing.map((m) => m.binary).join(', '))}</span>
-          <span class="tok-hint">${g.satisfied ? esc(g.note) : esc(g.missing[0].install)}</span>
-        </div>`).join('')}
+          <span class="tok-value">${g.satisfied ? 'ready' : (need ? 'needs ' + esc(need) : 'not ready')}</span>
+          <span class="tok-hint">${esc(hint)}</span>
+        </div>`;
+        }).join('')}
       </div>
 
       <div class="ho-section">Import from another tool <span class="ho-sub sm">one time, only if you ask</span></div>
@@ -393,18 +324,6 @@
         `<div class="audit-row"><span class="audit-event">${esc(e.event)}</span>` +
         `<span class="audit-detail">${esc(e.backend || '')} ${esc(e.tool || '')} ${esc(e.status || '')} ${e.changed ? '· ' + e.changed + ' changed' : ''}</span></div>`).join('')
         || '<div class="ho-empty sm">Nothing recorded yet.</div>'}</div>`;
-
-    const note = (t, err) => { const el = $('#capProfileNote'); if (el) el.innerHTML = t ? `<div class="ho-sub sm">${esc(t)}</div>` : ''; };
-
-    $('#capProfileApply').addEventListener('click', async () => {
-      const name = $('#capProfile').value;
-      const r = await post(`/api/profiles/${encodeURIComponent(name)}/apply`);
-      if (!r.ok) { note(r.error || 'could not apply', true); return; }
-      const skipped = (r.skipped || []).map((s) => `${s.what} (${s.wanted}: ${s.why})`);
-      note(`${name} applied. ` + (skipped.length ? `Could not turn on: ${skipped.join(', ')}`
-                                                  : 'Everything it names is on.'));
-      renderCapabilities();
-    });
 
     const setSandbox = async () => {
       const r = await post('/api/capabilities/sandbox', {
@@ -426,79 +345,12 @@
       renderCapabilities();
     });
 
-    $('#capLearningSave').addEventListener('click', async () => {
-      const r = await post('/api/capabilities/learning', { mode: $('#capLearning').value });
-      if (!r.ok) { toast(r.error || 'could not save', true); return; }
-      toast('learning set to ' + r.learning.id);
-      renderCapabilities();
-    });
-
     // ── per-turn guidance ──
     const guBox = $('#capGuidance');
     if (guBox) guBox.addEventListener('change', async () => {
       const r = await post('/api/guidance', { enabled: guBox.checked });
       if (!r.ok) { toast(r.error || 'could not save', true); return; }
       toast('mid-turn guidance ' + (r.enabled ? 'on' : 'off'));
-    });
-
-    // ── the background analyzer ──
-    const anBox = $('#capAnalyzer');
-    if (anBox) anBox.addEventListener('change', async () => {
-      const r = await post('/api/analyzer', { enabled: anBox.checked });
-      if (!r.ok) { toast(r.error || 'could not save', true); return; }
-      toast('session analysis ' + (r.enabled ? 'on' : 'off'));
-    });
-    const anRun = $('#capAnalyzerRun');
-    if (anRun) anRun.addEventListener('click', async () => {
-      anRun.disabled = true;
-      toast('reading finished sessions…');
-      const r = await post('/api/analyzer/run', {});
-      anRun.disabled = false;
-      if (!r.ok) { toast(r.error || 'could not run', true); return; }
-      toast(`${r.sessions_read} session(s) read, ${r.proposals} proposal(s) added`);
-      renderCapabilities();
-    });
-
-    // ── proposals ──
-    panel.querySelectorAll('[data-art]').forEach((row) => {
-      const id = row.dataset.art;
-      const act = async (what) => {
-        const r = await post(`/api/learning/${encodeURIComponent(id)}/${what}`);
-        if (!r.ok) { toast(r.error || 'could not do that', true); return; }
-        toast(what === 'approve' ? ('approved, wrote ' + (r.wrote || 'nothing')) : what);
-        renderCapabilities();
-      };
-      const on = (name, fn) => {
-        const b = row.querySelector(`[data-act="${name}"]`);
-        if (b) b.addEventListener('click', fn);
-      };
-      on('papprove', () => act('approve'));
-      on('pdisable', () => act('disable'));
-      on('preject', () => act('reject'));
-      on('pedit', async () => {
-        const next = prompt('Edit the proposal body', row.querySelector('.mem-text').textContent);
-        if (next == null) return;
-        const r = await api('/api/learning/' + encodeURIComponent(id),
-          { method: 'PATCH', body: JSON.stringify({ body: next }) });
-        toast(r.ok ? 'edited' : (r.error || 'could not edit'), !r.ok);
-        if (r.ok) renderCapabilities();
-      });
-      on('pdel', async () => {
-        if (!confirm('Delete this proposal? Anything it wrote is removed too.')) return;
-        const r = await api('/api/learning/' + encodeURIComponent(id), { method: 'DELETE' });
-        toast(r.ok ? 'deleted' : (r.error || 'could not delete'), !r.ok);
-        if (r.ok) renderCapabilities();
-      });
-    });
-    $('#capPropAdd').addEventListener('click', async () => {
-      const body = $('#capPropBody').value.trim();
-      if (!body) { toast('say what should be remembered', true); return; }
-      const r = await post('/api/learning/propose', {
-        kind: $('#capPropKind').value, title: $('#capPropTitle').value.trim(), body,
-      });
-      if (!r.ok) { toast(r.error || 'could not propose', true); return; }
-      toast(r.auto_applied ? 'proposed and applied by the current mode' : 'proposed');
-      renderCapabilities();
     });
 
     // ── gateways ──
@@ -714,20 +566,167 @@
     });
   }
 
-  // ── Snapshots ──────────────────────────────────────────────────────────
-  async function renderSnapshots() {
-    const panel = $('#panel-snapshots');
-    panel.innerHTML = '<div class="ho-loading">Loading snapshots…</div>';
-    const d = await api('/api/snapshots');
-    const rows = d.snapshots || [];
-    const project = (window.Tacit && window.Tacit.getWorkdir && window.Tacit.getWorkdir()) || '';
+  // ── Learning ──────────────────────────────────────────────────────────
+  // Moved out of Capabilities: the mode selector, the analyzer, and the
+  // proposals with their actions. The buttons were wired correctly all along
+  // — the missing toast() above them is what made every action look dead.
+  async function renderLearning() {
+    const panel = $('#panel-learning');
+    panel.innerHTML = '<div class="ho-loading">Loading learning…</div>';
+    const c = await api('/api/capabilities');
+    const lg = await api('/api/learning');
+    const an = await api('/api/analyzer').catch(() => ({ enabled: false }));
+    const kind = (k) => (c.providers || []).filter((p) => p.kind === k);
+    const optionFor = (row, chosen) => {
+      const usable = row.available && row.implemented;
+      const why = !row.available ? (row.reason || 'unavailable')
+        : (!row.implemented ? 'no adapter yet' : '');
+      return `<option value="${esc(row.id)}"${row.id === chosen ? ' selected' : ''}` +
+        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' — ' + esc(why)}</option>`;
+    };
 
     panel.innerHTML = `
+      <div class="ho-section">Learning <span class="ho-sub sm">whether Tacit may learn</span></div>
+      <div class="mcp-add">
+        <select class="git-select" id="capLearning">${kind('learning').map((r) => optionFor(r, (c.learning || {}).id)).join('')}</select>
+        <button class="ho-btn small" id="capLearningSave">Save</button>
+      </div>
+      <div class="mcp-add">
+        <label class="ho-sub sm"><input type="checkbox" id="capAnalyzer"${an.enabled ? ' checked' : ''}> Auto-analyze finished sessions</label>
+        <button class="ho-btn small" id="capAnalyzerRun">Analyze now</button>
+      </div>
+      <div class="ho-sub sm">Runs on a timer over finished transcripts and leaves proposals behind. It adds no tool to the agent, makes no model call, and cannot apply anything.</div>
+      <div class="tok-table">
+        <div class="tok-row"><span class="tok-label">Sessions read</span><span class="tok-value">${an.sessions_read || 0}</span></div>
+        <div class="tok-row"><span class="tok-label">Proposals made</span><span class="tok-value">${an.proposals_made || 0}</span></div>
+        <div class="tok-row"><span class="tok-label">Rules seen before</span><span class="tok-value">${an.rules_seen || 0}</span></div>
+      </div>
+
+      <div class="ho-section">Proposals <span class="ho-count">${(lg.artifacts || []).length}</span></div>
+      <div class="mem-list">${(lg.artifacts || []).map((p) =>
+        `<div class="mem-row" data-art="${esc(p.id)}">` +
+        `<span class="mem-type badge">${esc(p.kind)}</span>` +
+        `<span class="badge${p.risk === 'high' ? ' danger-high' : ''}">${esc(p.risk)}</span>` +
+        `<span class="badge${p.state === 'approved' ? ' on' : ''}">${esc(p.state)}</span>` +
+        `<span class="mem-text">${esc((p.title || p.body || '').slice(0, 110))}` +
+        (p.provenance
+          ? `<span class="ho-sub sm">because ${esc(p.provenance.why || p.provenance.rule || 'it matched a pattern')}</span>` +
+            `<span class="ho-sub sm">you said: “${esc((p.provenance.snippet || '').slice(0, 100))}” (turn ${esc(p.provenance.turn)})</span>`
+          : '') +
+        `</span>` +
+        `<span class="badge">${esc(p.display)}</span>` +
+        `<span class="mem-actions">` +
+        (p.state === 'approved'
+          ? '<button class="ho-btn small" data-act="pdisable">disable</button>'
+          : '<button class="ho-btn small primary" data-act="papprove">approve</button>') +
+        `<button class="ho-btn small" data-act="preject">reject</button>` +
+        `<button class="ho-btn small" data-act="pedit">edit</button>` +
+        `<button class="ho-btn small danger" data-act="pdel">×</button>` +
+        `</span></div>`).join('') || '<div class="ho-empty sm">Nothing proposed yet.</div>'}</div>
+      <div class="mcp-add">
+        <input class="mcp-in" id="capPropTitle" placeholder="title" spellcheck="false">
+        <input class="mcp-in" id="capPropBody" placeholder="what should be remembered" spellcheck="false">
+        <select class="git-select" id="capPropKind">${['rule', 'preference', 'correction', 'skill'].map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+        <button class="ho-btn small" id="capPropAdd">Propose</button>
+      </div>
+      <div class="ho-sub sm">A proposal changes nothing until you approve it. Approving a skill writes a skill file; anything else goes to memory, under the memory budget.</div>`;
+
+    $('#capLearningSave').addEventListener('click', async () => {
+      const r = await post('/api/capabilities/learning', { mode: $('#capLearning').value });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('learning set to ' + r.learning.id);
+      renderLearning();
+    });
+    const anBox = $('#capAnalyzer');
+    if (anBox) anBox.addEventListener('change', async () => {
+      const r = await post('/api/analyzer', { enabled: anBox.checked });
+      if (!r.ok) { toast(r.error || 'could not save', true); return; }
+      toast('session analysis ' + (r.enabled ? 'on' : 'off'));
+    });
+    const anRun = $('#capAnalyzerRun');
+    if (anRun) anRun.addEventListener('click', async () => {
+      anRun.disabled = true;
+      toast('reading finished sessions…');
+      const r = await post('/api/analyzer/run', {});
+      anRun.disabled = false;
+      if (!r.ok) { toast(r.error || 'could not run', true); return; }
+      toast(`${r.sessions_read} session(s) read, ${r.proposals} proposal(s) added`);
+      renderLearning();
+    });
+
+    panel.querySelectorAll('[data-art]').forEach((row) => {
+      const id = row.dataset.art;
+      const act = async (what) => {
+        const r = await post(`/api/learning/${encodeURIComponent(id)}/${what}`);
+        if (!r.ok) { toast(r.error || 'could not do that', true); return; }
+        toast(what === 'approve' ? ('approved, wrote ' + (r.wrote || 'nothing')) : what);
+        renderLearning();
+      };
+      const on = (name, fn) => {
+        const b = row.querySelector(`[data-act="${name}"]`);
+        if (b) b.addEventListener('click', fn);
+      };
+      on('papprove', () => act('approve'));
+      on('pdisable', () => act('disable'));
+      on('preject', () => act('reject'));
+      on('pedit', async () => {
+        const next = prompt('Edit the proposal body', row.querySelector('.mem-text').textContent);
+        if (next == null) return;
+        const r = await api('/api/learning/' + encodeURIComponent(id),
+          { method: 'PATCH', body: JSON.stringify({ body: next }) });
+        toast(r.ok ? 'edited' : (r.error || 'could not edit'), !r.ok);
+        if (r.ok) renderLearning();
+      });
+      on('pdel', async () => {
+        if (!confirm('Delete this proposal? Anything it wrote is removed too.')) return;
+        const r = await api('/api/learning/' + encodeURIComponent(id), { method: 'DELETE' });
+        toast(r.ok ? 'deleted' : (r.error || 'could not delete'), !r.ok);
+        if (r.ok) renderLearning();
+      });
+    });
+    $('#capPropAdd').addEventListener('click', async () => {
+      const body = $('#capPropBody').value.trim();
+      if (!body) { toast('say what should be remembered', true); return; }
+      const r = await post('/api/learning/propose', {
+        kind: $('#capPropKind').value, title: $('#capPropTitle').value.trim(), body,
+      });
+      if (!r.ok) { toast(r.error || 'could not propose', true); return; }
+      toast(r.auto_applied ? 'proposed and applied by the current mode' : 'proposed');
+      renderLearning();
+    });
+  }
+
+  // ── Snapshots (per session) ────────────────────────────────────────────
+  // Moved out of Settings: snapshots belong to the session that took them,
+  // so the panel is reached from the top bar and lists only this session's.
+  // The backend marks each snapshot with the session that took it; snapshots
+  // from before that change carry no marker and are counted in the note line
+  // rather than silently vanishing.
+  async function renderSnapshots() {
+    const box = $('#snapList');
+    if (!box) return;
+    const sid = (window.Tacit && window.Tacit.getSid && window.Tacit.getSid()) || '';
+    const project = (window.Tacit && window.Tacit.getWorkdir && window.Tacit.getWorkdir()) || '';
+    box.innerHTML = '<div class="ho-loading">Loading snapshots…</div>';
+    const d = await api('/api/snapshots?session=' + encodeURIComponent(sid));
+    const rows = d.snapshots || [];
+    let unfiled = 0;
+    if (rows.length === 0) {
+      const all = await api('/api/snapshots');
+      unfiled = (all.snapshots || []).filter((s) => !s.session).length;
+    }
+    const snapNote = (t, isErr) => {
+      const el = $('#snapNote');
+      if (el) { el.textContent = t || ''; el.classList.toggle('err', !!isErr); }
+    };
+
+    box.innerHTML = `
       <div class="ho-toolbar">
         <span class="ho-sub">${rows.length} snapshot(s) · ${esc(fmt(d.bytes))} bytes · target workspace: <code>${esc(project || '(none selected)')}</code></span>
         <button class="ho-btn small" id="snRefresh">Refresh</button>
       </div>
       ${project ? '' : '<div class="ho-err">Pick a workspace first — restoring needs a target.</div>'}
+      ${rows.length === 0 && unfiled ? `<div class="ho-sub sm">${unfiled} earlier snapshot(s) predate per-session tracking and are not listed here.</div>` : ''}
       <div class="snap-list">
         ${rows.map((s) => `
           <div class="snap-card" data-name="${esc(s.name)}">
@@ -743,16 +742,16 @@
               <button class="ho-btn small" data-act="restore">Restore</button>
             </div>
             <div class="snap-extra" hidden></div>
-          </div>`).join('') || '<div class="ho-empty sm">No snapshots yet — the agent takes one with the snapshot tool before risky edits.</div>'}
+          </div>`).join('') || '<div class="ho-empty sm">No snapshots in this session yet — the agent takes one automatically before its first edit of a turn.</div>'}
       </div>`;
 
     $('#snRefresh').addEventListener('click', renderSnapshots);
 
-    panel.querySelectorAll('.snap-card').forEach((card) => {
+    box.querySelectorAll('.snap-card').forEach((card) => {
       const name = card.dataset.name;
       const extra = card.querySelector('.snap-extra');
       card.querySelector('[data-act="compare"]').addEventListener('click', async () => {
-        if (!project) { note('pick a workspace first', true); return; }
+        if (!project) { snapNote('pick a workspace first', true); return; }
         const r = await post('/api/snapshots/compare', { name, project });
         extra.hidden = false;
         if (!r.ok) { extra.innerHTML = `<div class="ho-err">${esc(r.error || 'failed')}</div>`; return; }
@@ -767,12 +766,24 @@
           : '<div class="ho-sub">Identical to the snapshot.</div>';
       });
       card.querySelector('[data-act="restore"]').addEventListener('click', async () => {
-        if (!project) { note('pick a workspace first', true); return; }
+        if (!project) { snapNote('pick a workspace first', true); return; }
         if (!confirm(`Restore ${name} into\n${project}\n\nFiles are overwritten with the snapshot copies. Continue?`)) return;
         const r = await post('/api/snapshots/restore', { name, project });
-        note(r.ok ? (r.message || 'restored') : (r.error || 'restore failed'), !r.ok);
+        snapNote(r.ok ? (r.message || 'restored') : (r.error || 'restore failed'), !r.ok);
+        if (r.ok) renderSnapshots();
       });
     });
+  }
+
+  function openSnapshots() {
+    const ov = $('#snapOverlay');
+    if (!ov) return;
+    ov.hidden = false;
+    renderSnapshots();
+  }
+  function closeSnapshots() {
+    const ov = $('#snapOverlay');
+    if (ov) ov.hidden = true;
   }
 
   // ── Memory Vault ───────────────────────────────────────────────────────
@@ -1050,5 +1061,5 @@
   }
 
   install();
-  window.TacitPlatform = { render };
+  window.TacitPlatform = { render, openSnapshots };
 })();

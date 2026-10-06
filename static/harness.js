@@ -54,9 +54,22 @@ function activeTab() {
 }
 function loadPanel(tab) {
   if (tab === 'providers') return renderProviders();
-  if (tab === 'skills') return renderSkills();
-  if (tab === 'tools') return renderTools();
+  if (tab === 'tools') return renderSkillsAndTools();
   if (tab === 'appearance') return renderAppearancePanel();
+}
+
+// ═══════════════════════ SKILLS & TOOLS (one tab) ═══════════════════════
+// The two managers used to be separate tabs; they are one surface now. Each
+// renderer fills its own sub-container, so neither renderer's wiring had to
+// change, and a slow skills fetch cannot blank an already-drawn tools list.
+async function renderSkillsAndTools() {
+  const panel = $('#panel-tools');
+  panel.innerHTML = '';
+  const skillsBox = document.createElement('div');
+  const toolsBox = document.createElement('div');
+  panel.appendChild(skillsBox);
+  panel.appendChild(toolsBox);
+  await Promise.all([renderSkills(skillsBox), renderTools(toolsBox)]);
 }
 
 // ═══════════════════════════ APPEARANCE ═══════════════════════════
@@ -250,8 +263,8 @@ async function renderProviders() {
 }
 
 // ═══════════════════════════ SKILLS ═════════════════════════════════
-async function renderSkills() {
-  const panel = $('#panel-skills');
+async function renderSkills(container) {
+  const panel = container;
   panel.innerHTML = '<div class="ho-loading">Loading skills…</div>';
   const d = await api('/api/skills');
 
@@ -308,21 +321,21 @@ async function renderSkills() {
   $('#skCreate').addEventListener('click', async () => {
     const body = { name: $('#skName').value.trim(), description: $('#skDesc').value.trim(), body: $('#skBody').value };
     const r = await post('/api/skills/user', body);
-    if (r.ok) { setNote(`Skill "${r.name}" created`); $('#skForm').hidden = true; renderSkills(); }
+    if (r.ok) { setNote(`Skill "${r.name}" created`); $('#skForm').hidden = true; renderSkillsAndTools(); }
     else setNote(r.error || 'Create failed', true);
   });
   panel.querySelectorAll('.skill-del').forEach(btn => btn.addEventListener('click', async e => {
     const name = e.target.closest('.skill-card').dataset.name;
     if (!confirm(`Delete skill "${name}"?`)) return;
     const r = await api('/api/skills/user/' + encodeURIComponent(name), { method: 'DELETE' });
-    if (r.ok) { setNote(`Skill "${name}" deleted`); renderSkills(); }
+    if (r.ok) { setNote(`Skill "${name}" deleted`); renderSkillsAndTools(); }
     else setNote(r.error || 'Delete failed', true);
   }));
 }
 
 // ═══════════════════════════ TOOLS ══════════════════════════════════
-async function renderTools() {
-  const panel = $('#panel-tools');
+async function renderTools(container) {
+  const panel = container;
   panel.innerHTML = '<div class="ho-loading">Loading tools…</div>';
   const d = await api('/api/tools');
   const vcs = await api('/api/harness/version-control');

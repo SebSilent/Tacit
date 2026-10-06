@@ -461,9 +461,9 @@ async def token_dashboard(sid: str = "", project: str = ""):
 
 
 @router.get("/api/snapshots")
-async def snapshots(limit: int = 200):
+async def snapshots(limit: int = 200, session: str = ""):
     from .. import extras
-    rows = extras.snapshot_index(limit)
+    rows = extras.snapshot_index(limit, session=session)
     total = sum(int(r.get("bytes") or 0) for r in rows)
     return {"ok": True, "snapshots": rows, "count": len(rows), "bytes": total}
 

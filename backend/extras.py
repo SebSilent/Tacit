@@ -114,7 +114,7 @@ def fetch(url: str, max_chars: int | None = None) -> str:
     return head + (body[:limit] + f"\n...(truncated, {len(body)} chars total)" if len(body) > limit else body)
 
 
-def snapshot(root: str, label: str = "") -> str:
+def snapshot(root: str, label: str = "", session: str = "") -> str:
     src = Path(str(root or "")).expanduser()
     if not src.is_dir():
         return f"ERROR: {root} is not a directory"
@@ -150,6 +150,11 @@ def snapshot(root: str, label: str = "") -> str:
             (dest / ".label").write_text(label, encoding="utf-8")
         except Exception:
             pass
+    if session:
+        try:
+            (dest / ".session").write_text(str(session), encoding="utf-8")
+        except Exception:
+            pass
     return f"snapshot {dest.name}: {count} file(s)" + (f" - {label}" if label else "")
 
 
@@ -172,12 +177,16 @@ def list_snapshots() -> str:
     return "\n".join(out)
 
 
-def snapshot_index(limit: int = 200) -> list[dict]:
+def snapshot_index(limit: int = 200, session: str = "") -> list[dict]:
     """Structured snapshots for the UI timeline (the string helpers below stay
     for the agent tools).
 
     Each row carries what the timeline needs without re-stat'ing the tree: the
-    id, when it was taken, its label, and the files it holds.
+    id, when it was taken, its label, and the files it holds. A session filter
+    keeps only the snapshots that session took; snapshots with no session
+    marker (the agent's own tool, or anything from before this change) show
+    under the empty filter only, so nothing old disappears from the global
+    view.
     """
     root = config.CHECKPOINT_DIR
     if not root.is_dir():
@@ -190,9 +199,16 @@ def snapshot_index(limit: int = 200) -> list[dict]:
             label = (path / ".label").read_text(encoding="utf-8").strip()
         except Exception:  # noqa: BLE001
             label = ""
+        marker = ""
+        try:
+            marker = (path / ".session").read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001
+            marker = ""
+        if session and marker != session:
+            continue
         files, total = [], 0
         for f in path.rglob("*"):
-            if f.is_file() and f.name != ".label":
+            if f.is_file() and f.name not in (".label", ".session"):
                 files.append(str(f.relative_to(path)))
                 try:
                     total += f.stat().st_size
@@ -207,6 +223,7 @@ def snapshot_index(limit: int = 200) -> list[dict]:
         rows.append({
             "name": path.name,
             "label": label,
+            "session": marker,
             "created": created,
             "file_count": len(files),
             "files": sorted(files)[:200],

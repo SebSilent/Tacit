@@ -201,9 +201,9 @@ That is the cost Tacit exists to make visible, and the profiles exist to let you
 
 ### Reproducing it
 
-Tacit's row is read from its own dashboard, in **Settings > Tokens**, and from the profile selector:
-the Minimal profile reports the same figure with seven tools. The other rows were measured from the
-installed programs on this machine, and every one of them is reproducible from their own tooling.
+Tacit's row is read from its own profile selector, in **Settings > Profile**: the Minimal profile
+reports the same figure with seven tools. The other rows were measured from the installed programs
+on this machine, and every one of them is reproducible from their own tooling.
 
 ---
 
@@ -259,8 +259,8 @@ None of this was invented here, and it is worth saying where it came from.
   request has to mark where the cacheable prefix ends: so Tacit speaks the native Messages API for
   Anthropic endpoints and places those breakpoints itself. Everywhere else it adds nothing, because
   OpenAI-compatible servers cache the prefix on their own and an unrecognised field can get a request
-  rejected outright. Which applies is detected, reported in **Settings > Tokens**, overridable, and a
-  rejection is retried once without the markers so caching can never be the reason a turn fails.
+  rejected outright. Which applies is detected, overridable, and a rejection is retried once without
+  the markers so caching can never be the reason a turn fails.
   What Tacit still does not do is place breakpoints on the growing transcript for Anthropic: two marks
   cover the stable prefix and the last message, which is the documented pattern, but a longer rolling
   strategy is possible.
@@ -289,8 +289,8 @@ Most tools do not show you this number. Tacit does, and then gives you the switc
 - **Heavy exploration goes to a sub-agent.** The `task` tool runs in its own fresh context with a
   separate step budget, and returns only its report. Reading a large codebase costs the main
   conversation the summary, not the reading. The report is trimmed from both ends inward, so its
-  conclusion survives, and the tokens the sub-agent spent out of your window are counted in
-  **Settings > Tokens** rather than vanishing.
+  conclusion survives, and the tokens the sub-agent spent out of your window are counted in the
+  session's token accounting rather than vanishing.
 - **Memory is capped and retrieved, not carried.** A fixed token budget, default 120, enforced. The
   rest is searched and injected only when relevant, and what the budget held back is reported.
 - **Older turns compact in place.** The trigger counts the whole transcript: tool results and
@@ -359,7 +359,7 @@ is budgeted, and reports what the budget held back.
 
 The block goes into the standing prefix before the transcript, because it depends only on the folder
 : putting it there keeps a provider's prefix cache intact instead of invalidating it. Its cost is a
-line of its own in **Settings > Tokens**, never folded into the base prompt figure.
+line of its own in the token accounting, never folded into the base prompt figure.
 
 ---
 
@@ -392,8 +392,8 @@ Three guarantees around it, because an optimisation must never be a new way to f
 - **A rejection is retried once without the markers.** It is detected from the HTTP status line,
   before any event has streamed, so nothing is ever half-sent and then repeated.
 - **`TACIT_PROMPT_CACHE=off` disables it** for a provider that misbehaves.
-- **What is in force is reported**, in **Settings > Tokens**, as `breakpoints sent` or
-  `provider-side`: along with the hit rate actually observed. A measured run on an OpenAI-compatible
+- **What is in force is reported** as `breakpoints sent` or `provider-side`: along with the hit rate
+  actually observed. A measured run on an OpenAI-compatible
   endpoint reported **71.1%** of prompt tokens served from cache; that figure used to be computed and
   thrown away, so the field had always been blank.
 
@@ -465,7 +465,8 @@ it by itself.
    times produces one proposal that is more certain, not five proposals.
 
 The default learning mode is `propose`, and it cannot change anything. `auto` and `auto-low-risk`
-exist if you want them, and they are your decision to make, in **Settings > Capabilities**.
+exist if you want them, and they are your decision to make, in **Settings > Learning**, which also
+holds the proposals and their approve, reject, edit and delete actions.
 
 The analyzer adds no tool to the agent, changes no prompt text, and is switched off entirely when
 learning is set to `learn-off`.
@@ -515,7 +516,7 @@ several things each time you change how you are working. Switching applies immed
 The four profiles that turn the Memory Vault on cost about 419 tokens more than `default`, because
 the vault contributes five tool schemas of its own. That is the whole difference between the rows:
 they are identical in prompt cost and differ only in what is switched on. Every figure here is
-recomputed from the live configuration by **Settings > Tokens**, so the table cannot drift without
+recomputed from the live configuration by **Settings > Profile**, so the table cannot drift without
 the interface disagreeing with it.
 
 No profile enables automatic learning. That is a deliberate choice: a profile sets cost and
@@ -749,6 +750,12 @@ library, the interface says which package, why it is needed, roughly how large i
 command that would install it. Nothing runs until you run it. Until then the feature reports itself
 as unavailable rather than half working.
 
+The rows are checked on the machine, now, not asserted: browser automation looks for a playwright
+install (node or pip) rather than stopping at "node exists"; container isolation asks the daemon for
+its version and distinguishes a missing binary from a daemon that is not running; rich memory
+actually creates an FTS5 table in memory to see whether this Python build has it. A group that fails
+its check still names the command that would fix it.
+
 | Group | Needed for | Ships with |
 |---|---|---|
 | Advanced isolation | bubblewrap on Linux | your distribution |
@@ -783,31 +790,19 @@ outside your machine.
 
 ---
 
-## Token dashboard
+## Profile selector
 
-**Settings > Tokens** shows a local breakdown for the current session. It opens with the profile
-selector described above.
-
-- tokens sent and received
-- what the provider served from its own cache, and the hit rate: a turn re-sends its transcript on
-  every step, so on a long session this is most of the bill and the difference between a cheap run
-  and an expensive one
-- the composition of the starting prompt: base instructions, built-in tools, external tool schemas,
-  and memory
-- the estimated full-context baseline, which is what the prompt would cost with everything loaded up
-  front
-- what Tacit actually sends
-- the difference, attributed to on-demand loading, memory budgeting, and compaction
-
-All figures are measured locally. Numbers are exact when a tokenizer is available and are marked as
-estimates otherwise. No figure for another product is estimated or invented: the numbers in the
-comparison table above were read from those products' own diagnostics and logs.
+**Settings > Profile** is the profile selector: the named bundles, their measured cost, apply and
+delete, and a box to save the current setup under your own name. Switching applies immediately. The
+token tables that used to sit under it were removed at the operator's request — the accounting still
+happens and is still local, but the tab's job is to choose a bundle, not to report on it.
 
 ---
 
 ## Snapshots and undo
 
-**Settings > Snapshots** shows a timeline of saved states. For each one you can:
+Snapshots belong to the session that took them. The clock button in the top bar, next to the
+workspace picker, opens this session's timeline. For each snapshot you can:
 
 - see when it was taken, its label, and the files it contains
 - **compare** it with the project as it is now, listing changed, added and removed files
@@ -816,7 +811,9 @@ comparison table above were read from those products' own diagnostics and logs.
 The agent takes a snapshot automatically before the first edit of a turn, and you can request one at
 any time. It used to be offered the choice and left to take one; across two real sessions it never
 did, so the undo timeline was empty at exactly the moment it would have been needed. One snapshot per
-turn keeps it cheap, and a snapshot that fails is reported without blocking the edit.
+turn keeps it cheap, and a snapshot that fails is reported without blocking the edit. Snapshots taken
+before per-session tracking carry no session marker; they are counted in the panel's note line rather
+than silently vanishing.
 
 ---
 
@@ -833,7 +830,7 @@ and nothing is written into another tool's directory.
 ├─ skills/            your skills      ─┐ listed by name, loaded on demand
 ├─ knowledge/         reference cards  ─┘
 ├─ memory.db          memory vault          (Settings > Memory, off by default)
-├─ learning.json      learning proposals    (Settings > Capabilities)
+├─ learning.json      learning proposals    (Settings > Learning)
 ├─ capabilities.json  capability selections
 ├─ audit.jsonl        append-only ledger of what happened
 ├─ audit.jsonl.<ts>   retired ledgers, kept rather than deleted
@@ -1016,7 +1013,7 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite: 600 tests, no network and no real model. None of
+The repository includes an automated test suite: 607 tests, no network and no real model. None of
 them skip: the suite needs neither a container daemon nor a benchmark runner, and Tacit installs
 neither.
 

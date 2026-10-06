@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, assistant, audit, benchmarks, config, extras, guidance,  # noqa: E402
+from backend import (agent, assistant, audit, benchmarks, config, deps, extras, guidance,  # noqa: E402
                      metrics, plugin_manager, project_context, tokens)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
@@ -1493,6 +1493,82 @@ class TestServerRestart(Isolated):
         extras.restart_watch()
         log = (config.HOME / extras.RESTART_LOG).read_text(encoding="utf-8")
         self.assertIn("no handshake", log)
+
+
+class TestSessionSnapshots(Isolated):
+    """Snapshots belong to the session that took them."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "a.py").write_text("x = 1\n", encoding="utf-8")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+        super().tearDown()
+
+    def test_a_snapshot_remembers_the_session_that_took_it(self):
+        out = extras.snapshot(str(self.root), "auto: before write_file", session="s1")
+        self.assertTrue(out.startswith("snapshot"), out)
+        name = extras.snapshot_index()[0]["name"]
+        marker = config.CHECKPOINT_DIR / name / ".session"
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "s1")
+
+    def test_the_session_filter_keeps_only_that_sessions_snapshots(self):
+        extras.snapshot(str(self.root), "one", session="s1")
+        extras.snapshot(str(self.root), "two", session="s2")
+        mine = extras.snapshot_index(session="s1")
+        self.assertEqual([r["label"] for r in mine], ["one"])
+        self.assertTrue(all(r["session"] == "s1" for r in mine))
+
+    def test_unmarked_snapshots_stay_in_the_global_view(self):
+        # Anything taken before per-session tracking must not vanish.
+        extras.snapshot(str(self.root), "old, unmarked")
+        self.assertEqual(len(extras.snapshot_index()), 1)
+        self.assertEqual(extras.snapshot_index(session="s1"), [])
+        self.assertEqual(extras.snapshot_index(session="")[0]["session"], "")
+
+    def test_the_marker_file_is_not_counted_as_a_project_file(self):
+        extras.snapshot(str(self.root), "l", session="s1")
+        row = extras.snapshot_index()[0]
+        self.assertEqual(row["file_count"], 1)
+        self.assertEqual(row["files"], ["a.py"])
+
+
+class TestDependencyProbes(unittest.TestCase):
+    """A binary on PATH is not a working feature; the probes say which."""
+
+    def test_playwright_probe_reports_what_is_actually_installed(self):
+        ok, detail, remedy = deps._probe_playwright()
+        self.assertIsInstance(ok, bool)
+        self.assertTrue(detail)
+        if not ok:
+            self.assertTrue(remedy, "a failed probe must name its remedy")
+
+    def test_fts5_probe_matches_the_database_it_reports_on(self):
+        import sqlite3
+        ok, detail, remedy = deps._probe_fts5()
+        conn = sqlite3.connect(":memory:")
+        try:
+            real = True
+            try:
+                conn.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+            except Exception:
+                real = False
+        finally:
+            conn.close()
+        self.assertEqual(ok, real)
+        self.assertTrue(detail)
+        if not ok:
+            self.assertTrue(remedy)
+
+    def test_a_probe_failure_still_names_a_remedy(self):
+        # The contract run_install is tested on: not satisfied ⇒ a command.
+        got = deps.check("browser-automation")
+        self.assertTrue(got["ok"])
+        if not got["satisfied"]:
+            self.assertTrue(got["install_command"], got)
 
 
 if __name__ == "__main__":

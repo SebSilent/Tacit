@@ -51,6 +51,9 @@
         </button>
         <div class="wd-menu" id="wdMenu" hidden></div>
       </div>
+      <button class="icon-btn" id="snapBtn" title="Snapshots — this session's undo timeline">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v4.5l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <div class="tok-meter" id="tokMeter" hidden>
         <span class="tok-count" id="tokCount"></span>
         <span class="tok-ctx">
@@ -153,6 +156,26 @@
     </div>
   </aside>
 
+  <!-- ── Snapshots: this session's undo timeline, reached from the top bar ── -->
+  <div class="harness-overlay" id="snapOverlay" hidden>
+    <div class="ho-shell snap-shell">
+      <header class="ho-head">
+        <div class="ho-title">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 3l4 4h-7z" stroke-linejoin="round"/></svg>
+          <span>Snapshots</span>
+          <span class="ho-sub" id="snapSessionLabel"></span>
+        </div>
+        <button class="icon-btn ho-close" id="snapClose" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="ho-body">
+        <div id="snapNote" class="ho-sub"></div>
+        <div id="snapList"></div>
+      </div>
+      <footer class="ho-foot"><span>This session's snapshots only — the agent takes one automatically before its first edit of a turn.</span></footer>
+    </div>
+  </div>
   <div class="term-overlay" id="termOverlay" hidden>
     <div class="term-shell">
       <div class="term-head">
@@ -181,17 +204,15 @@
         </div>
         <nav class="ho-tabs" id="hoTabs">
           <button class="ho-tab active" data-tab="providers">Providers</button>
-          <button class="ho-tab" data-tab="skills">Skills</button>
-          <button class="ho-tab" data-tab="tools">Tools</button>
+          <button class="ho-tab" data-tab="tools">Skills &amp; Tools</button>
           <button class="ho-tab" data-tab="appearance">Appearance</button>
         </nav>
         <button class="icon-btn ho-close" id="hoClose" title="Close">
           <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
       </header>
-      <div class="ho-body">
+      <div class="ho-body" id="hoBody">
         <section class="ho-panel" id="panel-providers"></section>
-        <section class="ho-panel" id="panel-skills" hidden></section>
         <section class="ho-panel" id="panel-tools" hidden></section>
         <section class="ho-panel" id="panel-appearance" hidden></section>
       </div>
@@ -299,10 +320,10 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=40"></script>
+<script src="/static/app.js?v=41"></script>
 <script src="/static/git.js?v=15"></script>
-<script src="/static/harness.js?v=20"></script>
-<script src="/static/platform.js?v=13"></script>
+<script src="/static/harness.js?v=21"></script>
+<script src="/static/platform.js?v=15"></script>
 <script src="/static/assistant.js?v=9"></script>
 </body>
 </html>

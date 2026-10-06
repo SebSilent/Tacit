@@ -684,7 +684,7 @@ def _auto_snapshot(project: str, tool: str, session: str = "") -> str:
     failure here must never cost the edit.
     """
     try:
-        out = extras.snapshot(project, f"auto: before {tool}")
+        out = extras.snapshot(project, f"auto: before {tool}", session=session)
     except Exception as exc:  # noqa: BLE001
         return f"could not take an automatic snapshot ({exc}); edits are not undoable"
     audit.record("auto_snapshot", session=session, tool=tool, backend="snapshot",

@@ -172,6 +172,11 @@ async function initSessions() {
   renderTranscript(cur());
   renderModelChip();
   renderTokMeter();
+  // The assistant panel learns which session is active only here. Without
+  // this call its sid stays empty at boot and the panel shows nothing until
+  // the user switches away and back — which is the only other place
+  // attachCurrent runs.
+  attachCurrent();
 }
 
 function newSession(silent) {
