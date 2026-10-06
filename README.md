@@ -1,6 +1,6 @@
 # Tacit
 
-**The coding agent that finishes. The smallest standing cost per turn in its class, and the one that spends more rather than leave the file half-written.**
+**The coding agent where nothing is hidden and nothing moves without you.**
 
 Tacit is a coding agent you run yourself and use in your browser. It reads your files, runs
 commands, writes code, searches the web, and connects to outside tools. Everything stays on your
@@ -17,8 +17,8 @@ Three properties decide what an agent costs you and what it can do to you. Tacit
 three.
 
 1. **The fixed cost per turn is the smallest in its class.** 975 characters of standing
-   instructions plus your profile's tool descriptions: about 745 tokens on Minimal, 2,150 on
-   Silent, against roughly 8,390 for DSH and 18,970 for Hermes.
+   instructions, about 745 tokens on Minimal and 2,150 on Silent; DSH pays 8,390 and Hermes
+   18,970 every turn. The full accounting is below.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
    sandboxing and autonomous learning are all off or proposal-only until you turn them on. An
    approved rule goes back through the same budgets as everything else, never around them.
@@ -30,8 +30,9 @@ three.
 
 ## Why the architecture wins
 
-Every harness bills you for two things: its own paperwork, and the model's thinking. Tacit is
-built so the first is nearly free and the second is never wasted.
+An agent earns the right to run on your machine two ways: by showing you what it is doing, and by
+refusing to act where you have not let it. Tacit is built around both, and the numbers are what
+they are because of it.
 
 **Paperwork per turn: the smallest in its class.** 975 characters of standing instructions plus
 your profile's tool descriptions: roughly 745 tokens on Minimal and 2,150 on Silent, against
@@ -45,9 +46,10 @@ ceiling removed, so the model's reasoning is never paid for and then thrown away
 command hands back the output it printed before the kill, so 90 percent of a computation never
 reads as a hung no-op.
 
-**And when the task must be done, it spends more rather than fail.** That is the delivery
-guarantee, below: the one property no other harness in this comparison has, and the reason a
-Tacit cell that fails still leaves a graded artifact instead of nothing.
+**And it does not leave a task half-done.** The delivery guarantee, below, is the one property no
+other harness in this comparison has: when the turn would end without the file the task names,
+the file gets written, then run, and the turn only finishes when the task's own check passes or
+the rounds are spent. A cell that fails still leaves a graded artifact instead of nothing.
 
 ---
 
