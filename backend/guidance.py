@@ -1,4 +1,4 @@
-"""Per-turn guidance, the way little-coder does it.
+"""Per-turn guidance blocks, a pattern credited to little-coder and fitted to Tacit's budgets.
 
 The standing prompt stays small so it is cheap and cacheable, and short
 instructions are instead appended at the point of use: after a tool fails, when
@@ -205,7 +205,7 @@ def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(), missing=(
              previous: str = "") -> str:
     """Return the block for this step, or "" for none.
 
-    Priority follows little-coder: a failure first, then the state that changed
+    Priority order, a pattern credited to little-coder: a failure first, then the state that changed
     most recently, then standing advice. One block per step, so the model is never
     handed a wall of meta-instructions.
     """

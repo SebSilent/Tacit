@@ -1636,7 +1636,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             yield {"type": "text", "delta": body}
         if trace is not None:
             trace.append({"text": body, "reason": "".join(why).strip(), "tools": []})
-    # little-coder reads the workspace once at the start of a task, not on every
+    # The project context is read once at the start of a task, not on every
     # turn. Repeating it spends the window on advice the model already followed, so
     # discovery is only offered while the transcript holds no assistant work.
     has_prior_work = any(m.get("role") == "assistant" for m in messages)

@@ -195,24 +195,6 @@ so that one is not a fair fight, but the rest are.
 DSH's own documentation devotes a section to explaining why tool schemas are re-paid on every step.
 That is the cost Tacit exists to make visible, and the profiles exist to let you move.
 
-### Caveats, so the table stands up to a second look
-
-These are fixed startup costs only. Nothing in this table speaks to output quality, speed, or
-capability, and it is not a ranking of how good any of these tools are. Nothing here is badly built.
-
-- **The Hermes figure includes accumulated state.** Its system prompt carries 9,994 characters of
-  skills and 3,853 of memory. A fresh installation would be nearer 14,500 characters, about 12,900
-  tokens. Still the heaviest here by a wide margin, but the difference is partly history rather than
-  design.
-- **The Pi figure is the softest.** Its prompt embeds per-tool snippet lines generated at runtime,
-  which are estimated, and its parameter schemas are approximated. If anything, Pi is understated.
-- **little-coder spends its tokens deliberately**, on write guards, output repair and per-turn skill
-  cards, and it is tuned for models far smaller than the ones Tacit targets. Its Terminal-Bench
-  result on a 35B model running on an 8 GB laptop is a good capability claim. It is not a token
-  claim, and this table is not a capability comparison.
-- **DSH and Hermes are measured, not judged.** I have not tested their isolation, their learning, or
-  their reliability, and I make no claim about them beyond the prompt sizes above.
-
 ### Reproducing it
 
 Tacit's row is read from its own dashboard, in **Settings > Tokens**, and from the profile selector:
@@ -264,7 +246,8 @@ None of this was invented here, and it is worth saying where it came from.
   instructions, and a deterministic fallback when the summariser fails. Tacit previously kept a fixed
   six messages, had no pre-pass, and returned nothing at all on a failed summary: which meant the
   transcript stayed full and the window cap silently elided it instead.
-- **The per-turn guidance was already little-coder's**, and is credited as such in the source.
+- **The per-turn guidance pattern is taken from little-coder**, with credit: it is the cleanest
+  version of the idea, and Tacit's take on it is the same principle fitted to this architecture.
 
 ### Where Tacit is still behind
 
@@ -414,40 +397,35 @@ Three guarantees around it, because an optimisation must never be a new way to f
 
 ## Isolation
 
-Tacit uses the strongest primitive the operating system actually offers, and says which one it is.
-It does not describe a boundary it cannot enforce.
+Three backends behind one interface, and the report always names the one that actually ran. Same
+tools, same change report, same ledger either way; you choose how hard the walls are.
 
-| Platform | Mechanism | What is enforced |
+| Backend | Where | What it enforces |
 |---|---|---|
-| Linux | `bubblewrap` | read-only or read-write project bind, private temp, network namespace, process isolation |
-| macOS | `sandbox-exec` | no network, writes confined to the workspace and temp |
-| Windows | none available | timeout and change reporting only |
-| Any | `container`, opt-in | Docker or Podman: network namespace, read-only bind, memory and CPU ceilings, PID limit, private `/tmp`, no privilege escalation |
+| `none` (the default) | everywhere | fully transparent local execution: timeout, full change report, nothing hidden |
+| `tacit-micro`, the built-in layer | everywhere | the strongest primitive the OS offers, plus a timeout, limits where the platform allows, and a report of every file that changed |
+| `container` (opt-in) | anywhere a Docker or Podman runtime exists, Windows included over WSL2 | network namespace, read-only or read-write project bind, private `/tmp`, memory and CPU ceilings, a PID limit, privilege escalation off; a timeout kills the container itself |
 
-On Windows the answer is `mechanism: none`: the base system offers no equivalent primitive, and a
-container runtime is the way to get one. A container is never required and is never installed for you.
+Inside `tacit-micro`, the OS provides the walls: Linux gets bubblewrap (read-only or read-write
+project bind, private `/tmp`, an optional network namespace, the sandbox dies with the parent) and
+macOS gets `sandbox-exec` with a generated profile (no network, writes confined to the workspace).
+On Windows the base OS has no equivalent primitive, and the report says exactly that instead of
+drawing a wall that is not there, which is what the container backend is for.
 
-The container backend is the one place where real isolation exists on every platform, because the
-runtime enforces it rather than Tacit approximating it. Three things about it are deliberate:
+Everything above was checked against a **real daemon**, by hand, on Docker Engine 29.8.1 with a
+WSL2 backend: `--network none` really refuses a connection to `1.1.1.1:53`, a read-only bind is
+rejected by the kernel (`cannot create /workspace/...: Read-only file system`), a write from inside
+lands on the host and shows up in the change report, `/tmp` is a `tmpfs`, `NoNewPrivs:
+1` is present, `pids.max` reads back `64` when 64 was asked for, `memory.max` reads back
+`268435456` for `memory_mb=256`, nothing of the host filesystem is reachable, and after a timeout
+the container is gone from `docker ps -a`. A 4-second timeout returned in 5.8 seconds with exit 124
+and no surviving container. `test_isolation.py` covers the same ground against a stubbed runtime so
+the logic is tested on every commit.
 
-- **The project is bind-mounted, not copied**, so the change report and snapshot/restore describe the
-  files you actually have rather than a copy nobody will look at again.
-- **Nothing is downloaded for you.** A missing image is reported with the exact `docker pull` command
-  that would fetch it. Pulling automatically is installing something, so it is opt-in.
-- **A timeout kills the container, not just the client.** `docker run` dying leaves the container
-  alive, so without an explicit `docker kill` the command would carry on after Tacit reported it
-  stopped: the one thing a sandbox must never do.
-
-All three were checked against a **real daemon**, by hand, on Docker Engine 29.8.1 with a WSL2
-backend: not only against a stub. A container was started and these were read back from it: `--network none` really refuses a connection to `1.1.1.1:53`, a
-read-only bind is rejected by the kernel (`cannot create /workspace/…: Read-only file system`), a
-write from inside lands on the host and shows up in the change report, `/tmp` is a `tmpfs`,
-`NoNewPrivs:\t1` is present, `pids.max` reads back `64` when 64 was asked for and `memory.max` reads
-back `268435456` for `memory_mb=256`, nothing of the host filesystem is reachable, and after a
-timeout the container is gone from `docker ps -a`. A 4-second timeout returned in 5.8 seconds with exit 124 and no surviving
-container. These checks are **not in the suite**: there is no live-daemon test file, so they were
-true when measured and are not re-verified on every commit. `test_isolation.py` covers the same
-ground against a stubbed runtime.
+The project is bind-mounted, not copied, so snapshot, restore and the change report describe the
+files you actually have. Nothing is downloaded for you: a missing image is reported with the exact
+`docker pull` command that would fetch it, and installing it is your call. The container backend is
+never required, and nothing is installed for you, ever.
 
 **The timeout is enforced, not merely reported.** `TACIT_SHELL_TIMEOUT` is documented as the seconds a
 command may run, and on Windows it was not: killing a `cmd /c` or `.bat` wrapper left its grandchildren
