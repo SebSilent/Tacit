@@ -484,7 +484,7 @@ class TestPublishedFigures(Isolated):
 
     def test_default_profile_tool_count_matches_the_readme(self):
         from backend import profiles
-        cost = profiles.cost_of(profiles.BUILTIN["silent"])
+        cost = profiles.cost_of(profiles.BUILTIN["default"])
         self.assertEqual(cost["tool_count"], len(agent.TOOLS))
         self.assertEqual(len(agent.TOOLS), 24)
 
@@ -492,7 +492,7 @@ class TestPublishedFigures(Isolated):
         # The README's profile table said ~2,100 for these; the memory vault adds
         # five tool schemas, and a profile must not understate its own price.
         from backend import profiles
-        silent = profiles.cost_of(profiles.BUILTIN["silent"])["total"]
+        silent = profiles.cost_of(profiles.BUILTIN["default"])["total"]
         for name in ("safe", "power-isolation", "power-memory", "full"):
             cost = profiles.cost_of(profiles.BUILTIN[name])
             self.assertGreater(cost["total"], silent, name)

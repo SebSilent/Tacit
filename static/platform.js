@@ -254,7 +254,7 @@
       <div class="ho-section">Profile</div>
       <div class="mcp-add">
         <select class="git-select" id="capProfile">
-          ${['minimal', 'silent', 'safe', 'power-isolation', 'power-memory', 'full']
+          ${['minimal', 'default', 'safe', 'power-isolation', 'power-memory', 'full']
             .map((n) => `<option value="${n}"${n === c.profile ? ' selected' : ''}>${n}</option>`).join('')}
         </select>
         <button class="ho-btn small primary" id="capProfileApply">Apply</button>

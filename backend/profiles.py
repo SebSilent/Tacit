@@ -28,8 +28,8 @@ BUILTIN = {
         "tools": list(CORE_TOOLS),
         "capabilities": {"sandbox": "none", "memory": "off", "learning": "propose"},
     },
-    "silent": {
-        "label": "Silent",
+    "default": {
+        "label": "Default",
         "description": "All tools, no memory, no sandbox, nothing learned. The default.",
         "plugins": [],
         "memory_budget": 0,
@@ -81,10 +81,12 @@ BUILTIN = {
     },
 }
 
-DEFAULT_PROFILE = "silent"
+DEFAULT_PROFILE = "default"
 
-# Names from earlier builds, so an existing profiles.json keeps working.
-LEGACY_NAMES = {"lean": "silent", "default": "silent", "assisted": "safe",
+# Names from earlier builds, so an existing profiles.json keeps working. "silent" was the name
+# the default profile carried before it took its current name; "default" itself needs no entry
+# because it is the canonical name now.
+LEGACY_NAMES = {"lean": "default", "silent": "default", "assisted": "safe",
                 "everything": "full", "dsh": "power-isolation",
                 "hermes": "power-memory"}
 
@@ -285,6 +287,8 @@ def capture(name: str, label: str = "", description: str = "") -> dict:
     clean = str(name or "").strip().lower().replace(" ", "-")
     if not clean:
         return {"ok": False, "error": "a profile name is required"}
+    # A legacy name is an alias of a built-in, so captures under it would shadow the real one.
+    clean = LEGACY_NAMES.get(clean, clean)
     if clean in BUILTIN:
         return {"ok": False, "error": f"'{clean}' is a built-in profile"}
     data = load()
@@ -301,6 +305,9 @@ def capture(name: str, label: str = "", description: str = "") -> dict:
 
 
 def delete(name: str) -> dict:
+    # Legacy names resolve before anything else: "delete silent" targets the built-in now called
+    # default, and must be refused for the same reason.
+    name = LEGACY_NAMES.get(name, name)
     if name in BUILTIN:
         return {"ok": False, "error": "built-in profiles cannot be deleted"}
     data = load()

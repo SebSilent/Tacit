@@ -17,7 +17,7 @@ Three properties decide what an agent costs you and what it can do to you. Tacit
 three.
 
 1. **The fixed cost per turn is the smallest in its class.** 975 characters of standing
-   instructions, about 745 tokens on Minimal and 2,150 on Silent; DSH pays 8,390 and Hermes
+   instructions, about 745 tokens on Minimal and 2,150 on Default; DSH pays 8,390 and Hermes
    18,970 every turn. The full accounting is below.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
    sandboxing and autonomous learning are all off or proposal-only until you turn them on. An
@@ -35,7 +35,7 @@ refusing to act where you have not let it. Tacit is built around both, and the n
 they are because of it.
 
 **Paperwork per turn: the smallest in its class.** 975 characters of standing instructions plus
-your profile's tool descriptions: roughly 745 tokens on Minimal and 2,150 on Silent, against
+your profile's tool descriptions: roughly 745 tokens on Minimal and 2,150 on Default, against
 8,390 for DSH and 18,970 for Hermes, tool descriptions included. At twenty-five turns a task that
 gap is tens of thousands of tokens paid before the model reasons about a single line of your
 code. Everything else is lazy: skills, knowledge, MCP tool descriptions and project instructions
@@ -83,21 +83,20 @@ input plus output, cache reads excluded, counted the way OpenBench counts them.
 
 | Profile | Solved | Tokens per solve | Wall seconds per cell |
 |---|---|---|---|
-| Silent | 9/9 | 156,466 | 705 |
+| Default | 9/9 | 156,466 | 705 |
 | Minimal | 9/9 | 133,881 | 648 |
 
-Per task on Linux: feal 3/3 silent and 3/3 minimal at 32,673 and 23,437 tokens per cell; llm 3/3
-and 3/3 at 235,379 and 226,896; schemelike 3/3 and 3/3 at 201,348 and 151,312.
+Per task on Linux: feal 3/3 default and 3/3 minimal at 32,673 and 23,437 tokens per cell; llm 3/3 and 3/3 at 235,379 and 226,896; schemelike 3/3 and 3/3 at 201,348 and 151,312.
 
 ### Windows
 
 | Profile | Solved | Tokens per solve | Wall seconds per cell |
 |---|---|---|---|
-| Silent | 6/6 | 106,526 | 530 |
+| Default | 6/6 | 106,526 | 530 |
 | Minimal | 5/6 | 82,814 | 418 |
 
-Per task on Windows: feal 3/3 silent and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
-3/3 silent and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only: its own
+Per task on Windows: feal 3/3 default and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
+3/3 default and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only: its own
 checker reads `os.O_NONBLOCK`, which Windows Python does not provide, so the task cannot be
 checked there as shipped.
 
@@ -105,7 +104,7 @@ checked there as shipped.
 
 | Arm | Solved | Cells that errored |
 |---|---|---|
-| Tacit, Linux, silent | 9/9 | 0 |
+| Tacit, Linux, default | 9/9 | 0 |
 | Tacit, Linux, minimal | 9/9 | 0 |
 | Pi | 8/9 | 3 |
 | OpenCode | 7/9 | 3 |
@@ -508,13 +507,13 @@ several things each time you change how you are working. Switching applies immed
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
 | **minimal** | 7 | none | off | propose | ~745 tokens |
-| **silent** (default) | 24 | none | off | propose | ~2,150 tokens |
+| **default** | 24 | none | off | propose | ~2,150 tokens |
 | **safe** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
 | **power-isolation** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
 | **power-memory** | 24 | none | full, budgeted | propose | ~2,565 tokens + budget |
 | **full** | 24 | tacit-micro | full, budgeted | propose | ~2,565 tokens + budget |
 
-The four profiles that turn the Memory Vault on cost about 419 tokens more than `silent`, because
+The four profiles that turn the Memory Vault on cost about 419 tokens more than `default`, because
 the vault contributes five tool schemas of its own. That is the whole difference between the rows:
 they are identical in prompt cost and differ only in what is switched on. Every figure here is
 recomputed from the live configuration by **Settings > Tokens**, so the table cannot drift without

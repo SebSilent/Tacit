@@ -85,7 +85,7 @@ class TestDefaults(Isolated):
         self.assertFalse(cfg["sandbox"]["network"])
         self.assertEqual(cfg["memory"]["mode"], "off")
         self.assertEqual(cfg["learning"]["mode"], "propose")
-        self.assertEqual(cfg["profile"], "silent")
+        self.assertEqual(cfg["profile"], "default")
 
     def test_learning_defaults_to_propose_not_auto(self):
         self.assertEqual(providers.load()["learning"]["mode"], "propose")
@@ -760,7 +760,7 @@ class TestStandalone(Isolated):
         for kind in ("sandbox", "memory", "learning"):
             self.assertTrue(summary[kind]["available"],
                             f"{kind} must be usable on a machine with nothing extra installed")
-        self.assertEqual(summary["profile"], "silent")
+        self.assertEqual(summary["profile"], "default")
 
     def test_optional_things_stay_off_until_enabled(self):
         from backend import providers

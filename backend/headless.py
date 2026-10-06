@@ -306,9 +306,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="write the result dict here as JSON")
     ap.add_argument("--quiet", action="store_true", help="do not stream events to stderr")
     ap.add_argument("--profile", default=None,
-                    help="capability bundle to apply first: minimal | silent | safe | "
-                         "power-isolation | power-memory | full (default: whatever "
-                         "profiles.json already has active)")
+                    help="capability bundle to apply first: minimal | default | safe | "
+                         "power-isolation | power-memory | full. Names from older builds "
+                         "(silent, lean, everything) still resolve. Default: whatever "
+                         "profiles.json already has active")
     ap.add_argument("--reasoning", default=None,
                     help="thinking level to request: none | minimal | low | medium | high | "
                          "max, or 'default' to send nothing and let the endpoint decide "

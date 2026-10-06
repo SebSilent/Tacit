@@ -20,7 +20,7 @@ TRUST_LEVELS = ("local", "verified", "untrusted")
 
 # The safe default for every capability. Nothing optional is on.
 DEFAULTS = {
-    "profile": "silent",
+    "profile": "default",
     "sandbox": {"backend": "none", "network": False, "timeout": 180,
                 "memory_mb": 0, "cpu_seconds": 0, "readonly_project": False},
     "memory": {"mode": "off", "budget": 120, "ttl_days": 0, "reinforce": True},
@@ -248,7 +248,7 @@ def summary() -> dict:
     """One call for the interface: the selection, the registry, the cost."""
     cfg = load()
     return {
-        "profile": cfg.get("profile") or "silent",
+        "profile": cfg.get("profile") or "default",
         "config": cfg,
         "sandbox": resolve("sandbox"),
         "memory": resolve("memory"),

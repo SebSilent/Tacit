@@ -411,13 +411,13 @@ class TestMcpHttpTransport(Isolated):
 class TestProfiles(Isolated):
     def test_builtins_are_listed_with_costs(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
-        for name in ("minimal", "silent", "safe", "power-isolation",
+        for name in ("minimal", "default", "safe", "power-isolation",
                      "power-memory", "full"):
             self.assertIn(name, rows)
         self.assertNotIn("dsh", rows, "no profile is named after another harness")
         self.assertNotIn("hermes", rows, "no profile is named after another harness")
-        self.assertTrue(rows["silent"]["active"])
-        self.assertFalse(rows["silent"]["mcp_direct"])
+        self.assertTrue(rows["default"]["active"])
+        self.assertFalse(rows["default"]["mcp_direct"])
 
     def test_legacy_names_still_resolve(self):
         for old, new in profiles.LEGACY_NAMES.items():
@@ -429,13 +429,13 @@ class TestProfiles(Isolated):
     def test_minimal_narrows_the_tool_set(self):
         rows = {p["name"]: p for p in profiles.list_profiles()}
         self.assertEqual(rows["minimal"]["tool_count"], len(profiles.CORE_TOOLS))
-        self.assertGreater(rows["silent"]["tool_count"], rows["minimal"]["tool_count"])
-        self.assertLess(rows["minimal"]["cost"]["total"], rows["silent"]["cost"]["total"])
+        self.assertGreater(rows["default"]["tool_count"], rows["minimal"]["tool_count"])
+        self.assertLess(rows["minimal"]["cost"]["total"], rows["default"]["cost"]["total"])
 
     def test_cost_ordering(self):
         rows = {p["name"]: p["cost"]["total"] for p in profiles.list_profiles()}
-        self.assertLess(rows["minimal"], rows["silent"])
-        self.assertLessEqual(rows["silent"], rows["full"])
+        self.assertLess(rows["minimal"], rows["default"])
+        self.assertLessEqual(rows["default"], rows["full"])
 
     def test_every_profile_pays_for_the_base_prompt(self):
         for p in profiles.list_profiles():
@@ -489,7 +489,7 @@ class TestProfiles(Isolated):
     def test_turning_memory_off_takes_the_recall_tools_away(self):
         profiles.apply("safe")
         self.assertTrue(plugin_manager.is_enabled("memory_vault"))
-        profiles.apply("silent")
+        profiles.apply("default")
         self.assertFalse(plugin_manager.is_enabled("memory_vault"))
         self.assertEqual(providers.load()["memory"]["mode"], "off")
 
@@ -501,7 +501,7 @@ class TestProfiles(Isolated):
     def test_apply_changes_plugin_state(self):
         self.assertTrue(profiles.apply("safe")["ok"])
         self.assertTrue(plugin_manager.is_enabled("memory_vault"))
-        self.assertTrue(profiles.apply("silent")["ok"])
+        self.assertTrue(profiles.apply("default")["ok"])
         self.assertFalse(plugin_manager.is_enabled("memory_vault"))
         self.assertEqual(memory_store.budget(), 0)
 
@@ -529,7 +529,7 @@ class TestProfiles(Isolated):
 
     def test_switching_back_restores_every_tool(self):
         profiles.apply("minimal")
-        profiles.apply("silent")
+        profiles.apply("default")
         self.assertIsNone(profiles.current()["tools"])
         self.assertEqual(profiles.current()["tool_count"], len(agent.TOOLS))
 
