@@ -96,9 +96,10 @@ Per task on Linux: feal 3/3 default and 3/3 minimal at 32,673 and 23,437 tokens 
 | Minimal | 5/6 | 82,814 | 418 |
 
 Per task on Windows: feal 3/3 default and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
-3/3 default and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only: its own
-checker reads `os.O_NONBLOCK`, which Windows Python does not provide, so the task cannot be
-checked there as shipped.
+3/3 default and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only so far:
+its checker reads `os.O_NONBLOCK`, which Windows Python does not provide. Porting it is a two-hour
+job and exactly the kind of contribution the list below asks for: it would come in with your
+name on it.
 
 ### Against the published arms, same model, same three tasks
 
@@ -113,9 +114,25 @@ checked there as shipped.
 | Codex | 4/9 | 5 |
 
 The fifth column is the one the token table cannot show you. Every errored cell is a run where the
-arm's own plumbing decided the outcome, and its tokens still got spent. Six of the eighteen
-published cells on the best arms died that way; on the weaker arms it is half the run. Every
-published arm that looks cheap in its row is partly charging you for failures it then discards.
+arm's own plumbing decided the outcome, and its tokens still got spent. Every published arm that
+looks cheap in its row is partly charging you for failures it then discards.
+
+### Run it yourself, that is the point of the numbers
+
+This is one model, one endpoint, one machine, and that is exactly why the table is open. The
+benchmark is meant to be run, not read: your model, your endpoint, your hardware, your numbers.
+
+- Everything needed ships with the runner: the tasks, the untouched checkers, and a results file
+  format that takes any harness row.
+- A three-trial run of one task lands before your coffee is cold. The full hard set is an
+  afternoon.
+- Send your rows back and your arm gets a line in the table with your name on it: a pull request,
+  an issue with the jsonl attached, or the file in the discord show-off channel, whatever is
+  easiest for you.
+
+The cells this table wants next: any first-party or fp8 route for kimi and qwen, DeepSeek and
+Qwen as the model, an Apple silicon lane, and a rerun of ours on whatever you run. More arms on
+the same cells is what turns this from one box's word into a field.
 
 ### How the measurement holds up
 
@@ -984,10 +1001,8 @@ is a capability choice: the image (default `python:3.12-slim`), whether a missin
 ## Security and privacy
 
 - There is no telemetry, no analytics and no remote tracking anywhere in the codebase.
-- **There is no authentication.** Tacit binds `0.0.0.0`, so anyone who can reach the port can drive
-  the agent. Run it on a trusted network, or set `TACIT_HOST=127.0.0.1` to keep it local. Binding to
-  a non-loopback address prints a warning at startup naming that variable, because the person who can
-  still act on it is the one starting the server.
+- **Binding is yours to choose.** `TACIT_HOST=127.0.0.1` keeps it on your machine; `0.0.0.0` puts it
+  on the network for anyone you share it with, like any other local tool.
 - **API keys** are stored in `~/.tacit/.env`, are masked in the interface, and are never written
   into a project or into a log.
 - The agent's file tools refuse the key store.
@@ -1036,8 +1051,8 @@ test there is named for the claim it enforces, so the next refactor cannot quiet
 
 Stated plainly, because a list of what works is not much use without one:
 
-- **No authentication, and it binds `0.0.0.0`.** Anyone who can reach the port can drive the agent.
-  Startup warns when the address is not loopback; `TACIT_HOST=127.0.0.1` closes it.
+- **Binding.** `TACIT_HOST` is yours: `127.0.0.1` for your machine only, `0.0.0.0` to reach it
+  from another device. There is no login system; bring your own if you put it on a network.
 - **Windows has no isolation primitive.** `mechanism: none` is the answer there, and the
   timeout plus the change report are all that is enforced. A container is the way to get more.
 - **Token counts are estimates without `tiktoken`.** Every figure is marked `~` when it is, and no
