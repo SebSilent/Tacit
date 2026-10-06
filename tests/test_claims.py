@@ -66,6 +66,10 @@ class ProjectFixture(Isolated):
         (sub / "delta.py").write_text("SHARED = 'in delta'\n", encoding="utf-8")
         (self.root / "long.txt").write_text(
             "\n".join(f"line {i} " + "x" * 60 for i in range(1, 401)), encoding="utf-8")
+        # 400 lines is ~27 KB, the size of a real source file the agent must reproduce.
+        # The second fixture is big enough to still need clipping.
+        (self.root / "huge.txt").write_text(
+            "\n".join(f"line {i} " + "x" * 60 for i in range(1, 1001)), encoding="utf-8")
 
     def proj(self) -> str:
         return str(self.root)
@@ -76,15 +80,25 @@ class TestReadFileRange(ProjectFixture):
     """README: the agent should not have to re-read what it already read."""
 
     def test_truncated_read_names_the_range_and_the_resume_offset(self):
-        out = agent.t_read_file("long.txt", offset=0, limit=400, project=self.proj())
-        self.assertLessEqual(len(out), config.TOOL_OUTPUT_LIMIT + 120)
+        out = agent.t_read_file("huge.txt", offset=0, limit=1000, project=self.proj())
+        self.assertLessEqual(len(out), config.READ_OUTPUT_LIMIT + 120)
         # The trailer survives the clip and states the span actually delivered,
         # not the span asked for.
-        self.assertIn("of 400 shown", out)
+        self.assertIn("of 1000 shown", out)
         self.assertRegex(out, r"pass offset=\d+ for the next \d+")
         last = int(out.rsplit("lines 1-", 1)[1].split(" of ")[0])
-        self.assertLess(last, 400)
+        self.assertLess(last, 1000)
         self.assertIn(f"pass offset={last}", out)
+
+    def test_a_real_source_file_arrives_whole(self):
+        # 27 KB is larger than interp.py (17,578 chars). Clipping it at 6,000 left two
+        # thirds of the file the agent must reimplement unseen, and the agent stopped
+        # reading and started probing with the shell instead.
+        out = agent.t_read_file("long.txt", offset=0, limit=400, project=self.proj())
+        self.assertNotIn("truncated", out)
+        self.assertIn("end of file", out)
+        self.assertIn("line 400 ", out)
+        self.assertGreater(len(out), config.TOOL_OUTPUT_LIMIT)
 
     def test_complete_read_says_end_of_file(self):
         out = agent.t_read_file("alpha.py", project=self.proj())
@@ -1327,6 +1341,26 @@ class TestParallelDelegation(Isolated):
         list(agent.run_turn(msgs, project=None, ref="p/m"))
         self.assertEqual(seen, [])
         del orig_sub
+
+
+class TestSalvageWordingNamesEveryFile(unittest.TestCase):
+    """A task scored on two files must be asked for both in the one round it has left."""
+
+    def test_one_missing_file_is_asked_for_in_the_singular(self):
+        out = guidance.salvage(["attack.py"])
+        self.assertIn("attack.py is not written", out)
+        self.assertIn("Write it now with write_file", out)
+
+    def test_two_missing_files_are_both_asked_for_in_one_round(self):
+        out = guidance.salvage(["task_file/output_data/plan_b1.jsonl",
+                                "task_file/output_data/plan_b2.jsonl"])
+        self.assertIn("plan_b1.jsonl", out)
+        self.assertIn("plan_b2.jsonl", out)
+        self.assertIn("every one of them", out)
+        self.assertNotIn("Write it now", out, "the singular phrasing implies one file")
+
+    def test_no_names_still_produces_an_instruction(self):
+        self.assertIn("the file", guidance.salvage([]))
 
 
 if __name__ == "__main__":

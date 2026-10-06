@@ -28,7 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import agent, audit, config, metrics, project_context
+from . import agent, audit, config, metrics, project_context, thinking
 from .ai import prompts
 
 
@@ -121,7 +121,7 @@ def _accumulate(totals: dict, u: dict) -> None:
 
 def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = None,
         timeout_s: float | None = None, session_title: str = "headless",
-        on_event=None, profile: str | None = None) -> dict:
+        on_event=None, profile: str | None = None, reasoning: str | None = None) -> dict:
     """One headless agent turn. Returns the result dict; raises nothing on task failure."""
     started = time.time()
     # A profile is a bundle of choices (plugins, memory, and crucially the tool set), and
@@ -136,6 +136,17 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
             raise SystemExit(f"[tacit] profile {profile!r} could not be applied: "
                              f"{prof.get('error')}")
     rec = store_create(session_title, ref, workdir)
+    # The thinking level has to be resolved here, not left to the session record's default.
+    # Omitting reasoning_effort does not mean "no thinking": it means "whatever this endpoint
+    # happens to do today", which is not a constant a benchmark row can be compared against.
+    level = (reasoning or rec.get("thinking") or "default").strip() or "default"
+    # "default" is a deliberate request to send no level at all, so it must not survive into the
+    # wire name: reasoning_for passes unknown names through, and "default" would reach the
+    # endpoint as a level nobody listed.
+    effort = None if level == "default" else config.reasoning_for(level)
+    # Recorded, not passed: engine._payload maps the level to a wire name itself, and doing it
+    # twice would let headless disagree with the request that is actually going out.
+    sent = thinking.send(config.resolve_model(ref) or {}, effort)
     messages = [{"role": "system",
                  "content": prompts.system_prompt(workdir, False, chat=False)}]
     instructions = project_context.block(workdir)
@@ -168,8 +179,8 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
         for ev in agent.run_turn(messages, project=workdir, ref=ref, chat=False,
                                  session=rec["id"],
                                  has_instructions=bool(instructions.get("text")),
-                                 reasoning=config.reasoning_for(rec.get("thinking")),
-                                 max_steps=max_steps, trace=trace):
+                                 reasoning=effort,
+                                 max_steps=max_steps, trace=trace, deadline=deadline):
             kind = ev.get("type")
             if kind == "usage":
                 # Every usage event is counted, including the ones tagged `subagent`:
@@ -214,6 +225,10 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
         "model": ref,
         "workdir": workdir,
         "max_steps": max_steps or config.AGENT_MAX_STEPS,
+        # What thinking contract this turn actually asked for. "default" means nothing was sent
+        # and the endpoint decided, which is a fact about the run that a reader is entitled to.
+        "reasoning": level,
+        "reasoning_effort": sent,
         "turns": turns,
         "steps": steps_seen,
         "tool_calls": tool_calls,
@@ -294,6 +309,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="capability bundle to apply first: minimal | silent | safe | "
                          "power-isolation | power-memory | full (default: whatever "
                          "profiles.json already has active)")
+    ap.add_argument("--reasoning", default=None,
+                    help="thinking level to request: none | minimal | low | medium | high | "
+                         "max, or 'default' to send nothing and let the endpoint decide "
+                         "(default: the level the session record carries)")
     args = ap.parse_args(argv)
 
     config.ensure_home()
@@ -318,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run(args.instruction, workdir, ref, max_steps=args.max_steps,
                  timeout_s=args.timeout,
                  on_event=None if args.quiet else show,
-                 profile=args.profile)
+                 profile=args.profile, reasoning=args.reasoning)
 
     if args.json_out:
         out = Path(args.json_out)

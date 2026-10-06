@@ -4,8 +4,14 @@ import platform as _platform
 import sys
 from pathlib import Path
 
+OS = os.environ.get("TACIT_OS") or _platform.system()
+
+# The interpreter that shell=True will actually pick. The agent is told this, because a model
+# that assumes bash on Windows emits commands that run, return 0, and do nothing.
+SHELL_KIND = {"Windows": "cmd.exe", "Darwin": "zsh", "Linux": "bash"}.get(OS, OS)
+
 PLATFORM = os.environ.get("TACIT_PLATFORM") or {
-    "Windows": "Windows (cmd.exe/PowerShell — there is no ls, grep, find or rm)",
+    "Windows": "Windows (cmd.exe): there is no ls, grep, find or rm",
     "Darwin": "macOS (a POSIX shell)",
     "Linux": "Linux (a POSIX shell)",
 }.get(_platform.system(), _platform.system())
@@ -55,7 +61,20 @@ AGENT_CONTEXT_BUDGET = int(os.environ.get("TACIT_CONTEXT_BUDGET", "120000"))
 CONTEXT_BUDGET_MIN = int(os.environ.get("TACIT_CONTEXT_BUDGET_MIN", "24000"))
 CONTEXT_BUDGET_MAX = int(os.environ.get("TACIT_CONTEXT_BUDGET_MAX", "2000000"))
 TEMPERATURE = float(os.environ.get("TACIT_TEMPERATURE", "0.2"))
+# Whether that number was chosen by the operator or is just the default. A thinking model is left
+# alone only when nobody has asked for a specific temperature; an explicit setting always wins,
+# including when it is set to the same 0.2.
+TEMPERATURE_SET = "TACIT_TEMPERATURE" in os.environ
 TOOL_OUTPUT_LIMIT = int(os.environ.get("TACIT_TOOL_OUTPUT_LIMIT", "6000"))
+
+# Reading a file is the one tool where a partial answer is worse than none. To
+# reimplement or repair a source file the agent needs the whole thing in context: a
+# 6,000-character ceiling on a 17,578-character file leaves two thirds of it unseen,
+# and the measured failure mode is the agent abandoning `read_file` and re-deriving the
+# same facts through shell probes, which is how a task that needs one 400-line write
+# ends up as 30 thin rounds. Shell and search output stay clipped: those are logs and
+# match lists, not an artifact to reproduce.
+READ_OUTPUT_LIMIT = int(os.environ.get("TACIT_READ_OUTPUT_LIMIT", "48000"))
 SHELL_TIMEOUT = int(os.environ.get("TACIT_SHELL_TIMEOUT", "180"))
 
 SUBAGENT_MAX_STEPS = int(os.environ.get("TACIT_SUBAGENT_STEPS", "12"))
@@ -277,6 +296,7 @@ def model_list() -> list[dict]:
                 "provider": pid,
                 "model": m.get("id"),
                 "reasoning": bool(m.get("reasoning")),
+                "temperature": m.get("temperature"),
                 "stale": bool(m.get("stale")),
                 "contextWindow": m.get("contextWindow") or 0,
                 "maxTokens": m.get("maxTokens") or 0,
@@ -308,6 +328,10 @@ def resolve_model(ref: str | None = None) -> dict | None:
         "contextWindow": meta.get("contextWindow") or 0,
         "maxTokens": meta.get("maxTokens") or 0,
         "reasoning": bool(meta.get("reasoning")),
+        # Some vendors ship a sampling default for a thinking model that is better than any number
+        # picked here. A model entry may state one, and it beats TACIT_TEMPERATURE only for that
+        # model; the flat default still covers every model that says nothing.
+        "temperature": meta.get("temperature"),
         # Read from /api/show and cached: what a model accepts, and what it does when
         # nothing is sent. Without these a level the model does not list would be
         # passed through and resolved to its default in silence.

@@ -351,8 +351,18 @@ def _run_none(cmd: str, root: Path, limit: int, session: str) -> dict:
     started = time.time()
     code, out, err, timed_out = _run_captured(cmd, cwd=str(root), timeout=limit, shell=True)
     if timed_out:
-        res = _result(False, f"ERROR: timed out after {limit}s", backend="none",
-                      cwd=str(root))
+        partial = (out or "").strip()
+        note = (f"ERROR: timed out after {limit}s. That is this shell's cap, not the task's "
+                "runtime budget. If the task states one for the deliverable, a command that "
+                "cannot beat the cap is a bug in the approach: shrink the search space, "
+                "vectorize, cut the loop, or precompute. Rerunning this exact command unchanged "
+                "cannot pass - change something first.")
+        res = _result(False, note, backend="none", cwd=str(root))
+        if partial:
+            # Whatever the command printed before the kill is usually exactly the state the next
+            # attempt needs - diffs collected, candidates ranked. This used to be discarded, so a
+            # 90%-done computation looked identical to a hung no-op.
+            res["stdout"] = partial[-2000:]
         audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
                      status="timeout", timeout=limit, command=cmd)
         return res

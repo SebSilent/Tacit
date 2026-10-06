@@ -100,8 +100,8 @@ def install(lines, status=200, body=b""):
     return original
 
 
-def model(reasoning=False, window=0, max_tokens=0):
-    return {"ref": "p/m", "provider": "p", "model": "m", "baseUrl": "http://x",
+def model(reasoning=False, window=0, max_tokens=0, provider="p"):
+    return {"ref": "p/m", "provider": provider, "model": "m", "baseUrl": "http://x",
             "apiKey": "", "contextWindow": window, "maxTokens": max_tokens,
             "reasoning": reasoning, "thinkingValues": [], "thinkingDefault": None}
 
@@ -266,6 +266,54 @@ class PayloadTest(unittest.TestCase):
         self.assertNotIn("tools", body)
         self.assertNotIn("tool_choice", body)
 
+    def test_a_thinking_model_gets_the_same_temperature_as_everyone(self):
+        """0.2 is not an oversight about thinking models; it is the measured winner.
+
+        Leaving this model at its vendor default tripled what each round wrote (300 output tokens
+        per round to 899) and the hard set went from 3/9 to 1/9 at about three times the tokens per
+        cell. Thinking more per round is not the same as thinking better.
+        """
+        body = engine._payload(model(reasoning=True), [], False, None, None, None, None)
+        self.assertEqual(body["temperature"], config.TEMPERATURE)
+
+    def test_a_model_entry_can_state_its_own_temperature(self):
+        m = model(reasoning=True)
+        m["temperature"] = 1.0
+        self.assertEqual(engine._temperature(m, None), 1.0)
+        self.assertEqual(engine._temperature(model(reasoning=True), None), config.TEMPERATURE)
+
+    def test_a_model_can_declare_that_its_gateway_manages_temperature(self):
+        # Kimi / Moonshot gateways select temperature server-side for thinking models, and the
+        # reference client for that family sends no temperature key at all. A model entry says so
+        # with `temperatureDefault: false`; the number still wins whenever a human or a call site
+        # asked for one, because this is a claim about a gateway, not a preference.
+        m = model(reasoning=True)
+        m["temperatureDefault"] = False
+        self.assertIsNone(engine._temperature(m, None))
+        self.assertEqual(engine._temperature(m, 0.7), 0.7)
+        self.assertEqual(engine._temperature(model(reasoning=True), None), config.TEMPERATURE)
+        body = engine._payload(m, [], False, None, None, None, None)
+        self.assertNotIn("temperature", body)
+
+    def test_an_operator_setting_beats_a_model_entry(self):
+        # `TACIT_TEMPERATURE` is a person asking for a number; a catalog field is a guess about a
+        # model. The person wins, which is also how every other setting in this app resolves.
+        from backend import config as cfg
+        original, cfg.TEMPERATURE_SET = cfg.TEMPERATURE_SET, True
+        try:
+            self.assertEqual(engine._temperature({"reasoning": True, "temperature": 1.0}, None),
+                             cfg.TEMPERATURE)
+        finally:
+            cfg.TEMPERATURE_SET = original
+
+    def test_the_call_site_beats_everything(self):
+        from backend import config as cfg
+        original, cfg.TEMPERATURE_SET = cfg.TEMPERATURE_SET, True
+        try:
+            self.assertEqual(engine._temperature({"temperature": 1.0}, 0.3), 0.3)
+        finally:
+            cfg.TEMPERATURE_SET = original
+
     def test_streaming_asks_for_usage(self):
         body = engine._payload(model(), [], True, None, None, None, None)
         self.assertEqual(body["stream_options"], {"include_usage": True})
@@ -301,6 +349,67 @@ class PayloadTest(unittest.TestCase):
         thinking.send = lambda ref, level: "none"
         body = engine._payload(model(reasoning=False), [], False, None, None, None, "off")
         self.assertEqual(body["reasoning_effort"], "none")
+
+    def test_ollama_gets_the_level_under_its_own_key(self):
+        # Measured on ollama_cloud/kimi-k2.7-code: reasoning_effort=medium returned no
+        # reasoning at all while thinking=medium returned 7,147 characters of it. The
+        # level has to go under the name that endpoint reads, or pinning it is a no-op
+        # that looks like a setting we control.
+        thinking.send = lambda ref, level: "medium"
+        body = engine._payload(model(reasoning=True, provider="ollama_cloud"),
+                               [], False, None, None, None, "medium")
+        self.assertEqual(body["thinking"], "medium")
+        self.assertNotIn("reasoning_effort", body)
+
+    def test_a_boolean_switch_gets_the_switch_not_a_level_name(self):
+        # thinkingValues [false, true] is an on/off switch. Passing "medium" through it is
+        # the bug: measured on ollama_cloud/kimi-k2.7-code, thinking="medium" produced 297
+        # reasoning characters while sending nothing produced 399. An unsupported word is
+        # not inert here - it costs thinking.
+        card = {"reasoning": True, "thinkingValues": [False, True], "thinkingGraded": False}
+        self.assertIs(thinking.send(card, "medium"), True)
+        self.assertIs(thinking.send(card, "high"), True)
+        self.assertIs(thinking.send(card, "on"), True)
+        self.assertEqual(thinking.send(card, "off"), "none",
+                         "the off switch still has to be reachable by name")
+        self.assertIsNone(thinking.send(card, "default"))
+
+    def test_the_boolean_switch_reaches_the_body_as_a_boolean(self):
+        orig = thinking.send
+        self.addCleanup(setattr, thinking, "send", orig)
+        card = model(reasoning=True, provider="ollama_cloud")
+        card["thinkingValues"] = [False, True]
+        card["thinkingGraded"] = False
+        body = engine._payload(card, [], False, None, None, None, "medium")
+        self.assertIs(body["thinking"], True,
+                      "the model's own default, asked for explicitly - not a word it must guess")
+
+    def test_a_graded_ladder_keeps_its_rung(self):
+        card = {"reasoning": True, "thinkingValues": ["low", "medium", "high"],
+                "thinkingGraded": True}
+        self.assertEqual(thinking.send(card, "medium"), "medium")
+        self.assertEqual(thinking.send(card, "on"), "low")
+
+    def test_an_unprobed_model_is_not_clamped_to_anything(self):
+        # Nothing was ever measured, so nothing is claimed: the name goes through as asked.
+        self.assertEqual(thinking.send({"thinkingValues": []}, "medium"), "medium")
+
+    def test_ollama_off_is_a_boolean_not_a_word(self):
+        # That endpoint switches thinking with true/false, so "none" has to arrive as
+        # the boolean rather than as a string it does not parse.
+        thinking.send = lambda ref, level: "none"
+        body = engine._payload(model(reasoning=True, provider="ollama_cloud"),
+                               [], False, None, None, None, "none")
+        self.assertIs(False, body["thinking"])
+
+    def test_other_providers_keep_the_openai_key(self):
+        # The name is the provider's, not ours: an endpoint that does accept
+        # reasoning_effort must not have it renamed under it.
+        thinking.send = lambda ref, level: "high"
+        body = engine._payload(model(reasoning=True, provider="openai"),
+                               [], False, None, None, None, "high")
+        self.assertEqual(body["reasoning_effort"], "high")
+        self.assertNotIn("thinking", body)
 
 
 class RemoteModelDetailsTest(unittest.TestCase):
@@ -435,6 +544,34 @@ class WebSocketTurnTest(unittest.TestCase):
             if ev.get("type") in until:
                 break
         return out
+
+    def test_a_stale_session_is_adopted_under_the_id_the_browser_holds(self):
+        """A tab that outlived its store gets its session back, same id.
+
+        The socket must not invent a session from a bare mention of an id, but
+        the one case where the client is entitled to ask is when the server has
+        answered 4404: the browser holds an id a real New-session click once
+        created. Without this path the tab reconnects every 1.2s against a code
+        that can never succeed, and the interface reads 'disconnected -
+        retrying' while nothing is wrong except the server's memory.
+        """
+        from backend import store
+        sid = "adopt-me-1"
+        self.assertIsNone(store.get(sid))
+        with self._client().websocket_connect(
+                f"/ws/{sid}?create=1&mode=agent&thinking=default"
+                f"&model=p/m&name=Old%20title&workdir=") as ws:
+            ready = self._drain(ws, until=("session_ready",))[-1]
+        self.assertEqual(ready["sid"], sid)            # not a fresh uuid
+        self.assertEqual(ready["name"], "Old title")   # not 'New session'
+        rec = store.get(sid)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["thinking"], "default")
+
+        # an ordinary reconnect now works, because the id is known
+        with self._client().websocket_connect(f"/ws/{sid}") as ws:
+            again = self._drain(ws, until=("session_ready",))[-1]
+        self.assertEqual(again["sid"], sid)
 
     def test_a_full_turn_persists_per_step_with_its_tools(self):
         from backend import store

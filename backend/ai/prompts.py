@@ -17,7 +17,8 @@ not exist on this platform.
 
 Rules:
 - Read before you write. Never guess at a file's contents.
-- Use edit_file for targeted changes; use write_file only to create or fully replace a file.
+- Prefer the file tools over the shell: read_file, edit_file, write_file, not cat, sed or
+  heredoc.
 - If a command fails, read the error and change approach. Do not retry variants of a command
   the platform does not have.
 - Report what you actually did, including anything that failed.

@@ -1045,7 +1045,19 @@ class TestSessionCreationRule(Isolated):
     def test_the_browser_only_asks_for_one_when_told_to(self):
         from pathlib import Path as _P
         js = (_P(__file__).parent.parent / "static/app.js").read_text(encoding="utf-8")
-        self.assertIn("s._new ? '&create=1' : ''", js)
+        # create=1 is gated. It rides on a session the New-session button just
+        # made, and on the single re-attach after the server answered 4404. It
+        # must never ride an ordinary connection, or any stale id could put a
+        # row in the store.
+        self.assertIn("(s._new || s._adopt) ? '&create=1' : ''", js)
+        # adoption is one-shot per session, so a refusal cannot re-create the
+        # same row on every retry
+        self.assertIn("if (!s._adopted)", js)
+        self.assertIn("s._adopted = true", js)
+        # and the second refusal stops instead of reconnecting forever
+        self.assertIn("could not be restored", js)
+        # a real disconnect must still retry: the server restarts constantly
+        self.assertIn("disconnected \u2014 retrying", js)
         # no boot-time creation may remain
         self.assertNotIn("if (!sessions.length) newSession(true)", js)
 
@@ -1252,11 +1264,21 @@ class TestGuidance(Isolated):
             self.assertLessEqual(len(c), guidance.MAX_BLOCK)
 
     def test_the_standing_prompt_never_carries_guidance(self):
-        """The whole point: the cached prompt stays 979 chars."""
-        from backend import guidance
+        """The whole point: the cached prompt stays tiny, 975 chars on Windows.
+
+        The number is Windows-only because the platform line changes per OS, and the Windows
+        wording is the longest of the three. So Windows pins the exact size and every other lane
+        asserts it is under that, which is what actually matters: no lane may grow the standing
+        prompt past the size we measured and shipped.
+        """
+        from backend import config, guidance
         from backend.ai import prompts
         p = prompts.system_prompt("", False, chat=False)
-        self.assertEqual(len(p), 979)
+        if config.OS == "Windows":
+            self.assertEqual(len(p), 975)
+        else:
+            self.assertLess(len(p), 975,
+                            f"{config.OS} prompt is {len(p)} chars, no shorter than Windows")
         for frag in ("Do it now", "project's own instructions", "step(s) left",
                      "Out of steps"):
             self.assertNotIn(frag, p)
@@ -1540,11 +1562,18 @@ class TestThinkingLevels(Isolated):
         model = {"thinkingValues": ["low", "medium", "high"]}
         self.assertEqual(thinking.send(model, "max"), "high")
 
-    def test_a_boolean_switch_is_passed_through(self):
-        """Values [false, true] means on or off, no ladder to clamp onto."""
+    def test_a_boolean_switch_is_asked_to_think_not_renamed(self):
+        """Values [false, true] means on or off, and there is no ladder to clamp onto.
+
+        This used to assert that "medium" was passed straight through. That is what broke:
+        measured on ollama_cloud/kimi-k2.7-code, thinking="medium" returned 297 reasoning
+        characters while sending nothing at all returned 399 - the endpoint takes a word it
+        does not support and thinks less. On a boolean switch, any level above off means on.
+        """
         from backend import thinking
         model = {"thinkingValues": [False, True]}
-        self.assertEqual(thinking.send(model, "medium"), "medium")
+        self.assertIs(thinking.send(model, "medium"), True)
+        self.assertIs(thinking.send(model, "high"), True)
         self.assertEqual(thinking.send(model, "none"), "none")
 
     def test_off_is_reported_as_unavailable_when_the_model_has_no_off(self):
@@ -1749,6 +1778,477 @@ class TestSwitchHandler(Isolated):
         self.assertEqual(store.get(b["id"])["thinking"], "off")
         self.assertEqual(store.get(a["id"])["thinking"], "high",
                          "the session left behind was the one edited")
+
+
+class TestRepeatGuard(Isolated):
+    """A turn that re-runs one probe is not investigating, it is looping.
+
+    Measured on the live benchmark: a cell issued 59 shell calls with 10 distinct argument
+    sets, 33k output tokens, 1,606 chars of text, and never wrote the file the task named.
+    The old behaviour was a set membership test plus an advice line that was suppressed
+    whenever it repeated itself, so the model was told once and then left alone 80 times.
+    """
+
+    def _loop(self, agent, name, args, runs, calls=None, steps=8):
+        """Drive a turn that keeps issuing the same call, counting real executions."""
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        turns = iter([[{"type": "tool_calls", "calls": [
+            {"id": f"c{i}", "name": name, "arguments": args}]},
+            {"type": "done", "model": None}] for i in range(steps)]
+            + [[{"type": "text", "delta": "done"}, {"type": "done", "model": None}]])
+
+        def fake_stream(msgs, **k):
+            # The turn now ends early when it is stuck, so the closing rounds get asked too.
+            # Answering those with another probe would put a third execution in `runs`.
+            ask = next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+            if "Out of steps" in str(ask.get("content") or ""):
+                return iter([{"type": "text", "delta": "reported"},
+                             {"type": "done", "model": None}])
+            return iter(next(turns))
+
+        def fake_tool(n, a, ctx, out):
+            runs.append(n)
+            out["result"] = (calls or {}).get(n, "the same answer")
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user", "content": "investigate it"}]
+            list(agent.run_turn(msgs, project=None, max_steps=steps))
+            return msgs
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+
+    def test_the_third_identical_call_is_answered_from_cache(self):
+        from backend import agent
+        runs = []
+        msgs = self._loop(agent, "run_shell", '{"command": "python3 -q probe.py"}', runs=runs)
+        self.assertEqual(runs, ["run_shell", "run_shell"],
+                         "the same call should run twice, then be answered from cache")
+        blocked = [m for m in msgs if m.get("role") == "tool"
+                   and "BLOCKED" in str(m.get("content"))]
+        self.assertTrue(blocked, "a blocked repeat must say so in the tool result")
+        self.assertIn("the same answer", blocked[0]["content"],
+                      "the model must get its previous result back, not a refusal")
+
+    def test_a_call_that_failed_last_time_is_free_to_run_again(self):
+        """Retrying after an error is debugging. Blocking it would break legitimate work."""
+        from backend import agent
+        runs = []
+        self._loop(agent, "run_shell", '{"command": "make"}', runs=runs,
+                   calls={"run_shell": "ERROR: command failed"}, steps=6)
+        self.assertEqual(len(runs), 6,
+                         "a failing call must not be served from cache")
+
+    def test_repeats_that_differ_are_not_blocked(self):
+        from backend import agent
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        runs = []
+        turns = iter([[{"type": "tool_calls", "calls": [
+            {"id": f"c{i}", "name": "run_shell",
+             "arguments": '{"command": "ls dir' + str(i) + '"}'}]},
+            {"type": "done", "model": None}] for i in range(6)]
+            + [[{"type": "text", "delta": "done"}, {"type": "done", "model": None}]])
+
+        def fake_stream(msgs, **k):
+            return iter(next(turns))
+
+        def fake_tool(n, a, ctx, out):
+            runs.append(a)
+            out["result"] = "ok"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user", "content": "look around"}]
+            list(agent.run_turn(msgs, project=None, max_steps=6))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        self.assertEqual(len(runs), 6, "distinct arguments were treated as repeats")
+
+    def test_a_blocked_repeat_names_the_file_that_is_still_missing(self):
+        """The whole point of the guard: stop the loop AND say what would finish the task."""
+        from backend import agent
+        import tempfile
+        runs = []
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        turns = iter([[{"type": "tool_calls", "calls": [
+            {"id": f"c{i}", "name": "run_shell",
+             "arguments": '{"command": "python3 probe.py"}'}]},
+            {"type": "done", "model": None}] for i in range(5)]
+            + [[{"type": "text", "delta": "done"}, {"type": "done", "model": None}]])
+
+        def fake_stream(msgs, **k):
+            ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+                      .get("content") or "")
+            if "Out of steps" in ask:
+                return iter([{"type": "text", "delta": "done"}, {"type": "done", "model": None}])
+            return iter(next(turns))
+
+        def fake_tool(n, a, ctx, out):
+            runs.append(n)
+            out["result"] = "0x80808080 -> 0x02000002"
+            return iter([])
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                msgs = [{"role": "system", "content": "base"},
+                        {"role": "user", "content": f"find the differential and write attack.py "
+                                                    f"in {d}"}]
+                list(agent.run_turn(msgs, project=d, max_steps=5))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        blocked = [m for m in msgs if m.get("role") == "tool" and "BLOCKED" in str(m.get("content"))]
+        self.assertTrue(blocked)
+        self.assertIn("attack.py", blocked[0]["content"],
+                      "a blocked call with no deliverable must point at the deliverable")
+        self.assertIn("0x80808080", blocked[0]["content"],
+                      "and it must still hand back the previous result")
+
+    def test_a_blocked_repeat_stays_short_after_the_first_time(self):
+        """Echoing the whole payload into every blocked call is its own kind of waste."""
+        from backend import agent
+        runs = []
+        blob = "RESULT-BODY-" + ("x" * 3000)
+        msgs = self._loop(agent, "run_shell", '{"command": "x"}', runs=runs, steps=7,
+                          calls={"run_shell": blob})
+        blocked = [str(m.get("content")) for m in msgs if m.get("role") == "tool"
+                   and "BLOCKED" in str(m.get("content"))]
+        self.assertTrue(len(blocked) >= 2, "no repeat was blocked at all")
+        self.assertIn("RESULT-BODY-", blocked[0],
+                      "the first block must show the result it is refusing to re-run")
+        self.assertNotIn("RESULT-BODY-", blocked[-1],
+                         "a later block re-echoing the payload would cost the saving")
+        self.assertLess(len(blocked[-1]), len(blocked[0]))
+
+    def test_mutating_tools_are_never_served_from_cache(self):
+        """A repeated write_file may be a recovery, and silently skipping a mutation that
+        was asked for would make the harness lie about what it did to the project."""
+        from backend import agent
+        runs = []
+        self._loop(agent, "write_file", '{"path": "a.txt", "content": "x"}', runs=runs, steps=5)
+        self.assertEqual(len(runs), 5, "a blocked mutation would be an unreported omission")
+
+
+class TestDeliverables(Isolated):
+    """The thing being graded is a file, so its absence is worth detecting."""
+
+    def test_named_files_that_exist_are_inputs_not_deliverables(self):
+        import tempfile
+        from backend import agent
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "requests_bucket_1.jsonl").write_text("{}", encoding="utf-8")
+            got = agent.deliverables(
+                "Read requests_bucket_1.jsonl and write attack.py, then emit plan_b1.jsonl", d)
+            self.assertEqual(got, ["attack.py", "plan_b1.jsonl"],
+                             "inputs already on disk must not be nagged about")
+
+    def test_paths_in_the_text_are_reduced_to_a_bare_name(self):
+        from backend import agent
+        got = agent.deliverables("create src/deep/attack.py", None)
+        self.assertEqual(got, ["src/deep/attack.py"])
+
+    def test_no_file_names_means_no_nagging(self):
+        from backend import agent
+        self.assertEqual(agent.deliverables("explain what this cipher does", None), [])
+
+    def test_the_missing_file_outranks_the_repeat_advice_near_the_cap(self):
+        from backend import guidance
+        text = guidance.for_step(step=28, steps=30, errors=(), repeated=("run_shell",),
+                                 missing=("attack.py",))
+        self.assertIn("attack.py", text)
+        self.assertNotIn("already ran", text,
+                         "a cell that never wrote the file is graded on the file, not the loop")
+
+    def test_a_failure_still_outranks_the_missing_file(self):
+        from backend import guidance
+        text = guidance.for_step(step=28, steps=30, errors=(("edit_file", "ERROR: no match"),),
+                                 missing=("attack.py",))
+        self.assertIn("edit_file", text)
+
+    def test_the_nudge_arrives_once_and_not_early(self):
+        from backend import agent
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        blocks = []
+        turns = iter([[{"type": "tool_calls", "calls": [
+            {"id": f"c{i}", "name": "run_shell",
+             "arguments": '{"command": "probe step' + str(i) + '"}'}]},
+            {"type": "done", "model": None}] for i in range(6)]
+            + [[{"type": "text", "delta": "done"}, {"type": "done", "model": None}]])
+
+        def fake_stream(msgs, **k):
+            if "Out of steps" in str(next((m for m in reversed(msgs)
+                                           if m.get("role") == "user"), {}).get("content") or ""):
+                return iter([{"type": "text", "delta": "done"}, {"type": "done", "model": None}])
+            blocks.append([m.get("content") or "" for m in msgs
+                           if m.get("role") == "system" and "named in the task" in str(m)])
+            return iter(next(turns))
+
+        def fake_tool(n, a, ctx, out):
+            out["result"] = "ok"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user", "content": "write attack.py and run probes"}]
+            list(agent.run_turn(msgs, project=None, max_steps=6))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        fired = [i for i, b in enumerate(blocks) if b]
+        self.assertTrue(fired, "the missing deliverable was never mentioned")
+        self.assertGreaterEqual(fired[0], 3,
+                               "nagging from step one wastes the budget it is trying to save")
+
+
+class TestHeadlessReasoning(Isolated):
+    """headless has to send the thinking level, or a benchmark row pins nothing."""
+
+    def _capture(self, **kw):
+        import tempfile
+        from backend import headless
+        orig = headless.agent.engine.stream_chat
+        seen = []
+
+        def fake(msgs, **k):
+            seen.append(k)
+            return iter([{"type": "text", "delta": "done"},
+                         {"type": "usage", "usage": {"input_tokens": 10,
+                                                     "output_tokens": 2,
+                                                     "total_tokens": 12}},
+                         {"type": "done", "model": None}])
+
+        headless.agent.engine.stream_chat = fake
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                out = headless.run("say done", d, "ollama_cloud/kimi-k2.7-code",
+                                   max_steps=2, **kw)
+        finally:
+            headless.agent.engine.stream_chat = orig
+        return seen, out
+
+    def test_a_pinned_level_reaches_the_request(self):
+        seen, out = self._capture(reasoning="medium")
+        self.assertEqual(out["reasoning"], "medium")
+        self.assertEqual(out["reasoning_effort"], "medium")
+        self.assertEqual(seen[0]["reasoning_effort"], "medium",
+                         "the level was resolved in headless but never forwarded")
+
+    def test_off_actually_turns_thinking_off(self):
+        seen, out = self._capture(reasoning="off")
+        self.assertEqual(seen[0]["reasoning_effort"], "none",
+                         "'off' that sends nothing leaves a default-thinking model thinking")
+
+    def test_default_sends_nothing_and_says_so(self):
+        seen, out = self._capture()
+        self.assertEqual(out["reasoning"], "default")
+        self.assertIsNone(out["reasoning_effort"])
+        self.assertIsNone(seen[0]["reasoning_effort"],
+                          "'default' must not smuggle a level into the request")
+
+    def test_the_cli_flag_exists_for_benchmark_runners(self):
+        from backend import headless
+        ap = None
+        for action in _actions(headless):
+            if action.dest == "reasoning":
+                ap = action
+        self.assertIsNotNone(ap, "--reasoning is not on the headless parser")
+
+
+def _actions(module):
+    import argparse
+    from backend import headless
+    parser = None
+    orig_parse = argparse.ArgumentParser.parse_args
+
+    def grab(self, *a, **k):
+        nonlocal parser
+        parser = self
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = grab
+    try:
+        try:
+            headless.main(["--instruction", "x"])
+        except SystemExit:
+            pass
+    finally:
+        argparse.ArgumentParser.parse_args = orig_parse
+    return list(parser._actions) if parser else []
+
+
+class TestStuckTurnExit(Isolated):
+    """The guard has to change outcomes, not only costs.
+
+    From the fixed Linux arm: cells that solved did it in 14 to 25 rounds, while the cells that
+    failed issued up to 26 refused repeats and stopped at the cap with the named file still absent.
+    A refused repeat is nearly free now, so a turn can afford to notice it is stuck: end early and
+    spend the last round writing the deliverable, with only the tools that can produce it.
+    """
+
+    def _drive(self, agent, instruction, steps=12):
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        offered, runs = [], []
+
+        def fake_stream(msgs, **k):
+            offered.append([t["function"]["name"] for t in (k.get("tools") or [])])
+            ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+                      .get("content") or "")
+            if "Write it now with write_file" in ask:
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w1", "name": "write_file",
+                     "arguments": '{"path": "attack.py", "content": "def attack(): pass"}'}]},
+                    {"type": "done", "model": None}])
+            if "Answer now without using any more tools" in ask:
+                return iter([{"type": "text", "delta": "reported"},
+                             {"type": "done", "model": None}])
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": "p", "name": "run_shell",
+                 "arguments": '{"command": "python3 probe.py"}'}]},
+                {"type": "done", "model": None}])
+
+        def fake_tool(n, a, ctx, out):
+            runs.append((n, str(a.get("path") or "")))
+            out["result"] = "same answer" if n == "run_shell" else "wrote attack.py"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user", "content": instruction}]
+            events = list(agent.run_turn(msgs, project=None, max_steps=steps))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        return msgs, events, offered, runs
+
+    def test_a_stuck_turn_ends_well_before_the_cap(self):
+        from backend import agent
+        _m, events, _o, _r = self._drive(agent, "Write attack.py that recovers the key.")
+        notes = [e["message"] for e in events if e["type"] == "notify"]
+        self.assertTrue(any("refused in a row" in n for n in notes), notes)
+        self.assertTrue(any(n.startswith("stopped after 6 steps") for n in notes),
+                        "two runs plus four refusals is the end of the story, not twelve rounds")
+
+    def test_the_last_round_writes_the_named_file(self):
+        from backend import agent
+        _m, _e, offered, runs = self._drive(agent, "Write attack.py that recovers the key.")
+        self.assertIn(("write_file", "attack.py"), runs,
+                      "a named deliverable must be written before the turn ends")
+        phase = [names for names in offered
+                 if names and set(names) <= set(agent.SALVAGE_TOOLS)]
+        self.assertTrue(phase, "no deliverable phase ran")
+        self.assertLessEqual(len(phase), agent.SALVAGE_ROUNDS,
+                             "the phase is bounded, or one turn quietly becomes two")
+        wrote = runs.index(("write_file", "attack.py"))
+        self.assertTrue([n for n, _p in runs[wrote + 1:] if n == "run_shell"],
+                        "the file has to be RUN before the phase counts itself done")
+        self.assertEqual(len(phase), 2,
+                         "one round to write it, one to run it - not every round")
+
+    def test_the_deliverable_phase_keeps_going_until_the_file_exists(self):
+        """Writing it is step one. The rounds after that are where a wrong file gets fixed."""
+        from backend import agent
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        asked = []
+
+        def fake_stream(msgs, **k):
+            ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+                      .get("content") or "")
+            asked.append(ask)
+            if "Write it now with write_file" in ask:
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w", "name": "run_shell",
+                     "arguments": '{"command": "python3 attack.py"}'}]},
+                    {"type": "done", "model": None}])
+            if "Answer now without using any more tools" in ask:
+                return iter([{"type": "text", "delta": "reported"},
+                             {"type": "done", "model": None}])
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": "p", "name": "run_shell", "arguments": '{"command": "python3 p.py"}'}]},
+                {"type": "done", "model": None}])
+
+        def fake_tool(n, a, ctx, out):
+            out["result"] = "ran, no output"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user", "content": "Write attack.py that recovers the key."}]
+            list(agent.run_turn(msgs, project=None, max_steps=12))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        self.assertEqual(sum(1 for a in asked if "Write it now with write_file" in a),
+                         agent.SALVAGE_ROUNDS,
+                         "a file that never lands should get every bounded round, not one")
+
+    def test_nothing_is_salvaged_when_the_task_named_no_file(self):
+        """An investigation task has no deliverable, so it must not get a round of invention."""
+        from backend import agent
+        _m, _e, offered, runs = self._drive(agent, "Find out why the suite is red.")
+        self.assertEqual([n for n in offered
+                          if n and set(n) <= set(agent.SALVAGE_TOOLS)], [])
+        self.assertNotIn("write_file", [n for n, _p in runs])
+
+    def test_a_turn_that_stops_early_still_delivers_the_named_file(self):
+        """The worst hard-set cells ended on their own — 13 turns, 45,000 output tokens,
+        no attack.py. Waiting for the step cap never reached them, so this exit had to
+        grow the same deliverable phase."""
+        from backend import agent
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        offered, wrote = [], []
+        calls = {"n": 0}
+
+        def fake_stream(msgs, **k):
+            offered.append([t["function"]["name"] for t in (k.get("tools") or [])])
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return iter([{"type": "text", "delta": "Let me look at the cipher. " * 20},
+                             {"type": "tool_calls", "calls": [
+                                 {"id": "a", "name": "run_shell",
+                                  "arguments": '{"command": "python3 -c 1"}'}]},
+                             {"type": "done", "model": None}])
+            if calls["n"] == 2:
+                # Narration and no tool call: this used to end the turn immediately.
+                return iter([{"type": "text", "delta": "Here is my analysis of FEAL."},
+                             {"type": "done", "model": None}])
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": "w", "name": "write_file",
+                 "arguments": '{"path": "attack.py", "content": "def attack(f):\\n'
+                              '    return 1\\n"}'}]},
+                {"type": "done", "model": None}])
+
+        def fake_tool(n, a, ctx, out):
+            if n == "write_file":
+                wrote.append(str(a.get("path") or ""))
+                out["result"] = f"wrote {a.get('path')}"
+            else:
+                out["result"] = "1"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            msgs = [{"role": "system", "content": "base"},
+                    {"role": "user",
+                     "content": "Write attack.py that recovers the key."}]
+            list(agent.run_turn(msgs, project=None, max_steps=12))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        self.assertIn("attack.py", wrote, "it narrated an answer and left nothing on disk")
+        self.assertTrue([n for n in offered
+                         if n and set(n) <= set(agent.SALVAGE_TOOLS)],
+                        "the phase that writes the file must be the one that ran")
+
+    def test_the_writes_are_recorded_in_the_transcript(self):
+        """A file written after the cap still has to appear in the history the next turn reads."""
+        from backend import agent
+        msgs, _e, _o, _r = self._drive(agent, "Write attack.py that recovers the key.")
+        self.assertTrue([m for m in msgs if m.get("role") == "tool"
+                         and "wrote attack.py" in str(m.get("content"))])
 
 
 if __name__ == "__main__":

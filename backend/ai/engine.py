@@ -9,6 +9,29 @@ REASON_KEYS = ("reasoning_content", "reasoning", "thinking")
 TIMEOUT = httpx.Timeout(connect=20.0, read=900.0, write=60.0, pool=20.0)
 
 
+def _temperature(model: dict | None, explicit) -> float | None:
+    """Sampling temperature, in priority order: this call, the operator, the model, the default.
+
+    None means send nothing, so the gateway picks. Kimi / Moonshot gateways manage temperature
+    server-side for their thinking models - the reference client for this model family omits the
+    key outright rather than sending a number. Our own default of 0.2 was measured to beat the
+    vendor default on the hard set, but that arm ran while the thinking level was still being sent
+    under a name the endpoint ignored, so it is not evidence about a thinking model: 0.2 stays the
+    default and the omit is opt-in per model until it is measured again on a build that thinks.
+    Two ways to disagree per model: a `temperature` on the model entry, or `TACIT_TEMPERATURE`
+    for the whole install; both outrank the omit.
+    """
+    if explicit is not None:
+        return float(explicit)
+    if config.TEMPERATURE_SET:
+        return float(config.TEMPERATURE)
+    if (model or {}).get("temperature") is not None:
+        return float(model["temperature"])
+    if (model or {}).get("temperatureDefault") is False:
+        return None
+    return float(config.TEMPERATURE)
+
+
 class EngineError(RuntimeError):
     def __init__(self, message: str, status: int = 0, body: str = ""):
         super().__init__(message)
@@ -35,7 +58,9 @@ def _headers(model: dict) -> dict:
 def _payload(model: dict, messages: list[dict], stream: bool, tools=None,
              temperature=None, max_tokens=None, reasoning_effort=None) -> dict:
     body = {"model": model["model"], "messages": messages, "stream": stream}
-    body["temperature"] = config.TEMPERATURE if temperature is None else temperature
+    temp = _temperature(model, temperature)
+    if temp is not None:
+        body["temperature"] = temp
     budget = max_tokens if max_tokens is not None else model.get("maxTokens") or None
     if budget:
         body["max_tokens"] = int(budget)
@@ -52,8 +77,24 @@ def _payload(model: dict, messages: list[dict], stream: bool, tools=None,
     from .. import thinking
     effort = thinking.send(model, reasoning_effort)
     if effort and (model.get("reasoning") or effort == "none"):
-        body["reasoning_effort"] = effort
+        key = _thinking_key(model)
+        # Ollama's off switch is a boolean, and it does not read the word "none".
+        body[key] = False if (key == "thinking" and effort == "none") else effort
     return body
+
+
+# Ollama's OpenAI-compatible endpoint ignores reasoning_effort and reads `thinking`
+# instead. Measured on ollama_cloud/kimi-k2.7-code with one prompt and one shape:
+# reasoning_effort=medium gave 0 reasoning characters and finish_reason=length, while
+# thinking=medium gave 7,147 reasoning characters and finish_reason=stop. Same value,
+# different key, opposite behaviour - so the level we pin has to be sent under the name
+# the endpoint actually listens to, or every graded level is silently off.
+THINKING_KEY = {"ollama", "ollama_cloud"}
+
+
+def _thinking_key(model: dict) -> str:
+    return "thinking" if str(model.get("provider") or "") in THINKING_KEY \
+        else "reasoning_effort"
 
 
 def chat(messages: list[dict], *, ref: str | None = None, tools=None,

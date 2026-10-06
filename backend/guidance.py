@@ -50,6 +50,11 @@ _DISCOVER = ("Before changing files, read the project's own instructions if it h
              "every turn.")
 _REPEAT = ("{names} with those arguments already ran this turn and its result is above. Do the next "
            "thing instead of re-exploring the same ground.")
+# The failure this exists for: a cell that spent 59 shell calls deriving the same fact and never
+# wrote the file the instruction named, so the checker read an empty directory and scored 0.
+# Advice to "answer now" is worthless if the deliverable does not exist yet.
+_MISSING = ("{names} is named in the task and does not exist yet. Write it now with write_file "
+            "before you run out of steps: a report that only describes the file scores nothing.")
 _BUDGET = ("{n} step(s) left in this turn. Stop gathering and answer now: the finding first, then "
            "what you changed if anything, then what is still unresolved.")
 _FAILED = ("The last step's tool call failed{detail}. Fix the cause before repeating it: wrong path, "
@@ -57,6 +62,87 @@ _FAILED = ("The last step's tool call failed{detail}. Fix the cause before repea
 _DO_IT = ("Do it now with your tools. Do not describe what you are going to do next.")
 _CLOSING = ("Out of steps for this turn. Answer now without using any more tools: the finding "
             "first, then what you changed if anything, then what is still unresolved.")
+
+# The closing call offers no tools, which is correct for a report and fatal for a task whose score
+# comes from a file: the checker reads the disk. This is the one round allowed to write, and it is
+# the last one, so a cell that derived the answer and never wrote it down still gets a file.
+_SALVAGE_ONE = ("Out of steps, and {names} is not written. Write it now with write_file, from what you "
+            "have already established. An approximation you can defend scores; a plan you never "
+            "ran scores nothing. Write the file first, then run it and fix what the run shows. "
+            "If a tool call fails or you cannot make one, reply with the COMPLETE file in one "
+            "fenced code block and nothing else - it will be written to {names} for you.")
+# Several tasks are scored on more than one file (one plan per input bucket, say). Asked in the
+# singular, the model writes one of them and the round is gone: cells read "missing required output
+# file: plan_b1.jsonl" with the sibling already on disk. The calls are independent and a single round
+# can carry all of them, so the wording has to ask for every file at once.
+_SALVAGE_MANY = ("Out of steps, and none of these are written: {names}. Write every one of them now, "
+                 "each with its own write_file call in this one round — they are independent, so one "
+                 "round can produce all of them. An approximation you can defend scores; a plan you "
+                 "never ran scores nothing. If a tool call fails, reply with each complete file in "
+                 "its own fenced code block - they will be written for you.")
+
+
+def salvage(names) -> str:
+    """The instruction for the final round that may still write the deliverable."""
+    wanted = [str(n) for n in (names or [])][:3]
+    if len(wanted) > 1:
+        return _clip(_SALVAGE_MANY.format(names=", ".join(wanted)))
+    return _clip(_SALVAGE_ONE.format(names=wanted[0] if wanted else "the file"))
+
+
+# The salvage rounds above are satisfied as soon as the file exists. Two hard-set cells failed
+# exactly that way: eval.scm was written, never run, and the checker reported `Unexpected closing
+# parenthesis` and `Undefined variable: error`. Landing a file is not the finish line; the task's
+# own commands are. This is the round that runs them.
+_VERIFY = ("{names} exists, but it was never executed. Run the check the task itself names, "
+           "then repair the file with edit_file and run it again. Run EVERY test the workspace "
+           "ships through your deliverable, not just the example in the instruction: the grader's "
+           "hidden tests are the same shape as the visible ones, so the visible set is the only "
+           "proxy you have. An unrun deliverable scores zero even when the code is nearly right.")
+
+
+def verify(names) -> str:
+    """Ask for execution rather than authoring, when the files exist but were never run."""
+    wanted = [str(n) for n in (names or [])][:3]
+    return _clip(_VERIFY.format(names=", ".join(wanted) or "The file"))
+
+
+# Ordered in the middle of a turn, not offered at the end of one. Every zero-artifact cell in the
+# hard set - feal t2 at 16 turns, schemelike t3 at 34 - ran out of turn while still investigating,
+# and a phase that only fires when the model chooses to stop never reaches them.
+_DEMAND = ("{used} of this turn is spent and the file the task names is still not on disk: "
+           "{names}. Nothing else in this turn is graded. Put it on disk now with write_file "
+           "from what you already know - a partial file that runs beats a plan that never lands.")
+_DEMAND_LATE = ("{names} is STILL not on disk and this turn is almost over. Stop investigating. "
+                "One write_file call now with your best current answer, then run it.")
+
+
+def demand(names, used="", nth=1) -> str:
+    """The mid-turn order to produce the artifact, escalating once."""
+    wanted = ", ".join(str(n) for n in (names or [])[:3]) or "the file"
+    if nth > 1:
+        return _clip(_DEMAND_LATE.format(names=wanted))
+    return _clip(_DEMAND.format(names=wanted, used=used or "Half"))
+
+
+# When the clock becomes information. The measured hard-set cells run 900-1,010s inside a 1,175s
+# allowance, so the last two minutes are the difference between a file that exists and a turn that
+# gets abandoned mid-sentence.
+LATE_S = 420
+# One salvage round, not three - but it has to be reachable. At 120s the guard never fired in
+# practice: a step costs 30-90s and the kill lands mid-step, so feal trial 1 of s2 died at 1,081s
+# with `attack.py does not exist` and no delivery attempted. 300s is the smallest window in which
+# one write plus one run can actually complete before the clock.
+EMERGENCY_S = 300
+
+_TIME = ("{left}s of wall-clock budget remain for this task, and at zero the run is killed "
+         "mid-sentence with nothing graded. Stop probing and stop verifying. If the deliverable "
+         "is not on disk yet, write it now from what you already know - a rough file that exists "
+         "outscores a plan that never landed.")
+
+
+def time_left(left) -> str:
+    return _clip(_TIME.format(left=int(max(0, float(left)))))
 
 # Both of the above used to open with "what you changed". On an investigation
 # task the honest answer to that is "nothing", so every report opened by proving
@@ -114,7 +200,7 @@ def _clip(s: str) -> str:
     return s[:MAX_BLOCK].rstrip()
 
 
-def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(),
+def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(), missing=(),
              first: bool = False, project: bool = False,
              previous: str = "") -> str:
     """Return the block for this step, or "" for none.
@@ -141,6 +227,10 @@ def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(),
                 detail=" (" + ", ".join(dict.fromkeys(names)) + ")")
         else:
             text = _FAILED.format(detail=" (" + ", ".join(dict.fromkeys(names)) + ")") + detail
+    elif missing:
+        # Ahead of the repeat nudge: breaking the loop only helps if the run ends with
+        # the artifact on disk, which is what is actually graded.
+        text = _MISSING.format(names=", ".join(dict.fromkeys(missing)))
     elif repeated:
         text = _REPEAT.format(names=", ".join(dict.fromkeys(repeated)))
     elif steps and steps - step <= 2:

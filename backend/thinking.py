@@ -258,6 +258,14 @@ def send(ref: str | None, level: str | None) -> str | None:
         # A model with no off switch still gets asked, and the interface can say so
         # rather than pretend the level did something.
         return "none"
+    # A card that advertises values but none of them strings is an on/off switch with no
+    # ladder, and handing it a level name is not a harmless no-op. Measured on
+    # ollama_cloud/kimi-k2.7-code: thinking="medium" came back with 297 reasoning characters,
+    # while sending nothing at all came back with 399. The endpoint accepts a word it does not
+    # support and thinks LESS for it. So on a boolean switch any level above off is the switch
+    # being on - which is what the card's own thinkingDefault already says it does.
+    if values(ref) and not allowed:
+        return True
     if level == "on":
         # A boolean switch needs a name the provider recognises as true. The cheap
         # one, since this model cannot grade it anyway.

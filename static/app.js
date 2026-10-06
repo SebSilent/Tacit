@@ -344,10 +344,16 @@ function wsUrl(s) {
     : location.host;
   const think = s.thinking ? `&thinking=${s.thinking}` : '';
   const wd = s.workdir ? `&workdir=${encodeURIComponent(s.workdir)}` : '';
-  // create=1 only ever rides on a socket the New session button just asked
-  // for. Every other connection names a session that already exists.
-  const mk = s._new ? '&create=1' : '';
-  return `${proto}://${host}/ws/${s.id}?model=${encodeURIComponent(s.model)}&mode=${s.mode}${think}${wd}${mk}`;
+  // create=1 rides on a socket the New session button just asked for, and on
+  // the single re-attach after the server said it has never heard of this
+  // session (see onclose). It is not sent casually: _adopt is set once per
+  // session, so this cannot re-grow the list the way the old blind
+  // merge-on-connect did.
+  const mk = (s._new || s._adopt) ? '&create=1' : '';
+  // A restored session already has a title the user chose; a brand new one
+  // gets the server default, which is fine.
+  const nm = (s._adopt && s.title) ? `&name=${encodeURIComponent(s.title)}` : '';
+  return `${proto}://${host}/ws/${s.id}?model=${encodeURIComponent(s.model)}&mode=${s.mode}${think}${wd}${mk}${nm}`;
 }
 
 function connect() {
@@ -358,15 +364,34 @@ function connect() {
   if (!s) { setConn(''); return; }        // nothing to attach to yet
   setConn('connecting…');
   ws = new WebSocket(wsUrl(s));
-  ws.onopen = () => { wsDead = false; setConn(''); if (s) delete s._new; };
+  ws.onopen = () => { wsDead = false; setConn(''); if (s) delete s._new; if (s) delete s._adopt; };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.sid && m.sid !== activeId) { bgIngest(m); return; }
     handle(m);
   };
-  ws.onclose = () => {
-    setConn('disconnected — retrying');
+  ws.onclose = ev => {
     wsDead = true;
+    // 4404 is a different failure from a dead network: the server answered and
+    // said it does not know this session. That happens when the store is
+    // rebuilt or relocated underneath a browser that still holds its ids, and
+    // retrying the identical request forever just prints "retrying" on the
+    // status line while nothing can ever change. Ask once for the server to
+    // adopt the id this tab already has; if it still refuses, stop.
+    if (ev && ev.code === 4404 && s) {
+      if (!s._adopted) {
+        s._adopted = true;
+        s._adopt = true;
+        setConn('session not on server — re-creating');
+        scheduleReconnect();
+        return;
+      }
+      setConn('session could not be restored — start a new one');
+      return;
+    }
+    // Everything else stays on the old behaviour: the server is restarting or
+    // the link dropped, and the next attempt may genuinely succeed.
+    setConn('disconnected — retrying');
     scheduleReconnect();
   };
   ws.onerror = () => {};

@@ -9,15 +9,12 @@ machine. There are no accounts, no telemetry, and no tracking of any kind.
 The whole thing is one Python program serving plain web pages. There is no build step, no frontend
 toolchain, and no database to install.
 
-It is standalone in the strict sense: it never calls another harness, never reads another tool's
-directories, and never requires one to be installed.
-
 ---
 
-## The short version
+## Key properties
 
 Three properties decide what an agent costs you and what it can do to you. Tacit is built around all
-three, and every number below is measured rather than asserted.
+three.
 
 1. **The fixed cost per turn is the smallest here.** About 980 characters of standing instructions
    plus the tool descriptions for your profile. Roughly 745 tokens on the Minimal profile, about
@@ -33,23 +30,46 @@ three, and every number below is measured rather than asserted.
 
 ## Benchmarked on OpenBench
 
-Same model, same tasks, same checkers. Only the wrapper changes. OpenBench's own runner, its
-`checker.sh` files untouched, and Kimi K2.7 Code pinned for every row.
+One model for every row: GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its
+`checker.sh` files untouched. Three tasks, three trials each, one build, both operating systems.
+Tokens are uncached input plus output, cache reads excluded, counted the way OpenBench counts
+them.
 
-| Harness | Solved | Tokens per solve | Seconds per task |
+### Linux
+
+| Profile | Solved | Tokens per solve | Wall seconds per cell |
 |---|---|---|---|
-| **Tacit** | **9/9** | **8,476** | **38** |
-| Pi, published | 9/9 | 8,678 | 69 |
-| OpenCode, published | 6/9 | 18,964 | 371 |
+| Silent | 9/9 | 156,466 | 705 |
+| Minimal | 9/9 | 133,881 | 648 |
 
-Three hard tasks, three trials each. Tacit matches the leanest published harness on tokens and
-solves everything, in roughly 45 percent less time, and it uses less than half the tokens of the
-third row while scoring higher. Counted tokens exclude cache reads, and 88 percent of Tacit's
-prompt tokens were cache reads, which is what keeps the number small.
+Per task on Linux: feal 3/3 silent and 3/3 minimal at 32,673 and 23,437 tokens per cell; llm 3/3
+and 3/3 at 235,379 and 226,896; schemelike 3/3 and 3/3 at 201,348 and 151,312.
 
-Across all eight OpenBench tasks, Tacit solves 18 of 24 runs. The two it does not close are
-multi-file refactors, and both fail the same way on every profile, so the gap is capability, not
-configuration. A full 24-run sweep costs about $1.20 at published model rates.
+### Windows
+
+| Profile | Solved | Tokens per solve | Wall seconds per cell |
+|---|---|---|---|
+| Silent | 6/6 | 106,526 | 530 |
+| Minimal | 5/6 | 82,814 | 418 |
+
+Per task on Windows: feal 3/3 silent and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
+3/3 silent and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only: its own
+checker reads `os.O_NONBLOCK`, which Windows Python does not provide, so the task cannot be
+checked there as shipped.
+
+### Against the published arms, same model, same three tasks
+
+| Arm | Solved |
+|---|---|
+| Tacit, Linux, silent | 9/9 |
+| Tacit, Linux, minimal | 9/9 |
+| Pi | 8/9 |
+| OpenCode | 7/9 |
+| Claude | 5/9 |
+| Grok | 5/9 |
+| Codex | 4/9 |
+
+---
 
 ---
 
@@ -61,9 +81,9 @@ token meter, so nothing is measured by a standard it does not already apply to i
 
 | System | System prompt | Tools | Tool schemas | Fixed cost per turn |
 |---|---|---|---|---|
-| **Tacit, Minimal** | **979 chars** | **7** | **2.0 KB** | **~745 tokens** |
+| **Tacit, Minimal** | **975 chars** | **7** | **2.0 KB** | **~745 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **979 chars** | **24** | **7.6 KB** | **~2,150** |
+| **Tacit, default profile** | **975 chars** | **24** | **7.6 KB** | **~2,150** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
@@ -80,7 +100,7 @@ list and glob, and nothing else.
 | Same seven capabilities | Tacit | Pi |
 |---|---|---|
 | Tool schemas | **2,001 chars** | 4,626 chars |
-| System prompt | **979 chars** | 1,352 chars |
+| System prompt | **975 chars** | 1,352 chars |
 | **Fixed cost per turn** | **~745 tokens** | **~1,600** |
 
 Same tools, less than half the cost. Two things account for it. Pi's descriptions are longer: its
@@ -136,7 +156,7 @@ machine, not from their marketing.
 
 | | Tacit | Claude Code | Hermes | little-coder | DSH |
 |---|---|---|---|---|---|
-| Standing prompt | **979 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
+| Standing prompt | **975 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
 | Tool schemas | **7.6 KB / 24** | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
 | External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
 | Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
@@ -856,7 +876,11 @@ follow from that, and both exist because a session showed what happens without t
   directory for a file path, so grepping one module returned matches from its neighbours — and a
   mistyped path silently searched somewhere else. Both read as real answers.
 
-Every result is clipped to `TACIT_TOOL_OUTPUT_LIMIT`, grep included.
+Shell and search results are clipped to `TACIT_TOOL_OUTPUT_LIMIT`. `read_file` has its own,
+much larger `TACIT_READ_OUTPUT_LIMIT`, because a file is the one result the agent may have
+to reproduce whole: at 6,000 characters a 17,578-character source file was two thirds
+invisible, and the agent stopped reading it and re-derived the same facts through shell
+probes instead — which is how a task needing one large write ended as thirty thin rounds.
 
 ---
 
@@ -894,7 +918,8 @@ Every result is clipped to `TACIT_TOOL_OUTPUT_LIMIT`, grep included.
 Container isolation is configured in **Settings > Capabilities** rather than by environment, since it
 is a capability choice: the image (default `python:3.12-slim`), whether a missing image may be pulled
 (default no), and the PID ceiling (default 256).
-| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a tool result |
+| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
+| `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
 | `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |

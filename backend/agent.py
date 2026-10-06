@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import subprocess
+import time
 import threading
 from pathlib import Path
 
@@ -61,6 +62,50 @@ def _clip(text: str, limit: int | None = None) -> str:
     return text[:limit] + f"\n…(truncated, {len(text)} chars total)"
 
 
+# Commands whose only job is to print a file. Piping or grepping disqualifies a
+# command from the hint, because there the cut is in a derived result, not in a source.
+_DUMPERS = ("cat", "head", "tail", "less", "more", "sed")
+_FILE_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,6}")
+
+
+def _dumped_file(cmd: str) -> str:
+    """The file a shell command is plainly printing, or '' if it is not just printing."""
+    parts = str(cmd or "").split()
+    if not parts:
+        return ""
+    # Anything piped or redirected is a derived result, and the cut in it is not the
+    # file's length. Pointing at read_file there would send the agent away from the
+    # search it was actually running.
+    if any(tok in ("|", ">", ">>", "&&", ";", "2>") for tok in parts):
+        return ""
+    verb = parts[0].rsplit("/", 1)[-1].lower()
+    if verb not in _DUMPERS:
+        return ""
+    if verb == "sed" and not any(p.startswith("-n") for p in parts[1:3]):
+        return ""
+    for tok in parts[1:]:
+        if tok.startswith("-"):
+            continue
+        if _FILE_TOKEN.fullmatch(tok):
+            return tok
+    return ""
+
+
+def _dump_hint(cmd: str, clipped: str) -> str:
+    """Point a clipped file dump at the tool that can deliver the file whole.
+
+    The transcript used to imply that a 17,578-character source file was 6,000 characters
+    long, and the measured response was to keep re-probing it with other commands instead
+    of ever reading it. `read_file` now returns files whole, so the hint names it.
+    """
+    name = _dumped_file(cmd)
+    if not name or "truncated," not in clipped:
+        return ""
+    return (f"\n{name} is longer than this result, so it is cut off here. Call read_file "
+            f"with path='{name}' to get the whole file (up to "
+            f"{config.READ_OUTPUT_LIMIT:,} characters) instead of paging it through the shell.")
+
+
 def _last_line_number(text: str, fallback: int) -> int:
     """The highest `N\t` prefix in a read_file body, so a clipped read can say
     which line it actually reached rather than which line was asked for."""
@@ -104,7 +149,7 @@ def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | No
                 f"({len(lines)} lines)")
     chunk = lines[start:start + max(1, int(limit or 2000))]
     body = "\n".join(f"{start + i + 1}\t{ln}" for i, ln in enumerate(chunk))
-    clipped = _clip(body, max(200, config.TOOL_OUTPUT_LIMIT - 96))
+    clipped = _clip(body, max(200, config.READ_OUTPUT_LIMIT - 96))
     last = _last_line_number(clipped, start + len(chunk))
     remaining = len(lines) - last
     if remaining > 0:
@@ -266,7 +311,9 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
                     ", ".join(names)
         for note in (res.get("notes") or [])[:2]:
             body += f"\n[{res['backend']}] {note}"
-    return _clip(body)
+    clipped = _clip(body)
+    hint = _dump_hint(cmd, clipped)
+    return clipped + hint if hint else clipped
 
 
 def t_bg_start(command: str, project: str | None = None, cwd: str | None = None) -> str:
@@ -495,6 +542,11 @@ def _fn(name: str, description: str, props: dict, required: list[str]) -> dict:
 _S = {"type": "string"}
 _I = {"type": "integer"}
 
+# Said only where it is true. On cmd.exe a multi-line quoted body runs, exits 0 and does
+# nothing, which is the worst failure an agent can meet: the tool reports success.
+_SHELL_NOTE = ("A quoted command cannot span lines here, so write a script file and run it."
+               if config.OS == "Windows" else "")
+
 TOOLS = [
     _fn("list_files", "List files and folders. Relative paths resolve against the working project.",
         {"path": _S}, []),
@@ -508,8 +560,9 @@ TOOLS = [
     _fn("grep_files", "Search file contents with a regular expression. path may be a directory "
                       "or a single file.",
         {"pattern": _S, "path": _S}, ["pattern"]),
-    _fn("run_shell", "Run a shell command from the working project directory. Returns exit code, "
-                     "stdout and stderr.", {"command": _S, "timeout": _I}, ["command"]),
+    _fn("run_shell", f"Run a shell command from the working project directory, in "
+                     f"{config.SHELL_KIND} on {config.OS}. Returns exit code, stdout and "
+                     f"stderr. {_SHELL_NOTE}", {"command": _S, "timeout": _I}, ["command"]),
     _fn("skill", "Read a skill's full instructions. Skills are listed by name and description in "
                  "your system prompt; call this before following one.", {"name": _S}, ["name"]),
     _fn("bg_start", "Start a long-running command in the background (dev server, watcher, slow "
@@ -564,6 +617,61 @@ SUBTASK = "task"
 # deliberately absent: it may change nothing at all, and the sandbox layer already
 # reports every file it did change.
 MUTATING = {"write_file", "edit_file", "restore"}
+
+# How many times the same call with the same arguments may actually run in one turn before it is
+# answered from cache instead. Two is "you are checking twice"; four is the feal loop, where 59
+# shell calls had 10 distinct argument sets and the turn ended with nothing written.
+REPEAT_BLOCK_AFTER = 3
+REPEAT_ECHO = 1500
+# Blocked repeats in a row before the turn stops trying. The cell that started this one spent 26 of
+# its 29 shell calls on refused repeats and never reached a file: once the model has been told four
+# times that a call is cached, the remaining steps cannot buy new information, so the turn ends
+# early and spends its last round on the deliverable instead of counting down to the cap.
+REPEAT_STOP_AFTER = 4
+# The deliverable phase gets a few rounds, not one: writing the file is step one, and on a task like
+# the Scheme evaluator the model then needs to run it and fix what the run shows. Bounded, because
+# an unbounded "one more chance" is how a turn becomes two turns.
+SALVAGE_ROUNDS = 3
+SALVAGE_TOOLS = ("write_file", "edit_file", "run_shell")
+_REPEAT_REPLY = (
+    "BLOCKED: {tool} has already run with exactly these arguments {n} times this turn, and it "
+    "will not run again. Its result was:\n\n{prev}\n\nThat answer has not changed. Do something "
+    "different: change the arguments, or write down what you have and use it.{missing}")
+
+# This reminder rides on the blocked result rather than only on the guidance block, because the
+# guidance block fires once and is then suppressed as a duplicate three steps before the cap.
+# The cell that started this one was told once and spent 26 more calls not writing the file.
+_MISSING_IN_REPLY = ("\n\n{names} is what this task asks you to produce, and it is not written "
+                     "yet. Write it now with write_file; describing it in your final answer "
+                     "scores nothing.")
+
+# A file name in the task text that is not on disk yet is the thing being asked for. This is the
+# cheapest possible completion signal, and it is the one a 30-step turn can act on: a cell that
+# derives the right answer and never writes it down scores zero, because the checker reads files.
+_ARTIFACT = re.compile(
+    r"(?<!\w)[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh|js|ts|tsx|jsx|c|h|cpp|go|rs|java|scm|txt"
+    r"|json|jsonl|md|yaml|yml|toml|html|css|sql)\b")
+
+
+def deliverables(text: str, project: str | None) -> list:
+    """File names the task text names that do not exist in the project yet.
+
+    Inputs are excluded by the same rule that makes this useful: a named file already on disk is
+    something to read or edit, not something still to produce.
+    """
+    if not text:
+        return []
+    out, seen = [], set()
+    for name in _ARTIFACT.findall(text):
+        base = name.rsplit("/", 1)[-1]
+        if base in seen:
+            continue
+        seen.add(base)
+        if project and (os.path.exists(os.path.join(project, name))
+                        or os.path.exists(os.path.join(project, base))):
+            continue
+        out.append(name)
+    return out[:4]
 
 
 def _auto_snapshot(project: str, tool: str, session: str = "") -> str:
@@ -702,6 +810,63 @@ def parse_args(raw: str) -> dict:
         return v if isinstance(v, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+# A call whose arguments never finished streaming. The usual victim is a large write_file:
+# the round reaches the output cap in the middle of the document, and parse_args turns the
+# half-JSON into {} - so the harness runs a write with no path and no content, the transcript
+# says it ran, and the model goes on believing the file exists. The cells ended as
+# "attack.py does not exist" with 45,000 output tokens behind them. Say plainly that nothing
+# happened, and make the note start with ERROR: so the repeat guard never treats it as a
+# result worth caching.
+SEVERED = ("ERROR: this call was cut off by the output limit while its arguments were still "
+           "streaming, so it did NOT run and nothing was written. Break the write into pieces "
+           "that fit one round: write_file the first part, then extend the file with edit_file.")
+
+
+def _drain(stream, got: list, why: list, state: dict):
+    """Consume one model round: yield what the interface needs, record what the loop needs.
+
+    `state` collects the tool calls, the finish reason and the round's tokens, so a caller can
+    decide whether the round was usable without the event stream leaking back out.
+    """
+    for ev in stream:
+        kind = ev["type"]
+        if kind == "text":
+            got.append(ev["delta"])
+            yield {"type": "text", "delta": ev["delta"]}
+        elif kind == "reason":
+            why.append(ev["delta"])
+            yield {"type": "reason", "delta": ev["delta"]}
+        elif kind == "tool_calls":
+            state["calls"] = ev["calls"]
+        elif kind == "usage":
+            u = ev.get("usage") or {}
+            state["tokens"] = int(state.get("tokens") or 0) + int(u.get("input") or 0) \
+                + int(u.get("output") or 0)
+            yield {"type": "usage", "usage": u}
+        elif kind == "done":
+            state["finish"] = ev.get("finish") or state.get("finish") or ""
+
+
+def _code_block(text: str) -> str:
+    """The first fenced block in a reply, or "" when there is none."""
+    m = re.search(r"```[ \t]*[\w+#.-]*\n(.*?)```", text or "", re.S)
+    return (m.group(1).strip() if m else "")
+
+
+def _severed(calls: list) -> set:
+    """ids of calls whose argument JSON cannot be parsed - they never arrived complete."""
+    bad = set()
+    for c in calls or []:
+        raw = str(c.get("arguments") or "").strip()
+        if not raw or raw == "{}":
+            continue
+        try:
+            json.loads(raw)
+        except Exception:
+            bad.add(c.get("id"))
+    return bad
 
 
 def _chars(msgs: list[dict]) -> int:
@@ -1176,8 +1341,17 @@ def _audit_tool(name: str, args: dict, result, failed: bool, ctx: dict) -> None:
     digest = {}
     for k, v in list((args or {}).items())[:12]:
         try:
-            digest[str(k)[:40]] = (json.dumps(v, ensure_ascii=False)[:200]
-                                   if isinstance(v, (dict, list)) else str(v)[:200])
+            txt = (json.dumps(v, ensure_ascii=False)
+                   if isinstance(v, (dict, list)) else str(v))
+            key = str(k)[:40]
+            if len(txt) > 200:
+                # The preview is only a preview, and saying so matters: without the real length a
+                # 400-line write reads back as a 200-character file, and I have already mistaken my
+                # own truncation for the agent's and announced a root cause from it.
+                digest[key] = txt[:200]
+                digest[key + "_chars"] = len(txt)
+            else:
+                digest[key] = txt
         except Exception:  # noqa: BLE001
             digest[str(k)[:40]] = "<unserialisable>"
     audit.record("tool_call", session=ctx.get("session") or "", tool=name,
@@ -1239,7 +1413,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
              max_steps: int | None = None, ref: str | None = None, temperature=None,
              depth: int = 0, nested: bool = False, chat: bool = False,
              stop=None, steer=None, reasoning=None, trace: list | None = None,
-             session: str = "", has_instructions: bool = False):
+             session: str = "", has_instructions: bool = False, deadline: float | None = None):
     steps = max_steps or config.AGENT_MAX_STEPS
     tools = [] if chat else tools_for(readonly, depth)
     ctx = {"project": project, "ref": ref, "depth": depth, "readonly": readonly,
@@ -1266,16 +1440,163 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     # already said to the model on a previous step.
     last_errors: list = []
     last_block = ""
-    seen_calls: set = set()
+    # Counts, not a set: "have I seen this exact call" is only useful if the answer can grow.
+    # The feal cell that issued 59 shell calls with 10 distinct arguments was not exploring, it
+    # was re-running one probe and paying full price for the same bytes each time.
+    seen_calls: dict = {}
+    call_cache: dict = {}
     repeats: list = []
+    # Consecutive identical calls refused this turn. Reset by any call that actually runs, because
+    # "stuck" means nothing changed, not that the same tool was used twice.
+    blocked_run = 0
+    # Names the task asks for that are not on disk yet, and the names this turn has written.
+    wanted = deliverables(next((str(m.get("content") or "") for m in messages
+                                if m.get("role") == "user"), ""), project)
+    written: set = set()
+    phase_ran = [False]
+    touched = [False]
+    ran_after_write = [False]
+    demanded = [0]
     forced = 0
     snapped = False
 
-    def _report():
+    def _salvage(names, run_check=False):
+        """One round whose only tools are the ones that can write the deliverable.
+
+        The closing call deliberately offers no tools, which is right for a report and wrong for a
+        task whose score comes from a file: the checker reads the disk, not the answer. This is the
+        one exception, and it is still one round, so it cannot become a second step budget.
+        """
+        nonlocal turn_tokens
+        schemas = [t for t in tools if t["function"]["name"] in SALVAGE_TOOLS]
+        if not schemas or chat:
+            return
+        ask = windowed(messages + [{"role": "user",
+                                    "content": (guidance.verify(names) if run_check
+                                                else guidance.salvage(names))}], budget)
+        got: list[str] = []
+        why: list[str] = []
+        calls: list = []
+        # Two attempts, and the second one is the interesting case. A salvage round exists to
+        # produce one large file, which is exactly what an output cap severs: the round comes back
+        # with finish_reason=length and half a write_file in it. That is our ceiling failing, not
+        # the model, so the retry sends the same request with no max_tokens at all and lets the
+        # provider finish the document. Only ever one extra attempt, and only when the round was
+        # actually cut off.
+        for attempt, cap in enumerate((prof_tokens, 0)):
+            got, why, calls = [], [], []
+            state: dict = {}
+            try:
+                yield from _drain(engine.stream_chat(ask, ref=ref, tools=schemas,
+                                                     temperature=temperature, max_tokens=cap,
+                                                     reasoning_effort=reasoning), got, why, state)
+            except engine.EngineError as exc:
+                yield {"type": "error", "message": "no salvage round: " + str(exc)[:160]}
+                return
+            turn_tokens += int(state.get("tokens") or 0)
+            calls = list(state.get("calls") or [])
+            # Only 0 means "send no max_tokens". None does not: the payload falls back to the
+            # model card, so None is a real ceiling worth escalating away from.
+            if cap == 0 or state.get("finish") != "length" or not _severed(calls):
+                break
+            yield {"type": "notify", "level": "info",
+                   "message": "salvage round hit the output cap mid-write; retrying without one"}
+        if not calls:
+            # The phase exists because a cell that ends with nothing on disk scores zero however
+            # well it argued. feal trial 2 is exactly that: 16 turns, 38,500 tokens, no write_file
+            # ever attempted. If the reply to "write it now" is prose with the code in it, that
+            # code is the deliverable and the only thing between 0 and a chance is who puts it on
+            # disk. Extraction is not authorship - the content is the model's, unedited.
+            prose = "".join(got)
+            block = _code_block(prose)
+            if block and names:
+                target = str(names[0])
+                out: dict = {}
+                try:
+                    for _p in call_tool("write_file", {"path": target,
+                                                      "content": block}, ctx, out):
+                        pass
+                except Exception:
+                    return
+                result = str(out.get("result") or "")
+                if not result or result.startswith("ERROR:"):
+                    return
+                written.add(target.rsplit("/", 1)[-1])
+                messages.append({"role": "assistant", "content": prose})
+                messages.append({"role": "tool", "tool_call_id": "salvage-extract",
+                                 "content": result})
+                yield {"type": "notify", "level": "info",
+                       "message": f"no tool call in that reply: wrote {target} from the code in it"}
+            return
+        messages.append({"role": "assistant", "content": "".join(got), "tool_calls": [
+            {"id": c["id"], "type": "function",
+             "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
+            for c in calls]})
+        step_tools: list[dict] = []
+        for c in calls:
+            args = parse_args(c["arguments"])
+            yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
+            if c.get("id") in _severed(calls):
+                out = {"result": SEVERED}
+                yield {"type": "notify", "level": "info",
+                       "message": f"discarded a {c['name']} call cut off mid-arguments"}
+            else:
+                out = {}
+                for p in call_tool(c["name"], args, ctx, out):
+                    yield p
+            result = out.get("result", "ERROR: the tool produced no result")
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+            failed = str(result).startswith("ERROR:")
+            if not failed and c["name"] == "run_shell":
+                # Only a real execution counts, and only the shell can be one. A successful
+                # write_file must not satisfy this, and neither may a read_file - or "the
+                # deliverable was run" collapses back into "something happened after it".
+                phase_ran[0] = True
+            _audit_tool(c["name"], args, result, failed, ctx)
+            path = str(args.get("path") or args.get("file") or "")
+            if path:
+                written.add(path.replace("\\", "/").rsplit("/", 1)[-1])
+            step_tools.append({"id": c["id"], "name": c["name"], "args": args,
+                               "result": result, "is_error": failed})
+            yield {"type": "tool_end", "name": c["name"], "result": result,
+                   "id": c["id"], "is_error": failed}
+        if trace is not None:
+            trace.append({"text": "".join(got), "reason": "".join(why).strip(),
+                          "tools": step_tools})
+
+    def _report(missing=(), closing=True, verify=()):
         """One closing call with no tools offered, so it can only say where things
-        stand. Used whenever the turn would otherwise end with no answer."""
+        stand. Used whenever the turn would otherwise end with no answer. `closing=False`
+        keeps the deliverable phase but skips the summary, for a turn that already said
+        something and simply left the named file unwritten."""
+        nonlocal turn_tokens
         if chat or not tools:
             return
+        # The other half of the same failure. schemelike shipped `Missing closing parenthesis`
+        # three trials running because the deliverable EXISTED: the salvage loop below only fires
+        # for files that are absent, so a written-but-never-run file ended the turn untouched. This
+        # asks for the run, on the files the task named, without offering the authoring tools a
+        # second time around - nothing here writes a new file from scratch.
+        if verify and not missing:
+            for _ in range(SALVAGE_ROUNDS):
+                yield from _salvage(list(verify), run_check=True)
+                if ran_after_write[0] or phase_ran[0]:
+                    break
+            if not closing:
+                return
+        if missing:
+            names = list(missing)
+            # Landing the file does not end the phase. It ends when the file has landed AND
+            # something has been run inside it - otherwise a syntactically broken deliverable
+            # counts as done and the cell dies at the checker instead of at a failing run.
+            for _ in range(SALVAGE_ROUNDS):
+                yield from _salvage(names if names else list(missing),
+                                    run_check=not names)
+                names = [n for n in missing if n.rsplit("/", 1)[-1] not in written]
+                if not names and phase_ran[0]:
+                    break
+            if not closing:
+                return
         ask = windowed(messages + [{"role": "user", "content": guidance.closing()}],
                        budget)
         got: list[str] = []
@@ -1289,6 +1610,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 elif ev["type"] == "reason":
                     why.append(ev["delta"])
                     yield {"type": "reason", "delta": ev["delta"]}
+                elif ev["type"] == "usage":
+                    u = ev.get("usage") or {}
+                    turn_tokens += int(u.get("input") or 0) + int(u.get("output") or 0)
+                    yield {"type": "usage", "usage": u}
         except engine.EngineError as exc:
             # Swallowing this is how a turn came back empty with no explanation.
             yield {"type": "error", "message": "no closing report: " + str(exc)}
@@ -1337,8 +1662,16 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         step_errors: list = []
         try:
             ctx_msgs = windowed(messages, budget)
+            # Only in the last few steps: a task that names an optional file should not be
+            # nagged about it for the whole turn, and near the cap it is the only thing worth
+            # spending a step on, because the checker reads files rather than answers.
+            missing = ()
+            if wanted and steps - i <= 3:
+                missing = tuple(n for n in wanted
+                                if n.rsplit("/", 1)[-1] not in written)
             block = guidance.for_step(step=i, steps=steps, errors=last_errors,
-                                      repeated=repeats, first=(i == 0 and not has_prior_work),
+                                      repeated=repeats, missing=missing,
+                                      first=(i == 0 and not has_prior_work),
                                       project=bool(project) and not has_instructions, previous=last_block)
             if block:
                 # Appended at the point of use instead of folded into the standing
@@ -1346,6 +1679,28 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 # paid for on the step that needs it.
                 ctx_msgs = ctx_msgs + [{"role": "system", "content": block}]
                 last_block = block
+            # The wall clock is part of the task. Until now the loop could not see it: headless
+            # checked the deadline between events and simply abandoned the turn, so a cell with
+            # twelve turns of real work in it ended with nothing on disk and no credit at all.
+            left = (deadline - time.time()) if deadline else None
+            if left is not None and left <= guidance.LATE_S:
+                ctx_msgs = ctx_msgs + [{"role": "system",
+                                       "content": guidance.time_left(left)}]
+            # Late enough that another probe is not affordable, early enough that a file can still
+            # land. Write the deliverable with what is already known rather than being cut off
+            # mid-thought: a rough artifact that exists beats a perfect plan that never landed.
+            if (left is not None and left <= guidance.EMERGENCY_S and wanted and not chat
+                    and not nested and depth == 0):
+                late = tuple(n for n in wanted
+                             if n.rsplit("/", 1)[-1] not in written)
+                if late:
+                    yield {"type": "notify", "level": "info",
+                           "message": f"{max(0, int(left))}s of wall budget left and "
+                                      f"{', '.join(late)} is not written: delivering now"}
+                    yield from _report(missing=late, closing=False)
+                    return
+
+            finish = ""
             stream = engine.stream_chat(ctx_msgs,
                                         ref=ref, tools=tools, temperature=temperature,
                                         max_tokens=prof_tokens, reasoning_effort=reasoning)
@@ -1367,6 +1722,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     yield {"type": "usage", "usage": u}
                 elif ev["type"] == "done":
                     model_used = ev.get("model")
+                    finish = ev.get("finish") or finish
         except engine.EngineError as e:
             yield {"type": "error", "message": str(e)}
             yield {"type": "done"}
@@ -1379,6 +1735,27 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
 
         if model_used and not nested:
             yield {"type": "state_delta", "model": model_used["ref"]}
+
+        # Our own output ceiling is the one failure the harness causes on the hard set. When a
+        # round is cut off, the tool arguments arrive half-written, _severed() refuses to execute
+        # them, and the model gets an ERROR note for work it genuinely tried to do. So ask for the
+        # same round once more with no ceiling at all and let the provider finish it. Only on a
+        # real length cut with a broken call, and only once per step - 0 omits max_tokens, None
+        # would fall back to the model card and still be a ceiling.
+        if finish == "length" and _severed(calls) and not cancelled and not chat and not nested:
+            yield {"type": "notify", "level": "info",
+                   "message": "output ceiling severed that call; retrying the round uncapped"}
+            step_text, step_reason, calls = [], [], []
+            retry: dict = {}
+            try:
+                yield from _drain(engine.stream_chat(ctx_msgs, ref=ref, tools=tools,
+                                                     temperature=temperature, max_tokens=0,
+                                                     reasoning_effort=reasoning),
+                                  step_text, step_reason, retry)
+            except engine.EngineError:
+                pass
+            calls = list(retry.get("calls") or [])
+            turn_tokens += int(retry.get("tokens") or 0)
 
         narration = "".join(step_text).strip()
         thinking = "".join(step_reason).strip()
@@ -1398,7 +1775,26 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield {"type": "notify", "level": "info",
                        "message": "planning detected: guided back to action"}
                 continue
-            if not narration and not (stop is not None and stop.is_set()):
+            stopped = stop is not None and stop.is_set()
+            # Ending the turn on its own without the file the task named is the most
+            # common hard-set failure there is: the model thinks out loud, says something
+            # sensible, and leaves nothing for a checker to read. Waiting for the step cap
+            # never reaches these cells — the ones that stopped at 13 turns had 45,000
+            # output tokens and no artifact — so the deliverable phase runs here too.
+            unwritten = ()
+            if wanted and not stopped and not chat:
+                unwritten = tuple(n for n in wanted
+                                  if n.rsplit("/", 1)[-1] not in written)
+            if unwritten:
+                yield from _report(missing=unwritten, closing=bool(narration))
+            elif (wanted and not stopped and not chat and not nested and touched[0]
+                    and not ran_after_write[0]
+                    and (not deadline or time.time() < deadline - 60)):
+                # Everything the task named is on disk, the model wrote it, and it never executed
+                # once. Ship it to the checker anyway and the cell dies on a syntax error the
+                # model could have seen for one `python3 interp.py`.
+                yield from _report(verify=tuple(wanted), closing=bool(narration))
+            elif not narration and not stopped:
                 # It stopped calling tools and said nothing on the way out. Left as
                 # is, the user got a transcript of results with no answer at all.
                 yield from _report()
@@ -1424,6 +1820,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # serial and in the order the model asked for it, because each result has to
         # pair back up with the call that requested it.
         parsed = [(c, parse_args(c["arguments"])) for c in calls]
+        broken = _severed(calls)
         batch = [(c["id"], c["name"], a) for c, a in parsed if c["name"] == SUBTASK]
         parallel: dict = {}
         if len(batch) > 1 and depth == 0 and not readonly:
@@ -1442,25 +1839,64 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield {"type": "done"}
                 return
             key = (c["name"], json.dumps(args, sort_keys=True)[:400])
-            if key in seen_calls and c["name"] not in repeats:
+            seen = seen_calls.get(key, 0) + 1
+            seen_calls[key] = seen
+            if seen > 1 and c["name"] not in repeats:
                 repeats.append(c["name"])
-            seen_calls.add(key)
             if (c["name"] in MUTATING and not snapped and project
                     and not readonly and depth == 0):
                 snapped = True
                 note = _auto_snapshot(project, c["name"], session)
                 if note:
                     yield {"type": "notify", "level": "info", "message": note}
-            if c["id"] in parallel:
+            if c["id"] in broken:
+                # Never execute a call that arrived in pieces.
+                yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
+                out = {"result": SEVERED}
+                yield {"type": "notify", "level": "info",
+                       "message": f"discarded a {c['name']} call cut off mid-arguments"}
+            elif c["id"] in parallel:
                 out = parallel[c["id"]]
+            elif (seen >= REPEAT_BLOCK_AFTER and c["name"] not in MUTATING
+                    and key in call_cache
+                    and not str(call_cache[key]).startswith("ERROR:")):
+                # Third identical successful call. Running it again is not new information, and
+                # the model gets its own previous result back so it cannot claim it was withheld.
+                yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
+                still = [n for n in wanted if n.rsplit("/", 1)[-1] not in written]
+                prev = (str(call_cache[key])[:REPEAT_ECHO] if seen == REPEAT_BLOCK_AFTER
+                        else "(its result is already in the transcript above)")
+                miss = (_MISSING_IN_REPLY.format(names=", ".join(still[:3])) if still else "")
+                out = {"result": _REPEAT_REPLY.format(n=seen, tool=c["name"], prev=prev,
+                                                     missing=miss)}
+                yield {"type": "notify", "level": "info",
+                       "message": f"blocked repeat call #{seen} of {c['name']}"}
+                blocked_run += 1
             else:
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
                 out = {}
                 for p in call_tool(c["name"], args, ctx, out):
                     yield p
+                blocked_run = 0
             result = out.get("result", "ERROR: the tool produced no result")
+            call_cache[key] = result
+            if c["name"] in MUTATING:
+                path = str(args.get("path") or args.get("file") or "")
+                if path:
+                    written.add(path.replace("\\", "/").rsplit("/", 1)[-1])
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             failed = str(result).startswith("ERROR:")
+            # Two facts the turn cannot be answered without: did the model touch a file the task
+            # named, and did anything ever RUN after that. `written` alone cannot tell them apart.
+            here = str(args.get("path") or args.get("file") or "").replace("\\", "/")
+            if not failed and here and here.rsplit("/", 1)[-1] in {
+                    n.rsplit("/", 1)[-1] for n in wanted}:
+                touched[0] = True
+            elif not failed and touched[0] and c["name"] == "run_shell":
+                # The only tool that proves the deliverable was executed. Reading a file, or
+                # listing the directory, is not running eval.scm - a 200-char fragment passed
+                # this test before and the cell died on `Unexpected closing parenthesis`.
+                ran_after_write[0] = True
             _audit_tool(c["name"], args, result, failed, ctx)
             if c["name"] == SUBTASK and out.get("saved_tokens"):
                 # Delegation is only a saving if it is counted. The sub-agent's
@@ -1479,6 +1915,29 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 step_errors.append((c["name"], str(result)[:200]))
 
         last_errors = step_errors
+
+        # Order the artifact in the middle of the turn, not after it.
+        # feal trial 2: 16 turns, 38,500 tokens, no write attempted. schemelike trial 3: 34 turns,
+        # no file. Both ended because the turn ran out, so the end-of-turn deliverable phase -
+        # which only runs when the model chooses to stop - never got to force anything. Halfway in,
+        # while there is still budget to write AND to run it, there is.
+        if wanted and not chat and not nested and depth == 0:
+            still = [n for n in wanted if n.rsplit("/", 1)[-1] not in written]
+            # Two triggers, because a turn can run out on either clock. 40% of the steps is the
+            # earliest the order pays for itself (a real feal run wrote attack.py only after the
+            # order at 15/30 and then had to be cut short), and half the wall budget left catches
+            # turns that burn steps slowly - s2's feal cell died at 1,081s with nothing on disk.
+            due = (i + 1 >= max(3, steps * 2 // 5)
+                   or (left is not None and left <= guidance.EMERGENCY_S * 2))
+            late = (i + 1 >= max(3, steps * 3 // 4)
+                    or (left is not None and left <= guidance.EMERGENCY_S))
+            if still and (due or late) and demanded[0] < (2 if late else 1):
+                demanded[0] += 1
+                messages.append({"role": "user",
+                                 "content": guidance.demand(still, f"{i + 1} of {steps} steps",
+                                                            demanded[0])})
+                yield {"type": "notify", "level": "info",
+                       "message": "no deliverable on disk yet: ordered it written now"}
 
         # ── the cost governor ───────────────────────────────────────────
         # Reported live, at fractions of the model's real window, so a turn that
@@ -1536,9 +1995,21 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         if trace is not None:
             trace.append({"text": narration, "reason": thinking, "tools": step_tools})
 
+        if blocked_run >= REPEAT_STOP_AFTER:
+            # The same lap again, with nothing learned. Ending here is the only way the guard
+            # changes the outcome rather than the cost: those steps go to the deliverable instead.
+            yield {"type": "notify", "level": "warn",
+                   "message": f"{blocked_run} identical calls refused in a row, ending the turn "
+                              "on the deliverable"}
+            yield from _report([n for n in wanted
+                                if n.rsplit("/", 1)[-1] not in written])
+            yield {"type": "notify", "message": f"stopped after {i + 1} steps", "level": "warn"}
+            yield {"type": "done"}
+            return
+
     # The step budget ran out while work was still open, so report where it stands.
     if not (stop is not None and stop.is_set()):
-        yield from _report()
+        yield from _report([n for n in wanted if n.rsplit("/", 1)[-1] not in written])
 
     yield {"type": "notify", "message": f"stopped after {steps} steps", "level": "warn"}
     yield {"type": "done"}
