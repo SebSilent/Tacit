@@ -909,35 +909,56 @@ function renderTranscript(s) {
   inner.innerHTML = '';
   if (!s) { emptyState.style.display = ''; return; }
   emptyState.style.display = s.messages.length ? 'none' : '';
+  // The transcript stores one assistant row per step — every model round that ran
+  // tools gets its own row, often with no text at all. The live view streams a
+  // whole turn into ONE bubble (all events land in `streaming`), so drawing a
+  // bubble per stored row made a fork or reload of a tool-heavy turn read as the
+  // model having sent a message for every step. Group consecutive assistant rows
+  // into the turn they belong to; a user or summary row starts a new group.
+  const groups = [];
   for (const msg of s.messages) {
-    const body = appendMsg(msg.role, msg.content);
-    if (msg.role !== 'assistant') continue;
-    if (msg.reason) {
-      const blk = body.querySelector('.reason-block');
-      blk.querySelector('.reason-body').textContent = msg.reason;
+    const last = groups[groups.length - 1];
+    if (msg.role === 'assistant' && last && last.role === 'assistant') last.parts.push(msg);
+    else groups.push({ role: msg.role, parts: [msg] });
+  }
+  for (const g of groups) {
+    const head = g.parts[0];
+    const text = g.parts.map(p => p.content || '').join('\n\n');
+    const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''));
+    if (g.role !== 'assistant') continue;
+    if (text) {
+      const c = body.querySelector('.msg-content');
+      c._raw = text;
+      c.innerHTML = md(text);
+    }
+    const reason = g.parts.map(p => p.reason || '').filter(Boolean).join('\n\n');
+    const blk = body.querySelector('.reason-block');
+    if (reason) {
+      blk.querySelector('.reason-body').textContent = reason;
       blk.querySelector('.reason-toggle').textContent = 'thought process';
     } else {
-      const blk = body.querySelector('.reason-block');
-      if (blk) blk.remove();
+      blk.remove();
     }
-    const c = body.querySelector('.msg-content');
-    c._raw = msg.content;
-    c.innerHTML = md(msg.content);
-    for (const t of (msg.tools || [])) {
-      const tools = body.querySelector('.tools');
-      const card = document.createElement('div');
-      card.className = 'tool-card' + (t.is_error ? ' err' : '');
-      const argStr = t.name === 'bash' ? ((t.args || {}).command || '') :
-        JSON.stringify(t.args || {}).slice(0, 120);
-      card.innerHTML = `
-        <div class="tool-head"><span class="tool-badge"></span><span class="tool-args"></span></div>
-        <div class="tool-body"><pre></pre></div>`;
-      card.querySelector('.tool-badge').textContent = t.name;
-      card.querySelector('.tool-args').textContent = argStr;
-      card.querySelector('.tool-body pre').textContent = t.result || '';
-      card.querySelector('.tool-head').addEventListener('click', () => card.classList.toggle('open'));
-      tools.appendChild(card);
+    for (const msg of g.parts) {
+      for (const t of (msg.tools || [])) {
+        const tools = body.querySelector('.tools');
+        const card = document.createElement('div');
+        card.className = 'tool-card' + (t.is_error ? ' err' : '');
+        const argStr = t.name === 'bash' ? ((t.args || {}).command || '') :
+          JSON.stringify(t.args || {}).slice(0, 120);
+        card.innerHTML = `
+          <div class="tool-head"><span class="tool-badge"></span><span class="tool-args"></span></div>
+          <div class="tool-body"><pre></pre></div>`;
+        card.querySelector('.tool-badge').textContent = t.name;
+        card.querySelector('.tool-args').textContent = argStr;
+        card.querySelector('.tool-body pre').textContent = t.result || '';
+        card.querySelector('.tool-head').addEventListener('click', () => card.classList.toggle('open'));
+        tools.appendChild(card);
+      }
     }
+    // A step that ran tools and said nothing is real work, but a group with
+    // nothing at all in it is noise left behind by an interrupted turn.
+    if (!text && !reason && !g.parts.some(p => (p.tools || []).length)) body.closest('.msg').remove();
   }
   stickToBottom = true;
   scrollBottom();
@@ -998,7 +1019,13 @@ async function adoptSession(sid, label) {
       sessions.unshift({
         id: rec.id, title: rec.title || 'Session', model: rec.model, mode: rec.mode,
         thinking: rec.thinking, workdir: rec.project || '', created: rec.created,
-        messages: (rec.messages || []).map(x => ({ role: x.role, content: x.content })),
+        // The whole stored shape, not a {role, content} projection. A fork copies
+        // the transcript server-side, where a turn is one assistant row per step
+        // with its tool calls attached and often no text at all; stripping tools
+        // here rendered every one of those steps as an empty "Tacit" bubble, so a
+        // fork of a tool-heavy turn looked like the model had sent dozens of
+        // blank messages. renderTranscript already draws reason and tools.
+        messages: rec.messages || [],
       });
     }
     activeId = rec.id;

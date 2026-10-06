@@ -116,6 +116,34 @@ class TestEditAndContinue(unittest.TestCase):
         self.assertIsNone(self._cut([{"role": "assistant", "content": "x"}], 0))
 
 
+class TestForkAdoption(unittest.TestCase):
+    """adoptSession must keep the stored transcript shape, not project it.
+
+    A fork copies the transcript server-side, where a turn is one assistant row
+    per step with its tool calls attached and often no text at all. The client
+    used to rebuild each row as {role, content}, which stripped tools and reason
+    and rendered every one of those steps as an empty "Tacit" bubble — a fork of
+    a tool-heavy turn looked like the model had sent dozens of blank messages.
+    """
+
+    def test_adopted_messages_are_not_projected(self):
+        from pathlib import Path as _P
+        js = (_P(__file__).parent.parent / "static/app.js").read_text(encoding="utf-8")
+        self.assertIn("messages: rec.messages || [],", js)
+        # the old projection must be gone from the adoption path
+        self.assertNotIn("map(x => ({ role: x.role, content: x.content }))", js)
+
+    def test_render_groups_consecutive_assistant_rows_into_one_bubble(self):
+        """The transcript stores one assistant row per step; the live view shows one
+        bubble per turn. Re-rendering row by row made a fork or reload of a
+        tool-heavy turn read as dozens of Tacit messages."""
+        from pathlib import Path as _P
+        js = (_P(__file__).parent.parent / "static/app.js").read_text(encoding="utf-8")
+        self.assertIn("last.role === 'assistant') last.parts.push(msg)", js)
+        # tool cards from every step in the group are still drawn
+        self.assertIn("for (const msg of g.parts)", js)
+
+
 class TestSessionStats(unittest.TestCase):
     """get_session_stats must carry the fields app.js reads."""
 
