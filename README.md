@@ -119,8 +119,10 @@ looks cheap in its row is partly charging you for failures it then discards.
 
 ### Run it yourself, that is the point of the numbers
 
-This is one model, one endpoint, one machine, and that is exactly why the table is open. The
-benchmark is meant to be run, not read: your model, your endpoint, your hardware, your numbers.
+These rows come from one model, one endpoint, one machine, twenty cells of it. That is a floor, not
+a ceiling, and it is exactly why this section exists: the invitation is the remedy for the sample
+size. The benchmark is meant to be run, not read: your model, your endpoint, your hardware, your
+numbers.
 
 - Everything needed ships with the runner: the tasks, the untouched checkers, and a results file
   format that takes any harness row.
@@ -131,8 +133,10 @@ benchmark is meant to be run, not read: your model, your endpoint, your hardware
   easiest for you.
 
 The cells this table wants next: any first-party or fp8 route for kimi and qwen, DeepSeek and
-Qwen as the model, an Apple silicon lane, and a rerun of ours on whatever you run. More arms on
-the same cells is what turns this from one box's word into a field.
+Qwen as the model, an Apple silicon lane, and a rerun of ours on whatever you run. Tuning is fair
+game and wanted here too: the other arms ship tuned for the models they run, and Tacit's profiles
+and prefs are the tuning surface, so tune for yours and send that row as well. More arms on the
+same cells is what turns this from one box's word into a field.
 
 ### How the measurement holds up
 
@@ -1027,8 +1031,6 @@ test there is named for the claim it enforces, so the next refactor cannot quiet
 
 ### Known limits
 
-Stated plainly, because a list of what works is not much use without one:
-
 - **Binding.** `TACIT_HOST` is yours: `127.0.0.1` for your machine only, `0.0.0.0` to reach it
   from another device. There is no login system; bring your own if you put it on a network.
 - **Windows has no isolation primitive.** `mechanism: none` is the answer there, and the
@@ -1042,9 +1044,6 @@ Stated plainly, because a list of what works is not much use without one:
   hand against a real daemon, but Tacit will not fetch Docker or an image for you, and on a machine
   without one the backend reports itself unavailable rather than quietly falling back to `none`.
   No live-daemon test is shipped, so those checks are not re-run on every commit.
-- **There is no benchmark harness in this repository.** Terminal-Bench integration was built and
-  run externally, then removed; nothing here claims a benchmark score, and no published number for
-  another harness has been reproduced under conditions controlled by us.
 
 ## License
 
