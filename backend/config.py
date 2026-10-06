@@ -224,6 +224,7 @@ def ensure_home() -> None:
     if not PREFS_FILE.exists():
         PREFS_FILE.write_text(json.dumps({
             "projectRoots": [], "model": "", "mode": "agent", "thinking": "default",
+            "deliverGuarantee": True,
         }, indent=2), encoding="utf-8")
 
 
@@ -241,6 +242,24 @@ def write_json(path: Path, value) -> None:
 
 def prefs() -> dict:
     return read_json(PREFS_FILE, {})
+
+
+def deliver_guarantee() -> bool:
+    """The delivery guarantee, on by default.
+
+    On means the turn never ends quietly short of the artifact: the file the task names gets
+    ordered written mid-turn, forced written at the end, run before the turn claims done, and
+    landed inside the last 300 seconds of wall budget instead of dying to the clock. Off means
+    the agent works like a thin wrapper: it stops when it stops, and nothing is forced, which is
+    cheaper when a person is steering by hand. The mechanic is not part of the switch: a round
+    our own output ceiling destroyed gets re-asked uncapped either way, because discarding it
+    would bill the model's thinking as waste.
+    """
+    raw = os.environ.get("TACIT_DELIVER_GUARANTEE")
+    if raw is not None:
+        return raw.strip().lower() not in ("0", "off", "false", "no")
+    v = prefs().get("deliverGuarantee")
+    return True if v is None else bool(v)
 
 
 def save_prefs(patch: dict) -> dict:

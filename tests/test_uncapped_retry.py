@@ -1,6 +1,7 @@
+import os
 import unittest
 
-from backend import agent
+from backend import agent, config
 
 
 class TestUncappedRetry(unittest.TestCase):
@@ -163,6 +164,74 @@ class TestWallBudgetAwareness(unittest.TestCase):
                          "a chat turn has no wall to count down against")
 
 
+class TestDeliveryOff(unittest.TestCase):
+    """deliverGuarantee: false turns the harness into a thin wrapper.
+
+    No mid-turn order, no end-of-turn salvage, no verify round, no clock delivery. The turn ends
+    when the agent stops; nothing is forced. That is the cheap mode, and it has to actually be
+    cheap: zero forced asks means zero extra model calls.
+    """
+
+    def _run(self, guarantee_env=None, pref=None, steps=8):
+        orig_env = os.environ.get("TACIT_DELIVER_GUARANTEE")
+        orig_prefs = config.prefs
+        if guarantee_env is not None:
+            os.environ["TACIT_DELIVER_GUARANTEE"] = guarantee_env
+        config.prefs = (lambda: ({"deliverGuarantee": pref} if pref is not None else {}))
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        asks = []
+
+        def fake_stream(msgs, **k):
+            last = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+                       .get("content") or "")
+            asks.append(last)
+            n = len(asks)
+            return iter([{"type": "tool_calls", "calls": [
+                {"id": f"p{n}", "name": "run_shell",
+                 "arguments": '{"command": "python3 probe' + str(n) + '.py"}'}]},
+                {"type": "done", "model": None, "finish": "stop"}])
+
+        def fake_tool(name, a, ctx, out):
+            out["result"] = "ok"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            events = list(agent.run_turn(
+                [{"role": "system", "content": "base"},
+                 {"role": "user", "content": "Write attack.py that recovers the key."}],
+                project=None, max_steps=steps))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+            if orig_env is None:
+                os.environ.pop("TACIT_DELIVER_GUARANTEE", None)
+            else:
+                os.environ["TACIT_DELIVER_GUARANTEE"] = orig_env
+            config.prefs = orig_prefs
+        return events, asks
+
+    def test_off_never_orders_or_forces(self):
+        events, asks = self._run(guarantee_env="0")
+        notes = [e["message"] for e in events if e["type"] == "notify"]
+        self.assertFalse([n for n in notes if "on disk" in n or "delivering" in n], notes)
+        self.assertFalse([a for a in asks if "Write it now" in a or "still not on disk" in a
+                          or "never executed" in a], asks)
+
+    def test_off_beats_prefs_on(self):
+        _e, asks = self._run(guarantee_env="0", pref=True)
+        self.assertFalse([a for a in asks if "Write it now" in a], asks)
+
+    def test_pref_only_off_disables_too(self):
+        _e, asks = self._run(pref=False)
+        self.assertFalse([a for a in asks if "Write it now" in a], asks)
+
+    def test_default_still_orders(self):
+        # The switch exists so it can be turned off. On, it has to keep behaving as measured:
+        # a probing turn still gets the mid-turn order.
+        events, asks = self._run(guarantee_env="1")
+        self.assertTrue([a for a in asks if "still not on disk" in a], asks)
+
+
 class TestProseExtraction(unittest.TestCase):
     """A phase that ends with nothing on disk scored zero however well it argued.
 
@@ -221,6 +290,11 @@ class TestProseExtraction(unittest.TestCase):
         # delivering the model's work.
         _e, runs = self._run("I could not complete the attack in the budget.")
         self.assertFalse([r for r in runs if r[0] == "write_file"], runs)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
 
 
 class TestVerifyPresentFile(unittest.TestCase):

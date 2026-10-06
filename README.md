@@ -1,6 +1,6 @@
 # Tacit
 
-**A standalone coding agent that shows you what it costs, and changes nothing without your approval.**
+**The coding agent that finishes. The smallest standing cost per turn in its class, and the one that spends more rather than leave the file half-written.**
 
 Tacit is a coding agent you run yourself and use in your browser. It reads your files, runs
 commands, writes code, searches the web, and connects to outside tools. Everything stays on your
@@ -16,9 +16,9 @@ toolchain, and no database to install.
 Three properties decide what an agent costs you and what it can do to you. Tacit is built around all
 three.
 
-1. **The fixed cost per turn is the smallest here.** About 980 characters of standing instructions
-   plus the tool descriptions for your profile. Roughly 745 tokens on the Minimal profile, about
-   2,150 on the default. Compare with roughly 8,400 for DSH and 19,000 for Hermes.
+1. **The fixed cost per turn is the smallest in its class.** 975 characters of standing
+   instructions plus your profile's tool descriptions: about 745 tokens on Minimal, 2,150 on
+   Silent, against roughly 8,390 for DSH and 18,970 for Hermes.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
    sandboxing and autonomous learning are all off or proposal-only until you turn them on. An
    approved rule goes back through the same budgets as everything else, never around them.
@@ -28,12 +28,54 @@ three.
 
 ---
 
+## Why the architecture wins
+
+Every harness bills you for two things: its own paperwork, and the model's thinking. Tacit is
+built so the first is nearly free and the second is never wasted.
+
+**Paperwork per turn: the smallest in its class.** 975 characters of standing instructions plus
+your profile's tool descriptions: roughly 745 tokens on Minimal and 2,150 on Silent, against
+8,390 for DSH and 18,970 for Hermes, tool descriptions included. At twenty-five turns a task that
+gap is tens of thousands of tokens paid before the model reasons about a single line of your
+code. Everything else is lazy: skills, knowledge, MCP tool descriptions and project instructions
+are indexed by name and fetched only when used.
+
+**Thinking is never billed twice.** A round cut off by an output ceiling is re-asked with the
+ceiling removed, so the model's reasoning is never paid for and then thrown away. A cut shell
+command hands back the output it printed before the kill, so 90 percent of a computation never
+reads as a hung no-op.
+
+**And when the task must be done, it spends more rather than fail.** That is the delivery
+guarantee, below: the one property no other harness in this comparison has, and the reason a
+Tacit cell that fails still leaves a graded artifact instead of nothing.
+
+---
+
+## Delivery guarantee
+
+On by default. When a turn is about to end without the file the task names, Tacit orders it
+written, makes it run, and spends the last minutes of wall budget landing the artifact instead of
+dying with one in hand. Where the model answers in prose instead of a tool call and the answer
+contains the file, that content is written for it, unedited. This switch is the difference between
+"the harness works for the result" and "the harness waits for the model to feel finished": on, a
+failed cell is a graded artifact; off, it may be nothing at all.
+
+Off is the raw mode, for steering by hand: no forcing, no verification rounds, no clock-driven
+delivery, and the turn ends when the agent ends it. One run: `TACIT_DELIVER_GUARANTEE=0`. For
+keeps: `"deliverGuarantee": false` in `~/.tacit/prefs.json`.
+
+One mechanic is not part of the switch: a round destroyed by our own output ceiling is re-asked
+with the ceiling removed, either way, because billing that model thinking as waste is not a
+setting.
+
+---
+
 ## Benchmarked on OpenBench
 
-One model for every row: GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its
-`checker.sh` files untouched. Three tasks, three trials each, one build, both operating systems.
-Tokens are uncached input plus output, cache reads excluded, counted the way OpenBench counts
-them.
+This section is the evidence for the architecture above, not the argument itself. One model for
+every row: GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its `checker.sh` files
+untouched. Three tasks, three trials each, one build, both operating systems. Tokens are uncached
+input plus output, cache reads excluded, counted the way OpenBench counts them.
 
 ### Linux
 
@@ -59,17 +101,30 @@ checked there as shipped.
 
 ### Against the published arms, same model, same three tasks
 
-| Arm | Solved |
-|---|---|
-| Tacit, Linux, silent | 9/9 |
-| Tacit, Linux, minimal | 9/9 |
-| Pi | 8/9 |
-| OpenCode | 7/9 |
-| Claude | 5/9 |
-| Grok | 5/9 |
-| Codex | 4/9 |
+| Arm | Solved | Cells that errored |
+|---|---|---|
+| Tacit, Linux, silent | 9/9 | 0 |
+| Tacit, Linux, minimal | 9/9 | 0 |
+| Pi | 8/9 | 3 |
+| OpenCode | 7/9 | 3 |
+| Claude | 5/9 | 5 |
+| Grok | 5/9 | 6 |
+| Codex | 4/9 | 5 |
 
----
+The fifth column is the one the token table cannot show you. Every errored cell is a run where the
+arm's own plumbing decided the outcome, and its tokens still got spent. Six of the eighteen
+published cells on the best arms died that way; on the weaker arms it is half the run. Every
+published arm that looks cheap in its row is partly charging you for failures it then discards.
+
+### How the measurement holds up
+
+- The runner and the checkers are the benchmark's own, byte for byte, and the agent never edits
+  them.
+- Every row carries the checker's output verbatim, a byte count and a sha256 for every file it
+  graded, and a per-call audit ledger: which tools ran, on what, and what came back. A claimed
+  solve is a transcript you can re-run.
+- One build, one fingerprint, both operating system lanes. The profile rows are two tool bundles
+  over the same cells, so the profile comparison is an experiment, not an anecdote.
 
 ---
 
@@ -116,7 +171,7 @@ so that one is not a fair fight, but the rest are.
 | Fixed cost per turn | **~745 to ~2,565** | ~8,390 | ~18,970 |
 | Memory in the prompt | **off by default, hard token budget** | not applicable | accumulated in the system prompt |
 | Learning that changes behaviour | **approval first, proposal state by default** | not applicable | automatic |
-| Isolation on Windows | **reported honestly as unavailable** | not verified here | not applicable |
+| Isolation on Windows | **not available: says so** | not verified here | not applicable |
 | Where state lives | **one folder you can delete** | its own | its own |
 
 DSH's own documentation devotes a section to explaining why tool schemas are re-paid on every step.
@@ -160,19 +215,19 @@ machine, not from their marketing.
 | Tool schemas | **7.6 KB / 24** | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
 | External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
 | Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
-| Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | — | — |
-| Tail kept | **token budget, 4–40 msgs** | — | token budget, floor 8 | — | — |
-| Cheap pre-pass before summarising | **yes** | — | yes | — | — |
-| Summariser model | **nominatable** | — | cheap auxiliary | — | — |
-| Fallback if summarising fails | **deterministic digest** | — | digest + cooldown | — | — |
-| Compaction mid-turn | **yes** | — | yes | — | — |
-| Task pinned against elision | **yes** | — | head protected | — | — |
-| Per-turn guidance, appended | **yes** | — | — | yes (originated it) | — |
+| Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | none | none |
+| Tail kept | **token budget, 4–40 msgs** | none | token budget, floor 8 | none | none |
+| Cheap pre-pass before summarising | **yes** | none | yes | none | none |
+| Summariser model | **nominatable** | none | cheap auxiliary | none | none |
+| Fallback if summarising fails | **deterministic digest** | none | digest + cooldown | none | none |
+| Compaction mid-turn | **yes** | none | yes | none | none |
+| Task pinned against elision | **yes** | none | head protected | none | none |
+| Per-turn guidance, appended | **yes** | none | none | yes (originated it) | none |
 | Project instructions | **indexed, 48 tokens** | inlined always | a prompt section | guidance hint | a prompt section |
-| Task state outside the window | **plugin, off by default** | todo list | state store | — | — |
-| Concurrent sub-agents | **yes** | yes | yes | up to 4 | — |
-| Prompt-cache breakpoints | **sent on Anthropic** | yes | — | — | — |
-| Cost reported while running | **yes** | percentage only | — | — | — |
+| Task state outside the window | **plugin, off by default** | todo list | state store | none | none |
+| Concurrent sub-agents | **yes** | yes | yes | up to 4 | none |
+| Prompt-cache breakpoints | **sent on Anthropic** | yes | none | none | none |
+| Cost reported while running | **yes** | percentage only | none | none | none |
 
 ### What Tacit took from each
 
@@ -180,7 +235,7 @@ None of this was invented here, and it is worth saying where it came from.
 
 - **The reserve model is Claude Code's.** Its trigger is not a percentage: it is the window minus a
   roughly fixed ~33K-token reserve, which works out to about 83% of a 200K window and 97% of a 1M
-  one. Tacit used a flat 0.65 and was wrong at both ends — it compacted a 1M-token model at 650,000,
+  one. Tacit used a flat 0.65 and was wrong at both ends: it compacted a 1M-token model at 650,000,
   throwing away 350,000 tokens of usable context, and an 8K model at 5,200, leaving too little to
   answer in. Adopting the reserve model is worth **317,000 extra usable tokens** on a 1M window, and
   the numbers now agree with Claude Code's exactly.
@@ -189,24 +244,24 @@ None of this was invented here, and it is worth saying where it came from.
   output before paying a model to summarise it, iterative summaries that refine one handover note
   instead of stacking, headings marked *reference only* so the summary is not read as new
   instructions, and a deterministic fallback when the summariser fails. Tacit previously kept a fixed
-  six messages, had no pre-pass, and returned nothing at all on a failed summary — which meant the
+  six messages, had no pre-pass, and returned nothing at all on a failed summary: which meant the
   transcript stayed full and the window cap silently elided it instead.
 - **The per-turn guidance was already little-coder's**, and is credited as such in the source.
 
 ### Where Tacit is still behind
 
-- **Prompt caching is now directed where it can be.** Anthropic does not cache automatically — a
-  request has to mark where the cacheable prefix ends — so Tacit speaks the native Messages API for
+- **Prompt caching is now directed where it can be.** Anthropic does not cache automatically: a
+  request has to mark where the cacheable prefix ends: so Tacit speaks the native Messages API for
   Anthropic endpoints and places those breakpoints itself. Everywhere else it adds nothing, because
   OpenAI-compatible servers cache the prefix on their own and an unrecognised field can get a request
   rejected outright. Which applies is detected, reported in **Settings > Tokens**, overridable, and a
   rejection is retried once without the markers so caching can never be the reason a turn fails.
-  What Tacit still does not do is place breakpoints on the growing transcript for Anthropic — two marks
+  What Tacit still does not do is place breakpoints on the growing transcript for Anthropic: two marks
   cover the stable prefix and the last message, which is the documented pattern, but a longer rolling
   strategy is possible.
 - **No task-state panel.** The Task List plugin keeps the remaining work outside the window as data,
   and it survives compaction because it was never in the transcript. What Tacit has no equivalent of is
-  Claude Code's *visible* todo rendering in the interface — the list is the model's own record here,
+  Claude Code's *visible* todo rendering in the interface: the list is the model's own record here,
   shown in the dashboard rather than drawn as a progress UI.
 - **Retrieval is keyword-only.** SQLite full-text search where the build has it, plain matching where
   it does not. No embeddings, deliberately, but that is a ceiling as well as a choice.
@@ -233,13 +288,13 @@ Most tools do not show you this number. Tacit does, and then gives you the switc
   **Settings > Tokens** rather than vanishing.
 - **Memory is capped and retrieved, not carried.** A fixed token budget, default 120, enforced. The
   rest is searched and injected only when relevant, and what the budget held back is reported.
-- **Older turns compact in place.** The trigger counts the whole transcript — tool results and
-  reasoning included, which is where the size actually is — and the summary is written from a digest
+- **Older turns compact in place.** The trigger counts the whole transcript: tool results and
+  reasoning included, which is where the size actually is: and the summary is written from a digest
   of what ran, not just what was said.
 - **The trigger is a reserve, not a percentage.** What has to stay free is room for the next turn's
   work, and that is roughly constant rather than proportional, so compaction fires at the window minus
   about 33,000 tokens: near 83% of a 200K window and 97% of a 1M one. A flat fraction got both ends
-  wrong — it cost a 1M-token model 350,000 tokens of usable context and left an 8K model too little to
+  wrong: it cost a 1M-token model 350,000 tokens of usable context and left an 8K model too little to
   answer in. Below a window the reserve exceeds, it floors at half.
 - **Old tool output is cleared before anything is summarised.** A cheap pre-pass, and often the whole
   job: if dropping the bodies of results already being folded away brings the transcript back under
@@ -298,7 +353,7 @@ out whether any do. Inline mode is there when you would rather pay every turn th
 is budgeted, and reports what the budget held back.
 
 The block goes into the standing prefix before the transcript, because it depends only on the folder
-— putting it there keeps a provider's prefix cache intact instead of invalidating it. Its cost is a
+: putting it there keeps a provider's prefix cache intact instead of invalidating it. Its cost is a
 line of its own in **Settings > Tokens**, never folded into the base prompt figure.
 
 ---
@@ -318,7 +373,7 @@ So Tacit picks the best strategy the endpoint actually supports, rather than app
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row is the important one. Automatic prefix caching needs no markers, and a server that has
-never seen `cache_control` may reject the body outright — so adding markers there would risk a working
+never seen `cache_control` may reject the body outright: so adding markers there would risk a working
 setup to gain nothing. Tacit adds them only where they are understood.
 
 Anthropic needs a native transport for this, and it is a real translation rather than a rename:
@@ -333,13 +388,13 @@ Three guarantees around it, because an optimisation must never be a new way to f
   before any event has streamed, so nothing is ever half-sent and then repeated.
 - **`TACIT_PROMPT_CACHE=off` disables it** for a provider that misbehaves.
 - **What is in force is reported**, in **Settings > Tokens**, as `breakpoints sent` or
-  `provider-side` — along with the hit rate actually observed. A measured run on an OpenAI-compatible
+  `provider-side`: along with the hit rate actually observed. A measured run on an OpenAI-compatible
   endpoint reported **71.1%** of prompt tokens served from cache; that figure used to be computed and
   thrown away, so the field had always been blank.
 
 ---
 
-## Isolation, reported honestly
+## Isolation
 
 Tacit uses the strongest primitive the operating system actually offers, and says which one it is.
 It does not describe a boundary it cannot enforce.
@@ -351,9 +406,8 @@ It does not describe a boundary it cannot enforce.
 | Windows | none available | timeout and change reporting only |
 | Any | `container`, opt-in | Docker or Podman: network namespace, read-only bind, memory and CPU ceilings, PID limit, private `/tmp`, no privilege escalation |
 
-On Windows the answer is `mechanism: none`, and the interface says so in as many words. That is the
-honest result: the base system offers no equivalent primitive, and a container runtime is the way to
-get one. A container is never required and is never installed for you.
+On Windows the answer is `mechanism: none`: the base system offers no equivalent primitive, and a
+container runtime is the way to get one. A container is never required and is never installed for you.
 
 The container backend is the one place where real isolation exists on every platform, because the
 runtime enforces it rather than Tacit approximating it. Three things about it are deliberate:
@@ -364,10 +418,10 @@ runtime enforces it rather than Tacit approximating it. Three things about it ar
   that would fetch it. Pulling automatically is installing something, so it is opt-in.
 - **A timeout kills the container, not just the client.** `docker run` dying leaves the container
   alive, so without an explicit `docker kill` the command would carry on after Tacit reported it
-  stopped — the one thing a sandbox must never do.
+  stopped: the one thing a sandbox must never do.
 
 All three were checked against a **real daemon**, by hand, on Docker Engine 29.8.1 with a WSL2
-backend — not only against a stub. A container was started and these were read back from it: `--network none` really refuses a connection to `1.1.1.1:53`, a
+backend: not only against a stub. A container was started and these were read back from it: `--network none` really refuses a connection to `1.1.1.1:53`, a
 read-only bind is rejected by the kernel (`cannot create /workspace/…: Read-only file system`), a
 write from inside lands on the host and shows up in the change report, `/tmp` is a `tmpfs`,
 `NoNewPrivs:\t1` is present, `pids.max` reads back `64` when 64 was asked for and `memory.max` reads
@@ -380,13 +434,13 @@ ground against a stubbed runtime.
 **The timeout is enforced, not merely reported.** `TACIT_SHELL_TIMEOUT` is documented as the seconds a
 command may run, and on Windows it was not: killing a `cmd /c` or `.bat` wrapper left its grandchildren
 alive holding the captured pipe, so the call blocked long after the timeout fired. Measured at the
-time — two orphaned processes still running minutes later, and a shell tool that took 180 seconds to
+time: two orphaned processes still running minutes later, and a shell tool that took 180 seconds to
 return from a command that should have died in three. The whole tree is now killed and the drain is
 bounded, so a timeout returns in about the time it names.
 
 **The audit ledger.** Every tool call, sandbox decision, memory injection, learning proposal and
 approval is appended to `~/.tacit/audit.jsonl`. It is a plain JSONL file you can read, search or
-delete. Credentials are masked on the way in, at any depth — including a token carried in a URL's
+delete. Credentials are masked on the way in, at any depth: including a token carried in a URL's
 query string, which is the shape that usually reaches a log. Nothing in it is ever edited or removed:
 the interface's own *clear* action retires the file under a timestamped name and records the rotation
 as the first entry of the new one, so the history stays complete.
@@ -574,7 +628,7 @@ existing installation, set `TACIT_PLAYWRIGHT_PATH` to point at it.
   only a summary, so the main conversation stays small. Several asked for in one step run
   concurrently, since they are independent and read-only.
 - **Work with the project's own rules.** Instruction files are found rather than guessed at, and
-  indexed rather than inlined by default — see below.
+  indexed rather than inlined by default: see below.
 - **Keep the remaining work in view.** An optional task list holds the steps of a multi-part job
   outside the transcript, where a compaction cannot summarise them away.
 
@@ -623,8 +677,8 @@ shown before anything is sent:
 ```
 
 Read-only tools add roughly **1,130 tokens** on their own, which is why they are off by default, and
-they are read-only in fact and not only by label: the switches that write — snapshots, delegation,
-`benchmark set`, `evidence add`, and any external tool call — are refused at the point of the call,
+they are read-only in fact and not only by label: the switches that write: snapshots, delegation,
+`benchmark set`, `evidence add`, and any external tool call: are refused at the point of the call,
 not merely hidden from the schema. Hiding a tool does not stop a model that remembers its name. The
 Assistant has its own provider, model and thinking level as well, so pointing a reasoning-heavy
 model at the thinking and a cheap one at the code is a couple of clicks.
@@ -717,7 +771,7 @@ Manage them in **Settings > Plugins**. Tacit ships with two:
 | **Task List** | The turn's remaining work, kept outside the context window | 132 tokens | Off |
 
 Both figures are measured from the schemas the plugin actually contributes, not from a budget it
-declares about itself — a plugin that declared zero used to show zero in the panel while really
+declares about itself: a plugin that declared zero used to show zero in the panel while really
 adding its tools to every request. Disabled plugins are priced too, since that is the number you need
 in order to decide.
 
@@ -732,7 +786,7 @@ outside your machine.
 selector described above.
 
 - tokens sent and received
-- what the provider served from its own cache, and the hit rate — a turn re-sends its transcript on
+- what the provider served from its own cache, and the hit rate: a turn re-sends its transcript on
   every step, so on a long session this is most of the bill and the difference between a cheap run
   and an expensive one
 - the composition of the starting prompt: base instructions, built-in tools, external tool schemas,
@@ -867,20 +921,20 @@ from the interface, so they cost nothing in the schema budget and cannot be invo
 A tool result is the only feedback the model gets, so it has to say where it stopped. Two rules
 follow from that, and both exist because a session showed what happens without them:
 
-- **`read_file` ends with the range it actually delivered** — `lines 211-334 of 658 shown; pass
-  offset=334 for the next 324` — and that trailer survives the output limit. An `offset` past the end
+- **`read_file` ends with the range it actually delivered**: `lines 211-334 of 658 shown; pass
+  offset=334 for the next 324`: and that trailer survives the output limit. An `offset` past the end
   of the file is an error rather than an empty page. Reading a long file in chunks used to leave the
   model guessing where the cut fell, and it answered by re-reading the same span five times.
 - **`grep_files` searches what it is pointed at.** A file path searches that file; a directory path
   searches that tree; a path that does not exist is an error. It used to fall back to the parent
-  directory for a file path, so grepping one module returned matches from its neighbours — and a
+  directory for a file path, so grepping one module returned matches from its neighbours: and a
   mistyped path silently searched somewhere else. Both read as real answers.
 
 Shell and search results are clipped to `TACIT_TOOL_OUTPUT_LIMIT`. `read_file` has its own,
 much larger `TACIT_READ_OUTPUT_LIMIT`, because a file is the one result the agent may have
 to reproduce whole: at 6,000 characters a 17,578-character source file was two thirds
 invisible, and the agent stopped reading it and re-derived the same facts through shell
-probes instead — which is how a task needing one large write ended as thirty thin rounds.
+probes instead: which is how a task needing one large write ended as thirty thin rounds.
 
 ---
 
@@ -955,7 +1009,7 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite — 527 tests, no network and no real model. None of
+The repository includes an automated test suite: 527 tests, no network and no real model. None of
 them skip: the suite needs neither a container daemon nor a benchmark runner, and Tacit installs
 neither.
 
@@ -983,7 +1037,7 @@ Stated plainly, because a list of what works is not much use without one:
 
 - **No authentication, and it binds `0.0.0.0`.** Anyone who can reach the port can drive the agent.
   Startup warns when the address is not loopback; `TACIT_HOST=127.0.0.1` closes it.
-- **Windows has no isolation primitive.** `mechanism: none` is the honest answer there, and the
+- **Windows has no isolation primitive.** `mechanism: none` is the answer there, and the
   timeout plus the change report are all that is enforced. A container is the way to get more.
 - **Token counts are estimates without `tiktoken`.** Every figure is marked `~` when it is, and no
   number for another product is estimated at all.

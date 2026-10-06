@@ -1452,6 +1452,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     # Names the task asks for that are not on disk yet, and the names this turn has written.
     wanted = deliverables(next((str(m.get("content") or "") for m in messages
                                 if m.get("role") == "user"), ""), project)
+    guarantee = config.deliver_guarantee()
     written: set = set()
     phase_ran = [False]
     touched = [False]
@@ -1584,7 +1585,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     break
             if not closing:
                 return
-        if missing:
+        if missing and config.deliver_guarantee():
             names = list(missing)
             # Landing the file does not end the phase. It ends when the file has landed AND
             # something has been run inside it - otherwise a syntactically broken deliverable
@@ -1683,14 +1684,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # checked the deadline between events and simply abandoned the turn, so a cell with
             # twelve turns of real work in it ended with nothing on disk and no credit at all.
             left = (deadline - time.time()) if deadline else None
-            if left is not None and left <= guidance.LATE_S:
+            if guarantee and left is not None and left <= guidance.LATE_S:
                 ctx_msgs = ctx_msgs + [{"role": "system",
                                        "content": guidance.time_left(left)}]
             # Late enough that another probe is not affordable, early enough that a file can still
             # land. Write the deliverable with what is already known rather than being cut off
             # mid-thought: a rough artifact that exists beats a perfect plan that never landed.
-            if (left is not None and left <= guidance.EMERGENCY_S and wanted and not chat
-                    and not nested and depth == 0):
+            if (guarantee and left is not None and left <= guidance.EMERGENCY_S
+                    and wanted and not chat and not nested and depth == 0):
                 late = tuple(n for n in wanted
                              if n.rsplit("/", 1)[-1] not in written)
                 if late:
@@ -1785,9 +1786,9 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if wanted and not stopped and not chat:
                 unwritten = tuple(n for n in wanted
                                   if n.rsplit("/", 1)[-1] not in written)
-            if unwritten:
+            if unwritten and guarantee:
                 yield from _report(missing=unwritten, closing=bool(narration))
-            elif (wanted and not stopped and not chat and not nested and touched[0]
+            elif (guarantee and wanted and not stopped and not chat and not nested and touched[0]
                     and not ran_after_write[0]
                     and (not deadline or time.time() < deadline - 60)):
                 # Everything the task named is on disk, the model wrote it, and it never executed
@@ -1921,7 +1922,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # no file. Both ended because the turn ran out, so the end-of-turn deliverable phase -
         # which only runs when the model chooses to stop - never got to force anything. Halfway in,
         # while there is still budget to write AND to run it, there is.
-        if wanted and not chat and not nested and depth == 0:
+        if guarantee and wanted and not chat and not nested and depth == 0:
             still = [n for n in wanted if n.rsplit("/", 1)[-1] not in written]
             # Two triggers, because a turn can run out on either clock. 40% of the steps is the
             # earliest the order pays for itself (a real feal run wrote attack.py only after the
