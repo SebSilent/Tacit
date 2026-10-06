@@ -2082,5 +2082,7 @@ window.Tacit = Object.assign(window.Tacit || {}, {
   // the assistant panel shares this one socket rather than opening its own
   sendMessage: (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); },
   toast,
+  // and this renderer: the assistant's answers are markdown from the same source
+  md: (src) => md(src),
 });
 })();

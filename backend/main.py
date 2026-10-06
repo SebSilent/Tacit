@@ -86,7 +86,21 @@ def main():
         print("[tacit]          Anyone who can reach this port can drive the agent, "
               "read your files and run commands.")
         print("[tacit]          Set TACIT_HOST=127.0.0.1 to keep it on this machine.")
-    uvicorn.run(app, host=host, port=config.PORT, log_level="info")
+    # Built by hand rather than handed to uvicorn.run so the Server object stays
+    # reachable: a restart asks this instance to exit, which runs the lifespan
+    # shutdown (analyzer, MCP servers, the pid file) instead of killing the
+    # process mid-request.
+    # timeout_graceful_shutdown bounds the wait for open connections at exit.
+    # Without it a WebSocket that never answers the close handshake holds the
+    # shutdown open forever, the port never frees, and the restart watcher
+    # gives up with no server left running. Five seconds is generous for the
+    # close handshake; a turn's worker thread is a daemon thread and dies with
+    # the process either way.
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=config.PORT,
+                                           log_level="info",
+                                           timeout_graceful_shutdown=5))
+    config.SERVER = server
+    server.run()
 
 
 if __name__ == "__main__":

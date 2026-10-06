@@ -1,6 +1,9 @@
 import html
+import json
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -297,3 +300,199 @@ def restore(name: str, root: str) -> str:
         out.write_bytes(path.read_bytes())
         restored += 1
     return f"restored {restored} file(s) from {src.name} into {dest}"
+
+
+# ── self-restart ─────────────────────────────────────────────────────────
+# Settings > Tools > Restart server. The dying process cannot start its own
+# replacement — a child started before exit dies with the parent on every
+# platform this runs on — so the work is split: this process asks uvicorn to
+# exit through its own shutdown (lifespan hooks included), and a small
+# detached watcher waits for the port to free, then starts the server once
+# and blocks on it, which is what keeps the new process alive.
+
+HANDSHAKE_FILE = "restart.json"
+RESTART_LOG = "restart.log"
+PORT_FREE_TIMEOUT = 30.0     # seconds to wait for the old listener to drop
+COMEBACK_TIMEOUT = 20.0      # seconds to wait for the new listener to appear
+
+
+def _server_command() -> list[str] | None:
+    """The command that starts the server: this interpreter, as a module.
+
+    The interpreter running Tacit is the right one to run it again — it is
+    where the packages are, and run.bat would work but ends in a `pause`.
+    The environment is inherited, so TACIT_PORT, TACIT_HOST and every other
+    setting the running server had, the new one has too.
+    """
+    exe = Path(sys.executable)
+    if not exe.name.lower().startswith("python"):
+        return None
+    return [str(exe), "-m", "backend.main"]
+
+
+def restart_server() -> dict:
+    """Ask this server to exit and leave a watcher behind to start the next one."""
+    from . import audit
+
+    server = getattr(config, "SERVER", None)
+    if server is None:
+        # No handle on the uvicorn.Server means Tacit was started some other way
+        # (an embedded server, a test client). Killing the process from here
+        # would be a guess about who owns it, so the honest answer is no.
+        return {"ok": False,
+                "error": "restart is only available when Tacit runs as its own server "
+                         "(start it with run.bat / run.sh)"}
+    if getattr(server, "should_exit", False):
+        # A second press while the first exit is still in flight would spawn a
+        # second watcher, and two starters on one port is a bind race.
+        return {"ok": False, "error": "a restart is already in progress"}
+
+    handshake = {"host": config.HOST, "port": config.PORT,
+                 "pid": os.getpid(), "ts": time.time()}
+    try:
+        config.HOME.mkdir(parents=True, exist_ok=True)
+        (config.HOME / HANDSHAKE_FILE).write_text(json.dumps(handshake), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"could not write the restart handshake: {e}"}
+
+    cmd = _server_command()
+    if not cmd:
+        (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
+        return {"ok": False, "error": "could not identify the interpreter to restart with"}
+
+    # Detached: the watcher must outlive this process, and on Windows that
+    # takes DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP; the POSIX side gets
+    # start_new_session. Output goes to a log in ~/.tacit, not to a console
+    # this process is about to lose.
+    flags = 0
+    kwargs: dict = {}
+    if config.OS == "Windows":
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+    watcher_cmd = [str(sys.executable), "-c",
+                   f"import sys; sys.path.insert(0, r'{config.ROOT}'); "
+                   "from backend import extras; extras.restart_watch()"]
+    watcher = None
+    try:
+        with open(config.HOME / RESTART_LOG, "ab") as log:
+            watcher = subprocess.Popen(watcher_cmd, cwd=str(config.ROOT), stdout=log,
+                                       stderr=subprocess.STDOUT, creationflags=flags,
+                                       **kwargs)
+    except Exception as e:  # noqa: BLE001
+        (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
+        return {"ok": False, "error": f"could not start the restart watcher: {e}"}
+    finally:
+        # Recorded even when the spawn failed: the attempt is the fact.
+        audit.record("server_restart", backend="server", mode="restart",
+                     pid=os.getpid(), port=config.PORT, host=config.HOST,
+                     watcher=watcher.pid if watcher else 0)
+
+    # Not os._exit: the point is that uvicorn's own shutdown runs, which stops
+    # the analyzer, stops the MCP servers and removes the pid file.
+    server.should_exit = True
+    return {"ok": True, "pid": os.getpid(), "watcher": watcher.pid,
+            "port": config.PORT, "log": str(config.HOME / RESTART_LOG)}
+
+
+def _can_bind(host: str, port: int) -> bool:
+    """True if a fresh listener could take host:port right now.
+
+    Probed by binding, not connecting. A connect against a live listener fills
+    its backlog — nothing accepts it — and the next connect is refused, which
+    reads as a free port that is not free; measured here against a real
+    listener. Binding is the exact test the new server will face. On POSIX the
+    probe carries SO_REUSEADDR, which is what asyncio's create_server sets by
+    default, so a port in TIME_WAIT from the old server's connections does not
+    read as held; on Windows SO_REUSEADDR means something else entirely (it
+    would let the probe share a live listener's port) and is left off, where a
+    closed listener rebinds cleanly anyway.
+    """
+    import socket
+    probe = socket.socket()
+    try:
+        if config.OS != "Windows":
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((host if host != "0.0.0.0" else "127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.close()
+        except OSError:
+            pass
+
+
+def _port_busy(host: str, port: int, timeout: float) -> bool:
+    """True if something accepts on host:port within the timeout."""
+    import socket
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with socket.create_connection((host or "127.0.0.1", port), timeout=1.0):
+                return True
+        except OSError:
+            time.sleep(0.25)
+    return False
+
+
+def restart_watch() -> None:
+    """The detached watcher: wait for the port to free, start the server, block.
+
+    Blocking on the child is what keeps the replacement alive after the old
+    process is gone; exiting instead would orphan nothing only because there
+    would be nothing left running.
+    """
+    import socket
+
+    def log_line(text: str) -> None:
+        try:
+            with open(config.HOME / RESTART_LOG, "a", encoding="utf-8") as fh:
+                fh.write(f"[restart] {text}\n")
+        except Exception:
+            pass
+
+    try:
+        handshake = json.loads((config.HOME / HANDSHAKE_FILE).read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        log_line(f"no handshake ({e}); nothing to do")
+        return
+    (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
+
+    host = str(handshake.get("host") or "127.0.0.1")
+    port = int(handshake.get("port") or 0)
+    if not port:
+        log_line("handshake named no port; nothing to do")
+        return
+
+    # The old process was asked to exit, not killed, so the listener drops on
+    # its own. If it is still there after the timeout, starting a replacement
+    # would only produce a second process that loses the bind race and exits —
+    # say so in the log and stop.
+    end = time.time() + PORT_FREE_TIMEOUT
+    while not _can_bind(host, port):
+        if time.time() >= end:
+            log_line(f"port {port} still held after {PORT_FREE_TIMEOUT:.0f}s; not starting "
+                     "a replacement that would lose the bind race")
+            return
+        time.sleep(0.25)
+
+    cmd = _server_command()
+    if not cmd:
+        log_line("could not identify the interpreter to restart with")
+        return
+    log_line(f"port {port} is free; starting {' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(cmd, cwd=str(config.ROOT))
+    except Exception as e:  # noqa: BLE001
+        log_line(f"failed to start the server: {e}")
+        return
+    if _port_busy("127.0.0.1", port, COMEBACK_TIMEOUT):
+        log_line(f"server is back on port {port} (pid {proc.pid})")
+    else:
+        log_line(f"server (pid {proc.pid}) did not accept on port {port} within "
+                 f"{COMEBACK_TIMEOUT:.0f}s; it may have failed to start — see the log above")
+    proc.wait()
+    log_line(f"server (pid {proc.pid}) exited with {proc.returncode}")

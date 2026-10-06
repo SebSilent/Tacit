@@ -20,7 +20,7 @@
   let thinkingLevels = [];
   let sessionModel = '';
   let sessionThinking = 'medium';
-  let streaming = null;      // { el, text }
+  let streaming = null;      // { el, text, raf }
   let busy = false;
 
   async function api(path, opts) {
@@ -34,6 +34,38 @@
     if (window.Tacit && window.Tacit.toast) window.Tacit.toast(text, isErr);
   }
 
+  // ── markdown ───────────────────────────────────────────────────────────
+  // The assistant answers in markdown, rendered by the same renderer the main
+  // chat uses (shared over window.Tacit.md), so a drafted prompt arrives as a
+  // fenced code block with a one-click copy button. If that bridge is missing
+  // — an older cached app.js — the fallback is plain escaped text, never
+  // nothing and never raw HTML.
+  function renderMd(text) {
+    if (window.Tacit && typeof window.Tacit.md === 'function') {
+      try { return window.Tacit.md(text); } catch (e) { return esc(text); }
+    }
+    // The `md` class sets white-space: normal, so a plain-text fallback has to
+    // carry its own line breaks or a no-bridge reply reads as one long line.
+    return esc(text).replace(/\n/g, '<br>');
+  }
+
+  // Copy buttons arrive inside rendered markdown, so one delegated handler per
+  // container covers every block, streamed or re-rendered.
+  function bindCopy(box) {
+    if (!box || box._copyBound) return;
+    box._copyBound = true;
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('.copy-btn');
+      if (!btn) return;
+      const block = btn.closest('.code-block');
+      if (!block) return;
+      const code = block.querySelector('code').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    });
+  }
+
   // ── rendering ──────────────────────────────────────────────────────────
   function renderMessages() {
     const box = $('#asMessages');
@@ -44,10 +76,15 @@
         '<span class="as-note">The agent cannot see this conversation.</span></div>';
       return;
     }
+    // Your own prompts stay plain text; the assistant's answers render as
+    // markdown. The `md` class switches pre-wrap off, which plain text needs
+    // and rendered HTML must not have.
     box.innerHTML = messages.map((m) => `
       <div class="as-msg ${m.role === 'user' ? 'me' : 'them'}">
-        <div class="as-body">${esc(m.content || '')}</div>
+        <div class="as-body${m.role === 'user' ? '' : ' md'}">${
+          m.role === 'user' ? esc(m.content || '') : renderMd(m.content || '')}</div>
       </div>`).join('');
+    bindCopy(box);
     box.scrollTop = box.scrollHeight;
   }
 
@@ -185,20 +222,28 @@
     if (box) box.classList.toggle('busy', !!on);
   }
 
+  // A stream that ends must flush its last frame: the rAF throttle can
+  // otherwise drop the tail between the final delta and the done event.
+  function finishStream() {
+    if (!streaming) return;
+    if (streaming.raf) { cancelAnimationFrame(streaming.raf); streaming.raf = 0; }
+    if (streaming.el) streaming.el.innerHTML = renderMd(streaming.text || '');
+  }
+
   // ── the socket's assistant_* events ────────────────────────────────────
   function handle(m) {
     if (m.sid && sid && m.sid !== sid) return;   // a different session's stream
     switch (m.type) {
       case 'assistant_text': {
         if (!streaming) {
-          streaming = { text: '' };
+          streaming = { text: '', raf: 0 };
           const box = $('#asMessages');
           if (box) {
             const empty = box.querySelector('.as-empty');
             if (empty) empty.remove();
             const el = document.createElement('div');
             el.className = 'as-msg them';
-            el.innerHTML = '<div class="as-body"></div>';
+            el.innerHTML = '<div class="as-body md"></div>';
             box.appendChild(el);
             box.scrollTop = box.scrollHeight;
           }
@@ -209,9 +254,20 @@
           streaming.el = box ? box.querySelector('.as-msg.them:last-child .as-body') : null;
         }
         if (streaming.el) {
-          streaming.el.textContent = streaming.text;
-          const box = $('#asMessages');
-          if (box) box.scrollTop = box.scrollHeight;
+          // Markdown re-renders at most once per frame, the way the main chat
+          // throttles its own stream; the raw text rides on the element so a
+          // pending frame never loses a delta.
+          streaming.el._raw = streaming.text;
+          if (!streaming.raf) {
+            streaming.raf = requestAnimationFrame(() => {
+              streaming.raf = 0;
+              if (streaming && streaming.el) {
+                streaming.el.innerHTML = renderMd(streaming.el._raw || '');
+                const box = $('#asMessages');
+                if (box) box.scrollTop = box.scrollHeight;
+              }
+            });
+          }
         }
         break;
       }
@@ -221,10 +277,12 @@
       case 'assistant_tool_end':
         break;
       case 'assistant_error':
+        finishStream();
         toast('Assistant: ' + (m.message || 'failed'), true);
         busy = false; setBusy(false); streaming = null;
         break;
       case 'assistant_saved':
+        finishStream();
         busy = false; setBusy(false); streaming = null;
         if (m.preview) preview = m.preview;
         load();
@@ -239,6 +297,7 @@
         renderAll();
         break;
       case 'assistant_done':
+        finishStream();
         streaming = null;
         break;
       default:

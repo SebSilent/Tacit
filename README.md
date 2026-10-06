@@ -663,6 +663,9 @@ Three things make it useful rather than annoying:
   stay between you and it.
 - **It is confined to the session.** Every conversation has its own Assistant. Switch sessions and
   you switch assistants; delete a session and its assistant goes with it.
+- **It answers in Markdown.** The same renderer the main chat uses, so a drafted prompt arrives as
+  a fenced code block with a one-click copy button, and headings, lists and tables render as
+  themselves. Its persona asks for exactly that shape, so a prompt to paste is a block, not prose.
 
 A second conversation is a second cost, so you decide exactly what it may read, and the price is
 shown before anything is sent:
@@ -972,6 +975,12 @@ probes instead: which is how a task needing one large write ended as thirty thin
 Container isolation is configured in **Settings > Capabilities** rather than by environment, since it
 is a capability choice: the image (default `python:3.12-slim`), whether a missing image may be pulled
 (default no), and the PID ceiling (default 256).
+
+**Settings > Tools** also has **Restart server**: it stops this process and starts a fresh one on the
+same port. A detached watcher waits for the port to free, then starts the server once and blocks on
+it; the exit itself goes through uvicorn's own shutdown, so the analyzer, the MCP servers and the pid
+file are cleaned up. The browser reconnects on its own. A turn that is running is cut off, and the
+button says so before you press it. The restart is recorded in the audit ledger as `server_restart`.
 | `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
 | `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
@@ -1007,7 +1016,7 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite: 527 tests, no network and no real model. None of
+The repository includes an automated test suite: 600 tests, no network and no real model. None of
 them skip: the suite needs neither a container daemon nor a benchmark runner, and Tacit installs
 neither.
 

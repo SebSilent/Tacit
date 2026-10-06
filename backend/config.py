@@ -52,6 +52,10 @@ BUNDLED_PLUGINS_DIR = BACKEND_DIR / "plugins"
 
 HOST = os.environ.get("TACIT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TACIT_PORT", "8550"))
+# The uvicorn.Server, set by main() once it is running. A restart asks this
+# instance to exit rather than killing the process, so the lifespan shutdown
+# (the analyzer, the MCP servers, the pid file) still runs.
+SERVER = None
 
 AGENT_MAX_STEPS = int(os.environ.get("TACIT_MAX_STEPS", "24"))
 AGENT_CONTEXT_BUDGET = int(os.environ.get("TACIT_CONTEXT_BUDGET", "120000"))

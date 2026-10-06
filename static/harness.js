@@ -350,7 +350,14 @@ async function renderTools() {
       </button>
     </div>
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>
-    <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>`;
+    <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>
+    <div class="ho-section">Server</div>
+    <div class="tool-row" data-perm="restart">
+      <span class="tool-name">Restart</span>
+      <span class="tool-desc">Stop this process and start a fresh one on the same port. The browser
+        reconnects on its own; a turn that is running is cut off.</span>
+      <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
+    </div>`;
 
   panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {
     const btn = e.target.closest('[data-act="toggle-vcs"]');
@@ -377,6 +384,15 @@ async function renderTools() {
         setNote(`${name} ${enable ? 'enabled' : 'disabled'} (applies to new agent sessions)`);
       } else setNote(r.error || 'Toggle failed', true);
     });
+  });
+
+  panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
+    if (!confirm('Restart the Tacit server? A turn that is running is cut off; ' +
+        'this page reconnects on its own.')) return;
+    setNote('restarting the server…');
+    const r = await post('/api/server/restart', {});
+    if (!r.ok) { setNote(r.error || 'restart failed', true); return; }
+    setNote('server is restarting — reconnecting…');
   });
 }
 

@@ -736,3 +736,11 @@ async def skill_create(request: Request):
 async def skill_delete(name: str):
     res = skills.remove(name)
     return res if res.get("ok") else _fail(res.get("error") or "could not delete the skill")
+
+
+@router.post("/api/server/restart")
+async def server_restart():
+    """Stop this server process and start a fresh one on the same port."""
+    from .. import extras
+    res = extras.restart_server()
+    return res if res.get("ok") else _fail(res.get("error") or "could not restart")

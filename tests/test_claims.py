@@ -12,12 +12,13 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, assistant, audit, benchmarks, config, guidance,  # noqa: E402
+from backend import (agent, assistant, audit, benchmarks, config, extras, guidance,  # noqa: E402
                      metrics, plugin_manager, project_context, tokens)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
@@ -1361,6 +1362,137 @@ class TestSalvageWordingNamesEveryFile(unittest.TestCase):
 
     def test_no_names_still_produces_an_instruction(self):
         self.assertIn("the file", guidance.salvage([]))
+
+
+class TestServerRestart(Isolated):
+    """Settings > Tools > Restart server: what the button claims is what runs."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_server = config.SERVER
+        self._orig_os = config.OS
+        self.addCleanup(setattr, config, "SERVER", self._orig_server)
+        self.addCleanup(setattr, config, "OS", self._orig_os)
+
+    def test_refuses_without_a_server_handle(self):
+        # No handle on the uvicorn.Server means Tacit was not started as its own
+        # server; killing the process from here would be a guess about who owns
+        # it, so the honest answer is no.
+        config.SERVER = None
+        res = extras.restart_server()
+        self.assertFalse(res.get("ok"))
+        self.assertIn("own server", res.get("error", ""))
+        self.assertFalse((config.HOME / extras.HANDSHAKE_FILE).exists())
+
+    def test_refuses_a_second_press_while_one_is_in_flight(self):
+        # Two watchers on one port is a bind race; the second press must be
+        # refused, not queued.
+        config.SERVER = types.SimpleNamespace(should_exit=False)
+        config.OS = "Windows"
+        orig_popen = extras.subprocess.Popen
+
+        def fail_if_spawned(*a, **k):
+            raise AssertionError("a second watcher must not be spawned")
+        extras.subprocess.Popen = fail_if_spawned
+        self.addCleanup(setattr, extras.subprocess, "Popen", orig_popen)
+        config.SERVER.should_exit = True   # as if the first press already landed
+        res = extras.restart_server()
+        self.assertFalse(res.get("ok"))
+        self.assertIn("already in progress", res.get("error", ""))
+
+    def test_happy_path_writes_handshake_spawns_watcher_and_asks_to_exit(self):
+        config.SERVER = types.SimpleNamespace(should_exit=False)
+        config.OS = "Windows"
+        spawned: list = []
+        orig_popen = extras.subprocess.Popen
+
+        def fake_popen(cmd, **kwargs):
+            spawned.append({"cmd": cmd, "kwargs": kwargs})
+            return types.SimpleNamespace(pid=4242)
+        extras.subprocess.Popen = fake_popen
+        self.addCleanup(setattr, extras.subprocess, "Popen", orig_popen)
+        res = extras.restart_server()
+        self.assertTrue(res.get("ok"), res)
+        # the handshake carries what the watcher needs and nothing secret
+        hs = json.loads((config.HOME / extras.HANDSHAKE_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(hs["port"], config.PORT)
+        self.assertEqual(hs["host"], config.HOST)
+        self.assertEqual(hs["pid"], os.getpid())
+        # the watcher is spawned detached, pointed at restart_watch
+        self.assertEqual(len(spawned), 1)
+        self.assertIn("restart_watch", " ".join(spawned[0]["cmd"]))
+        self.assertTrue(spawned[0]["kwargs"].get("creationflags"))
+        # and the exit is uvicorn's own, not a kill
+        self.assertTrue(config.SERVER.should_exit)
+
+    def _free_port(self) -> int:
+        """A port that is free now: bound, named, released."""
+        import socket
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        return port
+
+    def test_watcher_starts_the_server_once_the_port_is_free(self):
+        # The whole watcher loop, with the port already free and the start
+        # stubbed: the handshake is consumed, the server command is this
+        # interpreter as a module, and the watcher blocks on the child.
+        (config.HOME / extras.HANDSHAKE_FILE).write_text(
+            json.dumps({"host": "127.0.0.1", "port": self._free_port(), "pid": 1,
+                        "ts": 0}), encoding="utf-8")
+        spawned: list = []
+        orig_popen = extras.subprocess.Popen
+
+        def fake_popen(cmd, **kwargs):
+            spawned.append({"cmd": cmd, "kwargs": kwargs})
+            return types.SimpleNamespace(pid=7, wait=lambda: None, returncode=0)
+        extras.subprocess.Popen = fake_popen
+        self.addCleanup(setattr, extras.subprocess, "Popen", orig_popen)
+        orig_busy = extras._port_busy
+        extras._port_busy = lambda *a, **k: True
+        self.addCleanup(setattr, extras, "_port_busy", orig_busy)
+        extras.restart_watch()
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0]["cmd"][:3], [sys.executable, "-m", "backend.main"])
+        self.assertEqual(spawned[0]["kwargs"].get("cwd"), str(config.ROOT))
+        self.assertFalse((config.HOME / extras.HANDSHAKE_FILE).exists(),
+                         "the handshake must be consumed, not left for a second watcher")
+        log = (config.HOME / extras.RESTART_LOG).read_text(encoding="utf-8")
+        self.assertIn("server is back on port", log)
+
+    def test_watcher_refuses_to_start_a_bind_race_loser(self):
+        # A port that never frees must not produce a second process that loses
+        # the bind race and exits; the watcher says so and stops. A real
+        # listening socket holds the port, and the timeout is shortened so the
+        # test does not own thirty seconds of wall clock.
+        import socket
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen(1)
+        port = blocker.getsockname()[1]
+        self.addCleanup(blocker.close)
+        (config.HOME / extras.HANDSHAKE_FILE).write_text(
+            json.dumps({"host": "127.0.0.1", "port": port, "pid": 1, "ts": 0}),
+            encoding="utf-8")
+        orig_popen = extras.subprocess.Popen
+        orig_timeout = extras.PORT_FREE_TIMEOUT
+
+        def fail_if_spawned(*a, **k):
+            raise AssertionError("no server may be started while the port is held")
+        extras.subprocess.Popen = fail_if_spawned
+        extras.PORT_FREE_TIMEOUT = 1.0
+        self.addCleanup(setattr, extras.subprocess, "Popen", orig_popen)
+        self.addCleanup(setattr, extras, "PORT_FREE_TIMEOUT", orig_timeout)
+        extras.restart_watch()
+        self.assertFalse((config.HOME / extras.HANDSHAKE_FILE).exists())
+        log = (config.HOME / extras.RESTART_LOG).read_text(encoding="utf-8")
+        self.assertIn("still held after 1s", log)
+
+    def test_watcher_survives_a_missing_handshake(self):
+        extras.restart_watch()
+        log = (config.HOME / extras.RESTART_LOG).read_text(encoding="utf-8")
+        self.assertIn("no handshake", log)
 
 
 if __name__ == "__main__":

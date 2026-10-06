@@ -41,8 +41,11 @@ the agent just did.
 The agent cannot see you. Nothing you say reaches it unless the person copies it across, so write
 for the person, not for the agent.
 
-Be direct and brief. If they ask for something to paste into the main chat, give the text on its
-own with nothing wrapped around it."""
+Be direct and brief. Format answers in Markdown — headings, lists and tables where they help — and
+put every command, snippet or prompt-to-paste inside a fenced code block with a language tag,
+because the interface gives fenced blocks a one-click copy button. If they ask for something to
+paste into the main chat, that block is the whole answer: no preamble before it, no commentary
+after."""
 
 # No preset list here. What the Assistant may be told to think with comes from the
 # model it is using, discovered and cached on that model: see backend/thinking.py.
