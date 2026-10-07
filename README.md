@@ -72,84 +72,6 @@ setting.
 
 ---
 
-## Benchmarked on OpenBench
-
-This section is the evidence for the architecture above, not the argument itself. One model for
-every row: GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its `checker.sh` files
-untouched. Three tasks, three trials each, one build, both operating systems. Tokens are uncached
-input plus output, cache reads excluded, counted the way OpenBench counts them.
-
-### Linux
-
-| Profile | Solved | Tokens per solve | Wall seconds per cell |
-|---|---|---|---|
-| Default | 9/9 | 156,466 | 705 |
-| Minimal | 9/9 | 133,881 | 648 |
-
-Per task on Linux: feal 3/3 default and 3/3 minimal at 32,673 and 23,437 tokens per cell; llm 3/3 and 3/3 at 235,379 and 226,896; schemelike 3/3 and 3/3 at 201,348 and 151,312.
-
-### Windows
-
-| Profile | Solved | Tokens per solve | Wall seconds per cell |
-|---|---|---|---|
-| Default | 6/6 | 106,526 | 530 |
-| Minimal | 5/6 | 82,814 | 418 |
-
-Per task on Windows: feal 3/3 default and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
-3/3 default and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only so far:
-its checker reads `os.O_NONBLOCK`, which Windows Python does not provide. Porting it is a two-hour
-job and exactly the kind of contribution the list below asks for: it would come in with your
-name on it.
-
-### Against the published arms, same model, same three tasks
-
-| Arm | Solved | Cells that errored |
-|---|---|---|
-| Tacit, Linux, default | 9/9 | 0 |
-| Tacit, Linux, minimal | 9/9 | 0 |
-| Pi | 8/9 | 3 |
-| OpenCode | 7/9 | 3 |
-| Claude | 5/9 | 5 |
-| Grok | 5/9 | 6 |
-| Codex | 4/9 | 5 |
-
-The fifth column is the one the token table cannot show you. Every errored cell is a run where the
-arm's own plumbing decided the outcome, and its tokens still got spent. Every published arm that
-looks cheap in its row is partly charging you for failures it then discards.
-
-### Run it yourself, that is the point of the numbers
-
-These rows come from one model, one endpoint, one machine, twenty cells of it. That is a floor, not
-a ceiling, and it is exactly why this section exists: the invitation is the remedy for the sample
-size. The benchmark is meant to be run, not read: your model, your endpoint, your hardware, your
-numbers.
-
-- Everything needed ships with the runner: the tasks, the untouched checkers, and a results file
-  format that takes any harness row.
-- A three-trial run of one task lands before your coffee is cold. The full hard set is an
-  afternoon.
-- Send your rows back and your arm gets a line in the table with your name on it: a pull request,
-  an issue with the jsonl attached, or the file in the discord show-off channel, whatever is
-  easiest for you.
-
-The cells this table wants next: any first-party or fp8 route for kimi and qwen, DeepSeek and
-Qwen as the model, an Apple silicon lane, and a rerun of ours on whatever you run. Tuning is fair
-game and wanted here too: the other arms ship tuned for the models they run, and Tacit's profiles
-and prefs are the tuning surface, so tune for yours and send that row as well. More arms on the
-same cells is what turns this from one box's word into a field.
-
-### How the measurement holds up
-
-- The runner and the checkers are the benchmark's own, byte for byte, and the agent never edits
-  them.
-- Every row carries the checker's output verbatim, a byte count and a sha256 for every file it
-  graded, and a per-call audit ledger: which tools ran, on what, and what came back. A claimed
-  solve is a transcript you can re-run.
-- One build, one fingerprint, both operating system lanes. The profile rows are two tool bundles
-  over the same cells, so the profile comparison is an experiment, not an anecdote.
-
----
-
 ## How it compares
 
 Measured on one machine, with one rule: characters divided by four. That is the fallback heuristic
@@ -1001,6 +923,84 @@ button says so before you press it. The restart is recorded in the audit ledger 
 - **External tools and plugins** run only after you enable them, and their activity is recorded in a
   readable audit log.
 - **No feature calls out to another harness.** Not on start, not on a timer, not on a tool call.
+
+---
+
+## Benchmarked on OpenBench
+
+This section is the evidence for the architecture above, not the argument itself. One model for
+every row: GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its `checker.sh` files
+untouched. Three tasks, three trials each, one build, both operating systems. Tokens are uncached
+input plus output, cache reads excluded, counted the way OpenBench counts them.
+
+### Linux
+
+| Profile | Solved | Tokens per solve | Wall seconds per cell |
+|---|---|---|---|
+| Default | 9/9 | 156,466 | 705 |
+| Minimal | 9/9 | 133,881 | 648 |
+
+Per task on Linux: feal 3/3 default and 3/3 minimal at 32,673 and 23,437 tokens per cell; llm 3/3 and 3/3 at 235,379 and 226,896; schemelike 3/3 and 3/3 at 201,348 and 151,312.
+
+### Windows
+
+| Profile | Solved | Tokens per solve | Wall seconds per cell |
+|---|---|---|---|
+| Default | 6/6 | 106,526 | 530 |
+| Minimal | 5/6 | 82,814 | 418 |
+
+Per task on Windows: feal 3/3 default and 3/3 minimal at 30,407 and 33,228 tokens per cell; llm
+3/3 default and 2/3 minimal at 182,646 and 157,192. Schemelike is graded on Linux only so far:
+its checker reads `os.O_NONBLOCK`, which Windows Python does not provide. Porting it is a two-hour
+job and exactly the kind of contribution the list below asks for: it would come in with your
+name on it.
+
+### Against the published arms, same model, same three tasks
+
+| Arm | Solved | Cells that errored |
+|---|---|---|
+| Tacit, Linux, default | 9/9 | 0 |
+| Tacit, Linux, minimal | 9/9 | 0 |
+| Pi | 8/9 | 3 |
+| OpenCode | 7/9 | 3 |
+| Claude | 5/9 | 5 |
+| Grok | 5/9 | 6 |
+| Codex | 4/9 | 5 |
+
+The fifth column is the one the token table cannot show you. Every errored cell is a run where the
+arm's own plumbing decided the outcome, and its tokens still got spent. Every published arm that
+looks cheap in its row is partly charging you for failures it then discards.
+
+### Run it yourself, that is the point of the numbers
+
+These rows come from one model, one endpoint, one machine, twenty cells of it. That is a floor, not
+a ceiling, and it is exactly why this section exists: the invitation is the remedy for the sample
+size. The benchmark is meant to be run, not read: your model, your endpoint, your hardware, your
+numbers.
+
+- Everything needed ships with the runner: the tasks, the untouched checkers, and a results file
+  format that takes any harness row.
+- A three-trial run of one task lands before your coffee is cold. The full hard set is an
+  afternoon.
+- Send your rows back and your arm gets a line in the table with your name on it: a pull request,
+  an issue with the jsonl attached, or the file in the discord show-off channel, whatever is
+  easiest for you.
+
+The cells this table wants next: any first-party or fp8 route for kimi and qwen, DeepSeek and
+Qwen as the model, an Apple silicon lane, and a rerun of ours on whatever you run. Tuning is fair
+game and wanted here too: the other arms ship tuned for the models they run, and Tacit's profiles
+and prefs are the tuning surface, so tune for yours and send that row as well. More arms on the
+same cells is what turns this from one box's word into a field.
+
+### How the measurement holds up
+
+- The runner and the checkers are the benchmark's own, byte for byte, and the agent never edits
+  them.
+- Every row carries the checker's output verbatim, a byte count and a sha256 for every file it
+  graded, and a per-call audit ledger: which tools ran, on what, and what came back. A claimed
+  solve is a transcript you can re-run.
+- One build, one fingerprint, both operating system lanes. The profile rows are two tool bundles
+  over the same cells, so the profile comparison is an experiment, not an anecdote.
 
 ---
 
