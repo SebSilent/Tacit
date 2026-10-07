@@ -136,7 +136,12 @@ async function loadServerRegistry() {
       }
     }
     if (byId.size) {
-      sessions = Array.from(byId.values()).sort((a, b) => (b.created || 0) - (a.created || 0));
+      // Server rows carry the workspace as `project`; the client shape is
+      // `workdir`. Normalising here is what makes the chip and the picker read
+      // the session's own value instead of falling back to a global default.
+      sessions = Array.from(byId.values())
+        .map(s => ({ ...s, workdir: s.workdir || s.project || '' }))
+        .sort((a, b) => (b.created || 0) - (a.created || 0));
       if (reg.active && sessions.find(s => s.id === reg.active)) activeId = reg.active;
       // when this browser held richer copies, push them so the server can
       // adopt the history (a plain page load rescues browser-only sessions)
@@ -187,8 +192,9 @@ function newSession(silent) {
     thinking: localStorage.getItem('tacit.thinking') || info.default_thinking || 'default',
     // No project ⇒ no working directory at all. Nothing directory-related is
     // sent to the server or injected into the prompt; the model picks its own
-    // paths. (localStorage holds a choice only if the user actually made one.)
-    workdir: localStorage.getItem('tacit.workdir') || '',
+    // paths. The workspace belongs to the session: a new one starts with none
+    // and inherits nothing from the last session or from localStorage.
+    workdir: '',
     created: Date.now(), messages: [], _new: true
   };
   sessions.unshift(s);
@@ -348,7 +354,9 @@ function wsUrl(s) {
     ? '127.0.0.1' + (location.port ? ':' + location.port : '')
     : location.host;
   const think = s.thinking ? `&thinking=${s.thinking}` : '';
-  const wd = s.workdir ? `&workdir=${encodeURIComponent(s.workdir)}` : '';
+  // Always send workdir (even empty) so clearing a workspace reaches the server.
+  // The server treats missing param as "leave alone", empty string as "clear".
+  const wd = `&workdir=${encodeURIComponent(s.workdir || '')}`;
   // create=1 rides on a socket the New session button just asked for, and on
   // the single re-attach after the server said it has never heard of this
   // session (see onclose). It is not sent casually: _adopt is set once per
@@ -1275,7 +1283,10 @@ function wdBase(p) {
 
 function renderWdChip() {
   const s = cur();
-  const wd = (s && s.workdir) || localStorage.getItem('tacit.workdir') || '';
+  // The chip shows this session's workspace and nothing else. The old
+  // localStorage fallback made switching to a workspace-less session display
+  // another session's folder as if it were bound here.
+  const wd = (s && s.workdir) || '';
   const el = $('#wdLabel');
   if (el) el.textContent = wd ? wdBase(wd) : 'no workspace';
   const chip = $('#wdChip');
@@ -1334,7 +1345,9 @@ async function openWdMenu() {
  *  because the working directory binds when the agent is created. */
 function chooseWorkdir(p) {
   const clearing = !p;
-  if (clearing) localStorage.removeItem('tacit.workdir'); else localStorage.setItem('tacit.workdir', p);
+  // Per-session, not global: the choice lands on the active session only. The
+  // localStorage write is gone — a global default is what made a new session
+  // inherit the previous one's folder before anyone chose anything.
   const s = cur();
   if (s && (!s.messages || !s.messages.length)) {
     s.workdir = p || '';
@@ -1344,7 +1357,9 @@ function chooseWorkdir(p) {
     toast(clearing ? 'No workspace — the agent picks its own paths' : `Workspace → ${wdBase(p)}`);
     return;
   }
-  newSession(true);
+  const fresh = newSession(true);
+  fresh.workdir = p || '';
+  persist();
   renderTranscript(cur());
   renderModelChip();
   attachCurrent();

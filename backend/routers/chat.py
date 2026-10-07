@@ -261,9 +261,13 @@ async def ws_session(ws: WebSocket, sid: str):
     else:
         changed = False
         for key in ("model", "mode", "thinking"):
-            if q.get(key) and q.get(key) != rec.get(key):
+            if q.get(key) is not None and q.get(key) != rec.get(key):
                 rec[key] = q.get(key)
                 changed = True
+        # workdir query param maps to the stored 'project' field
+        if q.get("workdir") is not None and q.get("workdir") != rec.get("project"):
+            rec["project"] = q.get("workdir")
+            changed = True
         if changed:
             store.save(rec)
     running = {"thread": None, "stop": threading.Event(), "steer": [], "busy": False,
@@ -600,8 +604,8 @@ async def ws_session(ws: WebSocket, sid: str):
                     continue
                 rec = nxt
                 sid = rec["id"]
-                for key in ("model", "mode", "thinking"):
-                    if msg.get(key):
+                for key in ("model", "mode", "thinking", "workdir"):
+                    if msg.get(key) is not None:
                         rec[key] = msg[key]
                 store.save(rec)
                 await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
