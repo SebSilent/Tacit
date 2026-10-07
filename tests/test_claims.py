@@ -1571,5 +1571,51 @@ class TestDependencyProbes(unittest.TestCase):
             self.assertTrue(got["install_command"], got)
 
 
+class TestTaskStripEndpoint(Isolated):
+    """GET /api/tasks/{sid}: the strip above the composer reads this."""
+
+    def _call(self, sid):
+        import asyncio
+        from backend.routers import api as api_router
+        res = asyncio.run(api_router.tasks_state(sid))
+        # a refusal comes back as a JSONResponse, an accept as a plain dict
+        if hasattr(res, "body"):
+            return json.loads(res.body)
+        return res
+
+    def _enable(self, on):
+        config.write_json(config.PLUGINS_FILE,
+                          {"enabled": ["task_list"] if on else [], "settings": {}})
+
+    def test_refuses_when_the_plugin_is_off(self):
+        self._enable(False)
+        res = self._call("s1")
+        self.assertFalse(res["ok"])
+        self.assertIn("not enabled", res["error"])
+
+    def test_returns_the_rows_with_open_and_count(self):
+        self._enable(True)
+        from backend.plugins import task_list
+        task_list.add("s1", "first step")
+        task_list.add("s1", "second step")
+        task_list.set_done("s1", 1)
+        res = self._call("s1")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["count"], 2)
+        self.assertEqual(res["open"], 1)
+        self.assertEqual([t["text"] for t in res["tasks"]],
+                         ["first step", "second step"])
+        self.assertTrue(res["tasks"][0]["done"])
+        self.assertFalse(res["tasks"][1]["done"])
+
+    def test_an_empty_list_is_an_ok_empty_answer(self):
+        self._enable(True)
+        res = self._call("s-never-used")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["tasks"], [])
+        self.assertEqual(res["open"], 0)
+        self.assertEqual(res["count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

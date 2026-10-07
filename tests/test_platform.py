@@ -712,6 +712,67 @@ class TestVersionControlPermission(Isolated):
             self.assertLess(size, 1200, f"prompt grew to {size} chars with allow={allowed}")
 
 
+class TestDeliverGuaranteeSetting(Isolated):
+    """On by default, and the user can turn it off.
+
+    The README documents `TACIT_DELIVER_GUARANTEE=0` and `"deliverGuarantee": false`
+    in prefs.json. The env var was always honoured; the preference had no switch in
+    the interface, which is why this class exists.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.save_prefs({"deliverGuarantee": True})
+
+    def test_on_by_default(self):
+        config.save_prefs({"deliverGuarantee": None})
+        self.assertTrue(config.deliver_guarantee())
+
+    def test_the_setting_round_trips(self):
+        self.assertTrue(config.deliver_guarantee())
+        config.save_prefs({"deliverGuarantee": False})
+        self.assertFalse(config.deliver_guarantee())
+        self.assertFalse(config.read_json(config.PREFS_FILE, {}).get("deliverGuarantee"))
+        config.save_prefs({"deliverGuarantee": True})
+        self.assertTrue(config.deliver_guarantee())
+
+    def test_env_var_outranks_the_preference(self):
+        config.save_prefs({"deliverGuarantee": False})
+        os.environ["TACIT_DELIVER_GUARANTEE"] = "1"
+        try:
+            self.assertTrue(config.deliver_guarantee())
+        finally:
+            os.environ.pop("TACIT_DELIVER_GUARANTEE", None)
+
+    def test_the_loop_honours_the_switch(self):
+        """Off means no salvage, no verify, no mid-turn demand."""
+        import inspect
+        from backend import agent as agent_mod
+        source = inspect.getsource(agent_mod.run_turn)
+        config.save_prefs({"deliverGuarantee": False})
+        # The loop reads the switch once per turn; the guarantee paths are gated on it.
+        self.assertIn("config.deliver_guarantee()", source)
+        self.assertIn("guarantee and", source)
+
+    def test_the_router_round_trips(self):
+        import asyncio
+        from backend.routers import api as api_router
+
+        class FakeRequest:
+            @staticmethod
+            async def json():
+                return {"deliver_guarantee": False}
+
+        async def call():
+            got = await api_router.get_deliver_guarantee()
+            self.assertTrue(got["deliver_guarantee"])
+            await api_router.set_deliver_guarantee(FakeRequest())
+            return await api_router.get_deliver_guarantee()
+
+        got = asyncio.run(call())
+        self.assertFalse(got["deliver_guarantee"])
+
+
 class TestSavedFolders(Isolated):
     """Folders that have been used are remembered, and can be forgotten."""
 

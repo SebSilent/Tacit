@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tacit</title>
-<link rel="stylesheet" href="/static/style.css?v=32">
+<link rel="stylesheet" href="/static/style.css?v=33">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
 </head>
 <body>
@@ -83,6 +83,9 @@
       <button class="icon-btn" id="harnessBtn" title="Settings">
         <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.7V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
       </button>
+      <button class="icon-btn" id="dgToggle" title="Delegation — what sub-agents are doing">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"/></svg>
+      </button>
       <button class="icon-btn" id="asToggle" title="Assistant">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 0 1 8-8h2a8 8 0 0 1 8 4z"/><path d="M9 11h6M9 15h4"/></svg>
       </button>
@@ -110,6 +113,12 @@
     <div class="plan-strip" id="planStrip" hidden></div>
 
     <footer class="composer-wrap">
+      <div class="task-strip" id="taskStrip" hidden>
+        <svg class="task-strip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" stroke-linecap="round"/></svg>
+        <span class="task-strip-count" id="taskStripCount"></span>
+        <div class="task-strip-list" id="taskStripList" hidden></div>
+        <button class="task-strip-close" id="taskStripClose" title="Hide the task list">✕</button>
+      </div>
       <div class="attach-row" id="attachRow" hidden></div>
       <div class="composer" id="composer">
         <button class="icon-btn composer-side" id="planToggle" title="Plan mode">
@@ -130,6 +139,24 @@
       <div class="composer-hint"><span id="connHint">connecting…</span><span id="steerHint" hidden> · typing now steers the running turn</span></div>
     </footer>
   </main>
+
+  <!-- ── Delegation: what sub-agents and research are doing right now. ── -->
+  <aside class="as-panel dg-panel" id="dgPanel">
+    <header class="as-head">
+      <span class="as-title">Delegation</span>
+      <span class="as-sub" id="dgSub">sub-agents · research</span>
+      <button class="ho-btn small" id="dgSettingsBtn" title="Delegation settings">settings</button>
+      <button class="icon-btn ho-close" id="dgClose" title="Close">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div class="as-context" id="dgSettingsWrap" hidden>
+      <div id="dgSettings"></div>
+      <div class="as-note">Sub-agents and research run on this model. Empty means the session's
+        own model — which is what they used to inherit, at the session's thinking level too.</div>
+    </div>
+    <div class="as-messages" id="dgMessages"></div>
+  </aside>
 
   <!-- ── Assistant: a per-session side conversation. The agent never sees it. ── -->
   <aside class="as-panel" id="asPanel">
@@ -320,10 +347,11 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=41"></script>
+<script src="/static/app.js?v=42"></script>
 <script src="/static/git.js?v=15"></script>
 <script src="/static/harness.js?v=21"></script>
 <script src="/static/platform.js?v=15"></script>
 <script src="/static/assistant.js?v=9"></script>
+<script src="/static/delegation.js?v=1"></script>
 </body>
 </html>

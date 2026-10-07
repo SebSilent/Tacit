@@ -407,6 +407,7 @@ function attachCurrent() {
   if (window.TacitAssistant && window.TacitAssistant.sessionChanged) {
     window.TacitAssistant.sessionChanged(activeId);
   }
+  refreshTaskStrip();
   const s = cur();
   if (!s) return;
   // A brand-new session must ride a socket that is allowed to create it, so
@@ -575,6 +576,9 @@ function handle(m) {
       break;
     case 'tool_start':
       if (streaming) { addToolCard(m); streaming.msg.tools.push({ id: m.id, name: m.name, args: m.args }); }
+      // a tasks call can add items, so the strip is scheduled on the start
+      // as well as refreshed on the end
+      if (m.name === 'tasks') scheduleTaskStrip();
       break;
     case 'tool_end':
       finishToolCard(m);
@@ -582,6 +586,7 @@ function handle(m) {
         const t = streaming.msg.tools.find(t => t.id === m.id);
         if (t) { t.result = m.result; t.is_error = m.is_error; }
       }
+      refreshTaskStrip();
       break;
     case 'done':
       endStream();
@@ -661,6 +666,12 @@ function handle(m) {
     case 'fatal':
       endStream();
       toast('Fatal: ' + m.error, true);
+      break;
+    case 'delegation_activity':
+      // Sub-agent and research activity: the panel's job, never the transcript's.
+      if (window.TacitDelegation && window.TacitDelegation.handle) {
+        window.TacitDelegation.handle(m);
+      }
       break;
     default:
       // The side assistant owns its own events; it must never touch the main
@@ -1497,6 +1508,47 @@ const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
                  : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k'
                  : String(n || 0);
 
+// ── task strip: the session's task list, above the composer ──────────
+// The Task List plugin keeps the turn's remaining work as session state, so
+// it survives compaction; this strip is its visible face. Read-only: the
+// model owns the list, the person watches it. Hidden entirely when the
+// plugin is off or the list is empty, so an unused list costs nothing.
+let taskStripTimer = 0;
+async function refreshTaskStrip() {
+  const strip = $('#taskStrip');
+  if (!strip) return;
+  const s = cur();
+  const sid = s && s.id;
+  if (!sid) { strip.hidden = true; return; }
+  try {
+    const r = await fetch('/api/tasks/' + encodeURIComponent(sid))
+      .then(r => r.json());
+    if (!r.ok) { strip.hidden = true; return; }
+    const tasks = r.tasks || [];
+    if (!tasks.length) { strip.hidden = true; strip._dismissed = false; return; }
+    // A ✕ press hides it until the list itself changes: dismissed is cleared
+    // when the count moves, so the next real update is visible again.
+    if (strip._dismissed && strip._lastCount === r.count) return;
+    strip._dismissed = false;
+    strip.hidden = false;
+    $('#taskStripCount').textContent = `${r.open}/${r.count}`;
+    const list = $('#taskStripList');
+    if (list.hidden && strip._lastCount !== undefined && strip._lastCount !== r.count) {
+      list.hidden = false;   // something changed — show it
+    }
+    strip._lastCount = r.count;
+    list.innerHTML = tasks.map((t, i) => `
+      <div class="task-strip-item ${t.done ? 'done' : ''}">
+        <span class="tick">${t.done ? '✓' : '○'}</span>
+        <span class="task-text">${esc(t.text || '')}</span>
+      </div>`).join('');
+  } catch (e) { strip.hidden = true; }
+}
+function scheduleTaskStrip() {
+  if (taskStripTimer) return;
+  taskStripTimer = setTimeout(() => { taskStripTimer = 0; refreshTaskStrip(); }, 400);
+}
+
 function renderTokMeter() {
   const s = cur();
   const u = s && s.usage;
@@ -1750,6 +1802,20 @@ inputEl.addEventListener('keydown', e => {
 });
 sendBtn.addEventListener('click', () => { send(inputEl.value); inputEl.value = ''; inputEl.style.height = 'auto'; });
 stopBtn.addEventListener('click', stop);
+
+// task strip: click the count line to expand/collapse; ✕ hides it for this
+// visit of the session (it returns when the list changes again)
+const taskStrip = $('#taskStrip');
+if (taskStrip) {
+  $('#taskStripCount').addEventListener('click', () => {
+    const list = $('#taskStripList');
+    if (list) list.hidden = !list.hidden;
+  });
+  $('#taskStripClose').addEventListener('click', () => {
+    taskStrip.hidden = true;
+    taskStrip._dismissed = true;
+  });
+}
 
 // ── plan mode UI ─────────────────────────────────────────────────────
 const planToggle = $('#planToggle');

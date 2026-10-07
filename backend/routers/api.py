@@ -468,6 +468,22 @@ async def snapshots(limit: int = 200, session: str = ""):
     return {"ok": True, "snapshots": rows, "count": len(rows), "bytes": total}
 
 
+@router.get("/api/tasks/{sid}")
+async def tasks_state(sid: str):
+    """The session's task list, for the strip above the composer.
+
+    Read-only: the model owns the list. The strip shows what it holds and
+    refreshes on tool_end events for the tasks tool.
+    """
+    from ..plugins import task_list
+    if not plugin_manager.is_enabled("task_list"):
+        return _fail("the task list plugin is not enabled")
+    rows = task_list.load(sid)
+    return {"ok": True, "tasks": rows,
+            "open": sum(1 for r in rows if not r.get("done")),
+            "count": len(rows)}
+
+
 @router.post("/api/snapshots/compare")
 async def snapshot_compare(request: Request):
     from .. import extras
@@ -679,6 +695,36 @@ async def set_version_control(request: Request):
     body = await request.json()
     config.save_prefs({"allowVersionControl": bool(body.get("allow"))})
     return _ok(allow_version_control=config.allow_vcs())
+
+
+@router.get("/api/harness/delegate-model")
+async def get_delegate_model():
+    """The model delegated work (sub-agents, research) runs on. Empty = the session's."""
+    return _ok(delegate_model=config.delegate_model(),
+               models=config.model_list())
+
+
+@router.post("/api/harness/delegate-model")
+async def set_delegate_model(request: Request):
+    body = await request.json()
+    ref = str(body.get("delegate_model") or "").strip()
+    if ref and not config.resolve_model(ref):
+        return _fail("unknown model")
+    config.save_prefs({"delegateModel": ref})
+    return _ok(delegate_model=config.delegate_model())
+
+
+@router.get("/api/harness/deliver-guarantee")
+async def get_deliver_guarantee():
+    """Whether the turn is forced to land the file the task names. On by default."""
+    return _ok(deliver_guarantee=config.deliver_guarantee())
+
+
+@router.post("/api/harness/deliver-guarantee")
+async def set_deliver_guarantee(request: Request):
+    body = await request.json()
+    config.save_prefs({"deliverGuarantee": bool(body.get("deliver_guarantee"))})
+    return _ok(deliver_guarantee=config.deliver_guarantee())
 
 
 @router.get("/api/tools")

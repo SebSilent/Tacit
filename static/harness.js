@@ -339,6 +339,7 @@ async function renderTools(container) {
   panel.innerHTML = '<div class="ho-loading">Loading tools…</div>';
   const d = await api('/api/tools');
   const vcs = await api('/api/harness/version-control');
+  const dg = await api('/api/harness/deliver-guarantee');
 
   const toolRow = t => `
     <div class="tool-row ${t.enabled ? '' : 'off'}" data-name="${esc(t.name)}">
@@ -362,6 +363,16 @@ async function renderTools(container) {
         <span class="tgl-knob"></span>
       </button>
     </div>
+    <div class="tool-row ${dg.deliver_guarantee ? '' : 'off'}" data-perm="deliver-guarantee">
+      <span class="tool-name">Delivery guarantee</span>
+      <span class="tool-desc">On by default. When a turn would end without the file the task names,
+        the harness orders it written, makes it run, and spends the last rounds landing the
+        artifact instead of dying with one in hand. Off is the raw mode: no forcing, no
+        verification rounds, and the turn ends when the agent ends it.</span>
+      <button class="tgl ${dg.deliver_guarantee ? 'on' : ''}" data-act="toggle-dg" role="switch" aria-checked="${dg.deliver_guarantee}" title="${dg.deliver_guarantee ? 'Disable' : 'Enable'}">
+        <span class="tgl-knob"></span>
+      </button>
+    </div>
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>
     <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>
     <div class="ho-section">Server</div>
@@ -382,6 +393,18 @@ async function renderTools(container) {
     btn.closest('.tool-row').classList.toggle('off', !enable);
     setNote(enable ? 'the agent may now run version-control commands'
                    : 'version control is off for the agent');
+  });
+
+  panel.querySelector('[data-act="toggle-dg"]').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-act="toggle-dg"]');
+    const enable = !btn.classList.contains('on');
+    const r = await post('/api/harness/deliver-guarantee', { deliver_guarantee: enable });
+    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
+    btn.classList.toggle('on', enable);
+    btn.setAttribute('aria-checked', enable);
+    btn.closest('.tool-row').classList.toggle('off', !enable);
+    setNote(enable ? 'the delivery guarantee is on: the turn lands the file it names'
+                   : 'the delivery guarantee is off: the turn ends when the agent ends it');
   });
 
   panel.querySelectorAll('.tool-row [data-act="toggle"]').forEach(btn => {

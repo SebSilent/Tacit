@@ -264,10 +264,11 @@ None of this was invented here, and it is worth saying where it came from.
   What Tacit still does not do is place breakpoints on the growing transcript for Anthropic: two marks
   cover the stable prefix and the last message, which is the documented pattern, but a longer rolling
   strategy is possible.
-- **No task-state panel.** The Task List plugin keeps the remaining work outside the window as data,
-  and it survives compaction because it was never in the transcript. What Tacit has no equivalent of is
-  Claude Code's *visible* todo rendering in the interface: the list is the model's own record here,
-  shown in the dashboard rather than drawn as a progress UI.
+- **The task strip is read-only.** The Task List plugin keeps the remaining work outside the window
+  as data, and it survives compaction because it was never in the transcript. The strip above the
+  composer now draws that list — open over total, ticking items off as the agent finishes them —
+  but the model owns the list: the interface watches and does not edit. Claude Code's panel lets
+  the person reorder and add; that is the part still missing here.
 - **Retrieval is keyword-only.** SQLite full-text search where the build has it, plain matching where
   it does not. No embeddings, deliberately, but that is a ceiling as well as a choice.
 
@@ -1013,9 +1014,10 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite: 607 tests, no network and no real model. None of
-them skip: the suite needs neither a container daemon nor a benchmark runner, and Tacit installs
-neither.
+The repository includes an automated test suite: 617 tests, no network and no real model. The suite
+needs no container daemon and no benchmark runner, and Tacit installs neither. One test skips itself
+on a machine where a container runtime is genuinely installed, because the refusal it exists to
+assert cannot happen there.
 
 ```sh
 python -m unittest discover -s tests -t .

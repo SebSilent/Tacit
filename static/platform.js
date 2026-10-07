@@ -226,7 +226,6 @@
 
     panel.innerHTML = `
       <div class="ho-toolbar">
-        <span class="ho-sub">Optional systems. Nothing here is on unless you turn it on.</span>
         ${flags.length ? `<span class="badge on">${esc(flags.join(' · '))}</span>` : '<span class="badge">all optional systems off</span>'}
       </div>
 

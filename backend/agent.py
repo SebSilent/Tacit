@@ -389,9 +389,24 @@ def t_benchmark(action: str, model: str = "", temperature=None, max_tokens=None,
     return "ERROR: action must be list|set"
 
 
-def t_research(question: str, project: str | None = None) -> str:
+def run_research(args: dict, ctx: dict, out: dict):
+    """The research tool, driven like a sub-agent: events stream, result lands.
+
+    The old version ran the whole investigation and returned one string, which
+    meant the interface saw nothing until the report was finished — minutes of
+    tool calls with no tool_start, no notify, nothing. This yields the aspects'
+    events as they happen, tagged `research: True`, and puts the report in
+    ``out["result"]`` at the end, exactly as `run_subagent` does for `task`.
+    """
     from . import research as R
-    return R.research(question, project=project)
+    report: list = []
+    for ev in R.research(str(args.get("question") or ""), project=ctx.get("project"),
+                         ref=ctx.get("ref")):
+        if isinstance(ev, dict):
+            yield {**ev, "research": True}
+        else:
+            report.append(str(ev))
+    out["result"] = "".join(report) or "ERROR: research produced nothing"
 
 
 def t_skill(name: str, project: str | None = None) -> str:
@@ -493,7 +508,7 @@ EXECS = {
     "browser": t_browser,
     "evidence": t_evidence,
     "benchmark": t_benchmark,
-    "research": t_research,
+    "research": None,         # dispatched through run_research (see call_tool)
     "skill": t_skill,
     "mcp_list_servers": t_mcp_list_servers,
     "mcp_search_tools": t_mcp_search_tools,
@@ -1215,13 +1230,18 @@ def run_subagent(task: str, ctx: dict, out: dict):
         out["result"] = "ERROR: prompt required"
         return
 
+    # Delegated work runs on the delegation model when one is set, else the
+    # session's. The parent's ref is the fallback, not the rule: a session model
+    # at thinking=max is a poor default for fetch-and-grep work, and the choice
+    # has to be reachable from the interface.
+    ref = str(ctx.get("ref") or "").strip() or config.delegate_model() or None
     messages = [
         {"role": "system", "content": prompts.system_prompt(ctx.get("project"), False, subagent=True)},
         {"role": "user", "content": task},
     ]
     report: list[str] = []
     spent = 0
-    for ev in run_turn(messages, project=ctx.get("project"), ref=ctx.get("ref"),
+    for ev in run_turn(messages, project=ctx.get("project"), ref=ref,
                        max_steps=config.SUBAGENT_MAX_STEPS, depth=depth + 1,
                        readonly=True, nested=True, session=ctx.get("session") or "",
                        stop=ctx.get("stop")):
@@ -1256,6 +1276,9 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict):
     if name == SUBTASK:
         yield from run_subagent(args.get("prompt", ""), ctx, out)
         return
+    if name == "research":
+        yield from run_research(args, ctx, out)
+        return
     if name.startswith("mcp__"):
         entry = next((e for e in mcp_registry.all_tools() if e["fn_name"] == name), None)
         if entry is None:
@@ -1265,7 +1288,7 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict):
         out["result"] = res.get("result") if res.get("ok") else f"ERROR: {res.get('error')}"
         return
     fn = EXECS.get(name)
-    if not fn:
+    if fn is None and name != "research":
         plugin_result = plugin_manager.call_tool(name, args, ctx)
         if plugin_result is not None:
             out["result"] = str(plugin_result)

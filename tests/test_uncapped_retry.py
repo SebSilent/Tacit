@@ -1,10 +1,45 @@
 import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
-from backend import agent, config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend import agent, config  # noqa: E402
+from tests.helpers import state_paths  # noqa: E402
 
 
-class TestUncappedRetry(unittest.TestCase):
+class Isolated(unittest.TestCase):
+    """Points every storage path under the user's home at a temporary one.
+
+    These tests stub the agent loop but still read the real prefs file for the
+    delivery guarantee, so a preference the operator toggled in the interface
+    decided whether they passed. The suite must not read the machine it runs
+    on; the same isolation the other files use, applied here.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        home = Path(self._tmp.name)
+        self._keys = state_paths(config)
+        self._orig = {key: getattr(config, key) for key in self._keys}
+        self._home = config.HOME
+        config.HOME = home
+        for key in self._keys:
+            target = home / Path(self._orig[key]).name
+            setattr(config, key, target)
+            if key.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        config.HOME = self._home
+        for key, value in self._orig.items():
+            setattr(config, key, value)
+        self._tmp.cleanup()
+
+
+class TestUncappedRetry(Isolated):
     """Our output ceiling is the failure the harness causes itself.
 
     A round cut off mid-arguments used to be discarded: the model got an ERROR note for a call it
@@ -102,7 +137,7 @@ class TestUncappedRetry(unittest.TestCase):
         self.assertNotIn(0, caps, "no escalation request was owed")
 
 
-class TestWallBudgetAwareness(unittest.TestCase):
+class TestWallBudgetAwareness(Isolated):
     """The clock has to be visible to the loop, and it has to change behaviour.
 
     Measured on the hard set: a winning feal cell uses 1,009s of a 1,175s allowance, and the cell
@@ -164,7 +199,7 @@ class TestWallBudgetAwareness(unittest.TestCase):
                          "a chat turn has no wall to count down against")
 
 
-class TestDeliveryOff(unittest.TestCase):
+class TestDeliveryOff(Isolated):
     """deliverGuarantee: false turns the harness into a thin wrapper.
 
     No mid-turn order, no end-of-turn salvage, no verify round, no clock delivery. The turn ends
@@ -232,7 +267,7 @@ class TestDeliveryOff(unittest.TestCase):
         self.assertTrue([a for a in asks if "still not on disk" in a], asks)
 
 
-class TestProseExtraction(unittest.TestCase):
+class TestProseExtraction(Isolated):
     """A phase that ends with nothing on disk scored zero however well it argued.
 
     feal trial 2 of the current arm: 16 turns, 38,500 tokens, no write_file ever attempted, and the
@@ -297,7 +332,7 @@ if __name__ == "__main__":
 
 
 
-class TestVerifyPresentFile(unittest.TestCase):
+class TestVerifyPresentFile(Isolated):
     """A deliverable that exists but was never run is still an unverified guess.
 
     schemelike went 0/3 in the arm before this with `Missing closing parenthesis` and the like -
@@ -381,7 +416,7 @@ class TestVerifyPresentFile(unittest.TestCase):
         self.assertTrue([n for n, _p in runs if n == "run_shell"], runs)
 
 
-class TestMidTurnDemand(unittest.TestCase):
+class TestMidTurnDemand(Isolated):
     """The artifact has to be ordered while there is still a turn left to produce it.
 
     feal t2 spent 16 turns and 38,500 tokens without attempting a write; schemelike t3 spent 34

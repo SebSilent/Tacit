@@ -483,6 +483,15 @@ async def ws_session(ws: WebSocket, sid: str):
                                          reasoning=config.reasoning_for(rec.get("thinking")),
                                          trace=trace):
                     kind = ev.get("type")
+                    if kind in ("tool_start", "tool_end", "notify") and \
+                            (ev.get("subagent") or ev.get("research")):
+                        # Delegated work is invisible in the main transcript by
+                        # design — the sub-agent's calls never enter it — so the
+                        # only way the person can see what it is doing is a
+                        # dedicated event. Forwarded as its own type, the panel's
+                        # job, not the transcript's.
+                        loop.call_soon_threadsafe(queue.put_nowait, {
+                            **ev, "type": "delegation_activity", "sid": rec["id"]})
                     if kind == "usage":
                         ev = _usage_event(rec, ev.get("usage") or {},
                                           subagent=bool(ev.get("subagent")))

@@ -167,6 +167,13 @@ BROWSER_TEXT_LIMIT = int(os.environ.get("TACIT_BROWSER_TEXT_LIMIT", "6000"))
 BROWSER_SEARCH_TIMEOUT = int(os.environ.get("TACIT_BROWSER_SEARCH_TIMEOUT", "120"))
 RESEARCH_ASPECTS = int(os.environ.get("TACIT_RESEARCH_ASPECTS", "3"))
 RESEARCH_MAX_STEPS = int(os.environ.get("TACIT_RESEARCH_STEPS", "10"))
+# A research call used to be unbounded in wall clock and tokens: three sub-agents
+# at ten steps each, serially, with nothing watching the clock. The cap is on the
+# whole call, not per aspect, because the caller is the one waiting.
+RESEARCH_TIMEOUT_S = int(os.environ.get("TACIT_RESEARCH_TIMEOUT", "600"))
+# Delegated work (sub-agents, research) runs on the session's model unless this
+# names another one. Empty means: same model, which is the old behaviour.
+DELEGATE_MODEL = os.environ.get("TACIT_DELEGATE_MODEL", "")
 
 
 SKILL_INDEX_LIMIT = int(os.environ.get("TACIT_SKILL_INDEX_LIMIT", "24"))
@@ -246,6 +253,20 @@ def write_json(path: Path, value) -> None:
 
 def prefs() -> dict:
     return read_json(PREFS_FILE, {})
+
+
+def delegate_model() -> str:
+    """The model delegated work runs on: the pref, else the env var, else ''.
+
+    Empty means the session's own model. A sub-agent inherits its parent's model
+    by construction, which is usually right — but a reasoning-heavy session model
+    at thinking=max burns the expensive tokens on fetch-and-grep work a cheap
+    model does just as well, and that choice was never reachable.
+    """
+    v = str(prefs().get("delegateModel") or "").strip()
+    if v:
+        return v
+    return str(os.environ.get("TACIT_DELEGATE_MODEL") or "").strip()
 
 
 def deliver_guarantee() -> bool:

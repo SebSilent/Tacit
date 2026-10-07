@@ -1,9 +1,44 @@
+import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
-from backend import agent, config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend import agent, config  # noqa: E402
+from tests.helpers import state_paths  # noqa: E402
 
 
-class TestDumpHint(unittest.TestCase):
+class Isolated(unittest.TestCase):
+    """Points every storage path under the user's home at a temporary one.
+
+    Same reason as test_uncapped_retry.py: these tests read the delivery
+    guarantee from the real prefs file, so an operator's preference decided
+    whether they passed. The suite must not read the machine it runs on.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        home = Path(self._tmp.name)
+        self._keys = state_paths(config)
+        self._orig = {key: getattr(config, key) for key in self._keys}
+        self._home = config.HOME
+        config.HOME = home
+        for key in self._keys:
+            target = home / Path(self._orig[key]).name
+            setattr(config, key, target)
+            if key.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        config.HOME = self._home
+        for key, value in self._orig.items():
+            setattr(config, key, value)
+        self._tmp.cleanup()
+
+
+class TestDumpHint(Isolated):
     """A clipped `cat` used to read as if the file were that long, so the agent kept
     probing it from other angles instead of ever getting the whole thing."""
 
@@ -40,7 +75,7 @@ class TestDumpHint(unittest.TestCase):
         self.assertLess(config.TOOL_OUTPUT_LIMIT, 17578)
 
 
-class TestSeveredToolCall(unittest.TestCase):
+class TestSeveredToolCall(Isolated):
     """Half a write_file is not a write. parse_args used to turn it into {} and run it."""
 
     def test_arguments_that_never_arrived_complete_are_detected(self):
