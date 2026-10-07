@@ -111,6 +111,9 @@ def research(question: str, project: str | None = None, ref: str | None = None):
             kind = ev.get("type")
             if kind == "text":
                 report.append(ev["delta"])
+                events.append({**ev, "research": True, "aspect": label})
+            elif kind == "reason":
+                events.append({**ev, "research": True, "aspect": label})
             elif kind in ("tool_start", "tool_end", "notify"):
                 events.append({**ev, "research": True, "aspect": label})
         text = "".join(report).strip() or "(nothing found)"
@@ -160,3 +163,5 @@ def research(question: str, project: str | None = None, ref: str | None = None):
         yield f"ERROR: {out[10:]}"
         return
     yield out.strip() or "(the synthesis returned nothing)"
+    yield {"type": "notify", "level": "info", "research": True,
+           "message": "research complete"}

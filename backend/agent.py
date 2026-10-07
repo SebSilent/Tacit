@@ -389,7 +389,7 @@ def t_benchmark(action: str, model: str = "", temperature=None, max_tokens=None,
     return "ERROR: action must be list|set"
 
 
-def run_research(args: dict, ctx: dict, out: dict):
+def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     """The research tool, driven like a sub-agent: events stream, result lands.
 
     The old version ran the whole investigation and returned one string, which
@@ -403,7 +403,7 @@ def run_research(args: dict, ctx: dict, out: dict):
     for ev in R.research(str(args.get("question") or ""), project=ctx.get("project"),
                          ref=ctx.get("ref")):
         if isinstance(ev, dict):
-            yield {**ev, "research": True}
+            yield {**ev, "research": True, "parent_call_id": parent_call_id}
         else:
             report.append(str(ev))
     out["result"] = "".join(report) or "ERROR: research produced nothing"
@@ -1221,7 +1221,7 @@ def _clip_report(text: str, limit: int) -> str:
             + (text[-tail:] if tail > 0 else ""))
 
 
-def run_subagent(task: str, ctx: dict, out: dict):
+def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
     depth = int(ctx.get("depth") or 0)
     if depth >= config.SUBAGENT_MAX_DEPTH:
         out["result"] = "ERROR: sub-agents cannot delegate further"
@@ -1248,15 +1248,18 @@ def run_subagent(task: str, ctx: dict, out: dict):
         kind = ev.get("type")
         if kind == "text":
             report.append(ev["delta"])
+            yield {**ev, "subagent": True, "parent_call_id": parent_call_id}
+        elif kind == "reason":
+            yield {**ev, "subagent": True, "parent_call_id": parent_call_id}
         elif kind == "usage":
             # The sub-agent's calls are billed too. Dropping these events made
             # the session's token total read low, and left the dashboard's
             # "saved by delegation" row permanently zero.
             u = ev.get("usage") or {}
             spent += int(u.get("input") or 0) + int(u.get("output") or 0)
-            yield {**ev, "subagent": True, "delegated": spent}
+            yield {**ev, "subagent": True, "delegated": spent, "parent_call_id": parent_call_id}
         elif kind in ("tool_start", "tool_end", "notify"):
-            yield {**ev, "subagent": True}
+            yield {**ev, "subagent": True, "parent_call_id": parent_call_id}
 
     text = "".join(report).strip() or "(the sub-agent returned no report)"
     result = _clip_report(text, config.SUBAGENT_RESULT_LIMIT)
@@ -1265,19 +1268,22 @@ def run_subagent(task: str, ctx: dict, out: dict):
     # What the main window avoided: everything the sub-agent spent, less the
     # report that came back into it.
     out["saved_tokens"] = max(0, spent - token_mod.estimate_tokens(result))
+    yield {"type": "notify", "level": "info", "subagent": True, "parent_call_id": parent_call_id,
+           "message": "sub-agent complete"}
 
 
-def call_tool(name: str, args: dict, ctx: dict, out: dict):
+def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = None):
     if ctx.get("readonly"):
         refusal = readonly_guard(name, args)
         if refusal:
             out["result"] = refusal
             return
+    parent_call_id = call.get("id") if call else None
     if name == SUBTASK:
-        yield from run_subagent(args.get("prompt", ""), ctx, out)
+        yield from run_subagent(args.get("prompt", ""), ctx, out, parent_call_id=parent_call_id)
         return
     if name == "research":
-        yield from run_research(args, ctx, out)
+        yield from run_research(args, ctx, out, parent_call_id=parent_call_id)
         return
     if name.startswith("mcp__"):
         entry = next((e for e in mcp_registry.all_tools() if e["fn_name"] == name), None)
@@ -1328,7 +1334,9 @@ def _run_parallel(specs: list[tuple], ctx: dict, results: dict):
         out: dict = {}
         outs[cid] = out
         try:
-            for p in call_tool(name, args, ctx, out):
+            # Create a mock call object with the ID so sub-agent events get parent_call_id
+            mock_call = {"id": cid}
+            for p in call_tool(name, args, ctx, out, mock_call):
                 q.put(("ev", p))
         except Exception as exc:  # noqa: BLE001
             out["result"] = f"ERROR: {exc}"
@@ -1538,7 +1546,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 out: dict = {}
                 try:
                     for _p in call_tool("write_file", {"path": target,
-                                                      "content": block}, ctx, out):
+                                                      "content": block}, ctx, out, None):
                         pass
                 except Exception:
                     return
@@ -1566,7 +1574,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                        "message": f"discarded a {c['name']} call cut off mid-arguments"}
             else:
                 out = {}
-                for p in call_tool(c["name"], args, ctx, out):
+                for p in call_tool(c["name"], args, ctx, out, c):
                     yield p
             result = out.get("result", "ERROR: the tool produced no result")
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
@@ -1899,7 +1907,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             else:
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
                 out = {}
-                for p in call_tool(c["name"], args, ctx, out):
+                for p in call_tool(c["name"], args, ctx, out, c):
                     yield p
                 blocked_run = 0
             result = out.get("result", "ERROR: the tool produced no result")

@@ -1330,6 +1330,46 @@ svg { display: block; }
 .dg-label { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-age { font-family: var(--mono); font-size: 10.5px; color: var(--fadetext); }
 .dg-activity { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; word-break: break-word; }
+.dg-toggle {
+  flex: 0 0 auto; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--muted);
+  transition: transform .12s ease;
+}
+.dg-toggle:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.dg-toggle svg { transition: transform .12s ease; }
+.dg-trace {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;
+}
+.dg-reason {
+  font-style: italic; color: var(--accent-2); font-size: 12px; line-height: 1.5;
+  padding: 6px 8px; background: rgba(var(--accent2-rgb), .08);
+  border: 1px solid rgba(var(--accent2-rgb), .2); border-radius: 6px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.dg-tool {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  padding: 4px 8px; background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 6px; display: flex; flex-direction: column; gap: 4px;
+}
+.dg-tool-err { border-color: var(--err); }
+.dg-tool-name { font-weight: 600; color: var(--text); }
+.dg-args, .dg-result {
+  margin: 0; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line-2);
+  border-radius: 4px; overflow-x: auto; font-size: 10.5px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow-y: auto;
+}
+.dg-text {
+  font-size: 12px; line-height: 1.5; color: var(--text);
+  padding: 6px 8px; background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 6px; white-space: pre-wrap; word-break: break-word;
+}
+.dg-notify {
+  font-size: 11px; color: var(--fadetext); font-style: italic;
+}
+.dg-empty {
+  font-size: 12px; color: var(--fadetext); font-style: italic; text-align: center; padding: 12px;
+}
 
 /* ── assistant panel ──────────────────────────────────────────────── */
 /* A normal flex sibling of the sidebar and the main column, so it is aligned

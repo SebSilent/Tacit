@@ -487,7 +487,7 @@ async def ws_session(ws: WebSocket, sid: str):
                                          reasoning=config.reasoning_for(rec.get("thinking")),
                                          trace=trace):
                     kind = ev.get("type")
-                    if kind in ("tool_start", "tool_end", "notify") and \
+                    if kind in ("text", "reason", "tool_start", "tool_end", "notify") and \
                             (ev.get("subagent") or ev.get("research")):
                         # Delegated work is invisible in the main transcript by
                         # design — the sub-agent's calls never enter it — so the

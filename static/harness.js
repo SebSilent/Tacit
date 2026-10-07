@@ -340,6 +340,7 @@ async function renderTools(container) {
   const d = await api('/api/tools');
   const vcs = await api('/api/harness/version-control');
   const dg = await api('/api/harness/deliver-guarantee');
+  const au = await api('/api/autoupdater/status');
 
   const toolRow = t => `
     <div class="tool-row ${t.enabled ? '' : 'off'}" data-name="${esc(t.name)}">
@@ -381,7 +382,34 @@ async function renderTools(container) {
       <span class="tool-desc">Stop this process and start a fresh one on the same port. The browser
         reconnects on its own; a turn that is running is cut off.</span>
       <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
+    </div>
+    <div class="ho-section">Auto-Updater</div>
+    <div class="tool-row ${au.enabled ? '' : 'off'}" data-perm="autoupdater-enabled">
+      <span class="tool-name">Auto-updater</span>
+      <span class="tool-desc">On by default. Checks GitHub for new commits every hour and can pull
+        changed files automatically. Tacit has no releases — every push is an update.</span>
+      <button class="tgl ${au.enabled ? 'on' : ''}" data-act="toggle-au" role="switch" aria-checked="${au.enabled}" title="${au.enabled ? 'Disable' : 'Enable'}">
+        <span class="tgl-knob"></span>
+      </button>
+    </div>
+    <div class="tool-row" data-perm="autoupdater-check" id="auCheckRow">
+      <span class="tool-name">Check for updates</span>
+      <span class="tool-desc">Manually check GitHub for new commits and changed files.</span>
+      <button class="ho-btn small" id="auCheckBtn">Check now</button>
+    </div>
+    <div class="tool-row" data-perm="autoupdater-pull" id="auPullRow" hidden>
+      <span class="tool-name">Pull updates</span>
+      <span class="tool-desc">Download and apply the available updates from GitHub.</span>
+      <button class="ho-btn small primary" id="auPullBtn">Pull updates</button>
+    </div>
+    <div class="tool-row" data-perm="autoupdater-status" id="auStatusRow" hidden>
+      <span class="tool-name">Status</span>
+      <span class="tool-desc" id="auStatusText"></span>
+      <span class="tool-spacer"></span>
     </div>`;
+
+  // Update status display
+  updateAutoupdaterStatus(au);
 
   panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {
     const btn = e.target.closest('[data-act="toggle-vcs"]');
@@ -430,6 +458,84 @@ async function renderTools(container) {
     if (!r.ok) { setNote(r.error || 'restart failed', true); return; }
     setNote('server is restarting — reconnecting…');
   });
+
+  // Autoupdater handlers
+  panel.querySelector('[data-act="toggle-au"]').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-act="toggle-au"]');
+    const enable = !btn.classList.contains('on');
+    const r = await post('/api/autoupdater/toggle', { enabled: enable });
+    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
+    btn.classList.toggle('on', enable);
+    btn.setAttribute('aria-checked', enable);
+    btn.closest('.tool-row').classList.toggle('off', !enable);
+    setNote(enable ? 'auto-updater enabled' : 'auto-updater disabled');
+  });
+
+  panel.querySelector('#auCheckBtn').addEventListener('click', async () => {
+    const btn = panel.querySelector('#auCheckBtn');
+    const pullRow = panel.querySelector('#auPullRow');
+    const statusRow = panel.querySelector('#auStatusRow');
+    const statusText = panel.querySelector('#auStatusText');
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    setNote('checking for updates…');
+    const r = await post('/api/autoupdater/check', {});
+    btn.disabled = false;
+    btn.textContent = 'Check now';
+    if (!r.ok) { setNote(r.error || 'Check failed', true); return; }
+    if (r.update_available) {
+      setNote(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.commit_message}`);
+      pullRow.hidden = false;
+      statusRow.hidden = false;
+      statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — commit ${r.latest_commit.slice(0, 7)}`;
+    } else {
+      setNote('Already up to date');
+      pullRow.hidden = true;
+      statusRow.hidden = false;
+      statusText.textContent = `Up to date — commit ${r.latest_commit.slice(0, 7)}`;
+    }
+  });
+
+  panel.querySelector('#auPullBtn').addEventListener('click', async () => {
+    const btn = panel.querySelector('#auPullBtn');
+    const pullRow = panel.querySelector('#auPullRow');
+    const statusRow = panel.querySelector('#auStatusRow');
+    const statusText = panel.querySelector('#auStatusText');
+    if (!confirm('Pull updates from GitHub? This will overwrite local changes to tracked files.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Pulling…';
+    setNote('pulling updates…');
+    const r = await post('/api/autoupdater/pull', {});
+    btn.disabled = false;
+    btn.textContent = 'Pull updates';
+    if (!r.ok) { setNote(r.error || 'Pull failed', true); return; }
+    if (r.updated) {
+      setNote(r.message + ' — restart the server to apply');
+      pullRow.hidden = true;
+      statusRow.hidden = false;
+      statusText.textContent = `Updated to ${r.commit.slice(0, 7)} — restart to apply`;
+    } else {
+      setNote(r.message);
+      pullRow.hidden = true;
+      statusRow.hidden = false;
+      statusText.textContent = `Up to date — commit ${r.commit.slice(0, 7)}`;
+    }
+  });
+}
+
+function updateAutoupdaterStatus(au) {
+  const pullRow = document.querySelector('#auPullRow');
+  const statusRow = document.querySelector('#auStatusRow');
+  const statusText = document.querySelector('#auStatusText');
+  if (!pullRow || !statusRow || !statusText) return;
+  if (au.last_commit) {
+    statusRow.hidden = false;
+    const lastCheck = au.last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
+    const lastUpdate = au.last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
+    statusText.textContent = `Last check: ${lastCheck} · Last update: ${lastUpdate} · Commit: ${au.last_commit.slice(0, 7)}`;
+  } else {
+    statusRow.hidden = true;
+  }
 }
 
 // ── keep the sidebar model dropdown in sync after registry edits ────

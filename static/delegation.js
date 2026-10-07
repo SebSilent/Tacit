@@ -1,17 +1,8 @@
 /**
- * The Delegation panel: what sub-agents and research are doing, live, on the left.
+ * The Delegation panel: what sub-agents and research are doing, live.
  *
- * The main transcript never shows a sub-agent's tool calls — they run in their own
- * context by design, and only the report comes back. That is the right shape for
- * the window and the wrong shape for a person watching: a `task` call could run
- * twelve steps, and the interface showed nothing but a spinner. This panel is the
- * missing view. It rides the same socket as everything else (no second
- * connection), and it is fed by the `delegation_activity` events the chat router
- * forwards for sub-agent and research tool calls.
- *
- * The panel also opens itself when a delegation launches: the transcript shows a
- * `task` or `research` tool card and then nothing until the report lands, so the
- * one view of the work in flight opens on its own instead of waiting to be found.
+ * Each sub-agent/research gets its own expandable card showing the full trace:
+ * thinking (reason), tool calls with args/results, and text output.
  */
 (function () {
   'use strict';
@@ -23,7 +14,8 @@
 
   let models = [];
   let delegateModel = '';
-  let cards = new Map();     // key -> {label, activity, state, ts}
+  // key -> {label, state, ts, trace: [{type, name, args, result, is_error, delta, ...}]}
+  let cards = new Map();
   let order = [];            // insertion order of keys
   let settingsOpen = false;
 
@@ -51,15 +43,60 @@
     box.innerHTML = order.map((k) => {
       const c = cards.get(k);
       const age = Math.max(0, Math.round((Date.now() - (c.ts || 0)) / 1000));
+      const traceHtml = renderTrace(c.trace || []);
       return `
-      <div class="dg-card ${c.state || 'active'}">
+      <div class="dg-card ${c.state || 'active'}" data-key="${esc(k)}">
         <div class="dg-head">
           <span class="dg-dot"></span>
           <span class="dg-label">${esc(c.label || k)}</span>
           <span class="dg-age">${age}s</span>
+          <button class="dg-toggle" title="Expand/collapse" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+          </button>
         </div>
         <div class="dg-activity">${esc(c.activity || 'working…')}</div>
+        <div class="dg-trace" hidden>${traceHtml}</div>
       </div>`;
+    }).join('');
+
+    // Attach toggle handlers
+    box.querySelectorAll('.dg-toggle').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const card = btn.closest('.dg-card');
+        const trace = card?.querySelector('.dg-trace');
+        const expanded = trace && !trace.hidden;
+        if (trace) {
+          trace.hidden = expanded;
+          btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          btn.querySelector('svg').style.transform = expanded ? '' : 'rotate(180deg)';
+        }
+      });
+    });
+  }
+
+  function renderTrace(trace) {
+    if (!trace.length) return '<div class="dg-empty">working…</div>';
+    return trace.map((ev) => {
+      if (ev.type === 'reason') {
+        return `<div class="dg-reason">${esc(ev.delta || '')}</div>`;
+      }
+      if (ev.type === 'tool_start') {
+        const args = ev.args ? `<pre class="dg-args">${esc(JSON.stringify(ev.args, null, 2))}</pre>` : '';
+        return `<div class="dg-tool"><span class="dg-tool-name">→ ${esc(ev.name || 'tool')}</span>${args}</div>`;
+      }
+      if (ev.type === 'tool_end') {
+        const status = ev.is_error ? '✗' : '✓';
+        const result = ev.result ? `<pre class="dg-result">${esc(String(ev.result).slice(0, 2000))}</pre>` : '';
+        return `<div class="dg-tool ${ev.is_error ? 'dg-tool-err' : ''}"><span class="dg-tool-name">${status} ${esc(ev.name || 'tool')}</span>${result}</div>`;
+      }
+      if (ev.type === 'text') {
+        return `<div class="dg-text">${esc(ev.delta || '')}</div>`;
+      }
+      if (ev.type === 'notify') {
+        return `<div class="dg-notify">${esc(ev.message || '')}</div>`;
+      }
+      return '';
     }).join('');
   }
 
@@ -123,21 +160,55 @@
     // after the launch, and any path that never produced a transcript card.
     if (!isOpen()) openPanel();
     // One card per sub-agent call id; research aspects key on their label.
+    // Use parent_call_id to group all events from the same delegation together.
+    const parentId = m.parent_call_id || '';
     const key = m.research ? ('research:' + (m.aspect || 'general'))
-                           : ('call:' + (m.id || m.name || 'x'));
+                           : ('call:' + (parentId || m.id || m.name || 'x'));
     const label = m.research
       ? ('research · ' + (m.aspect || 'general'))
-      : ('sub-agent ' + String(m.id || '').slice(0, 8));
+      : ('sub-agent ' + String(parentId || m.id || '').slice(0, 8));
     let activity = '';
-    if (m.type === 'tool_start') activity = '→ ' + (m.name || 'working');
-    else if (m.type === 'tool_end') activity = (m.is_error ? '✗ ' : '✓ ') + (m.name || '');
-    else if (m.message) activity = m.message;
+    let isDone = false;
+    if (m.type === 'tool_start') {
+      activity = '→ ' + (m.name || 'working');
+    } else if (m.type === 'tool_end') {
+      activity = (m.is_error ? '✗ ' : '✓ ') + (m.name || '');
+    } else if (m.type === 'reason') {
+      activity = 'thinking…';
+    } else if (m.type === 'text') {
+      // Sub-agent finishes with a text event (the report). Show a snippet.
+      const delta = m.delta || '';
+      if (delta.trim()) {
+        activity = delta.slice(0, 80).replace(/\n/g, ' ') + (delta.length > 80 ? '…' : '');
+        // If this looks like a substantial final report, mark done.
+        // Heuristic: non-trivial text after we've seen some tool activity.
+        const existing = cards.get(key);
+        const hadTools = existing && existing.trace && existing.trace.some(e => e.type === 'tool_start');
+        if (hadTools && delta.length > 100) isDone = true;
+      }
+    } else if (m.message) {
+      activity = m.message;
+      // Explicit completion notify from backend
+      if (m.message && (m.message.includes('complete') || m.message.includes('finished'))) {
+        isDone = true;
+      }
+    }
     const existing = cards.get(key);
+    const trace = (existing && existing.trace) || [];
+    // Append this event to the trace
+    trace.push(m);
+    // Determine done state: explicit done flag, or tool_end without error,
+    // or a substantial text event after tool activity.
+    let state = 'active';
+    if (isDone) state = 'done';
+    else if (m.type === 'tool_end' && !m.is_error) state = 'done';
+    else if (existing && existing.state === 'done') state = 'done'; // sticky once done
     cards.set(key, {
       label: label || (existing && existing.label) || key,
       activity: activity || (existing && existing.activity) || 'working…',
-      state: m.type === 'tool_end' && !m.is_error ? 'done' : 'active',
+      state: state,
       ts: Date.now(),
+      trace: trace,
     });
     if (!order.includes(key)) order.push(key);
     if (order.length > 12) {           // bounded: a panel, not a transcript

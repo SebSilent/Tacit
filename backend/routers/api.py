@@ -790,3 +790,49 @@ async def server_restart():
     from .. import extras
     res = extras.restart_server()
     return res if res.get("ok") else _fail(res.get("error") or "could not restart")
+
+
+# ═══════════════════════════ AUTOUPDATER ═══════════════════════════════════
+@router.get("/api/autoupdater/status")
+async def autoupdater_status():
+    """Get autoupdater status: enabled, last check, last commit, etc."""
+    from .. import autoupdater
+    return _ok(**autoupdater.get_status())
+
+
+@router.post("/api/autoupdater/check")
+async def autoupdater_check(request: Request):
+    """Check git remote for available updates."""
+    from .. import autoupdater
+    res = await autoupdater.check_for_updates()
+    return res if res.get("ok") else _fail(res.get("error") or "check failed")
+
+
+@router.post("/api/autoupdater/pull")
+async def autoupdater_pull(request: Request):
+    """Pull updates from git remote."""
+    from .. import autoupdater
+    body = await request.json()
+    dry_run = bool(body.get("dry_run"))
+    res = await autoupdater.pull_updates(dry_run=dry_run)
+    return res if res.get("ok") else _fail(res.get("error") or "pull failed")
+
+
+@router.post("/api/autoupdater/toggle")
+async def autoupdater_toggle(request: Request):
+    """Enable or disable the autoupdater."""
+    from .. import autoupdater
+    body = await request.json()
+    enabled = bool(body.get("enabled"))
+    res = autoupdater.set_enabled(enabled)
+    return res if res.get("ok") else _fail(res.get("error") or "toggle failed")
+
+
+@router.post("/api/autoupdater/interval")
+async def autoupdater_interval(request: Request):
+    """Set the auto-check interval in seconds."""
+    from .. import autoupdater
+    body = await request.json()
+    seconds = int(body.get("seconds") or 3600)
+    res = autoupdater.set_check_interval(seconds)
+    return res if res.get("ok") else _fail(res.get("error") or "interval update failed")

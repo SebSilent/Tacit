@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -6,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyzer, config, mcp_registry, store
+from . import analyzer, autoupdater, config, mcp_registry, store
 from .routers import api, capabilities, chat, hosting, mcp, memory, plugins, profiles, vcs
 
 
@@ -24,7 +25,20 @@ async def lifespan(app: FastAPI):
         analyzer.worker.start()
     except Exception:
         pass
+    # Start autoupdater background task
+    autoupdater_task = None
+    try:
+        autoupdater_task = asyncio.create_task(autoupdater_background())
+    except Exception:
+        pass
     yield
+    # Stop autoupdater background task
+    if autoupdater_task:
+        autoupdater_task.cancel()
+        try:
+            await autoupdater_task
+        except Exception:
+            pass
     try:
         analyzer.worker.stop()
     except Exception:
@@ -38,6 +52,19 @@ async def lifespan(app: FastAPI):
             config.PID_FILE.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+async def autoupdater_background():
+    """Background task that periodically checks for updates."""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check every minute if a check is due
+            await autoupdater.auto_check_if_needed()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            # Log but don't crash the background task
+            pass
 
 
 app = FastAPI(title="Tacit", lifespan=lifespan)
