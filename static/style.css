@@ -1307,13 +1307,14 @@ svg { display: block; }
 }
 .sf-del:hover { color: #d86a6a; }
 
-/* ── delegation panel (left) ──────────────────────────────────────── */
-/* Mirrors the assistant panel's flex-sibling layout, but on the left: the
-   border faces the sidebar, not the main column. */
+/* ── delegation panel (right of main, left of assistant) ────────────── */
+/* A normal flex sibling of the sidebar, main, and assistant columns. */
 .dg-panel {
-  order: -1;                 /* first among the flex siblings */
-  border-left: 0; border-right: 1px solid var(--line);
+  flex: 0 0 auto; width: 0; height: 100vh; overflow: hidden;
+  background: var(--bg-2); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; transition: width .16s ease;
 }
+.dg-panel.open { width: min(400px, 40vw); }
 .dg-card {
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 7px 9px; background: var(--bg-3);

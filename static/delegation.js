@@ -8,6 +8,10 @@
  * missing view. It rides the same socket as everything else (no second
  * connection), and it is fed by the `delegation_activity` events the chat router
  * forwards for sub-agent and research tool calls.
+ *
+ * The panel also opens itself when a delegation launches: the transcript shows a
+ * `task` or `research` tool card and then nothing until the report lands, so the
+ * one view of the work in flight opens on its own instead of waiting to be found.
  */
 (function () {
   'use strict';
@@ -113,6 +117,11 @@
 
   // ── the socket's delegation_activity events ────────────────────────────
   function handle(m) {
+    // A card arriving while the panel is closed means a delegation is running
+    // that the person cannot see. This is the backstop for the tool_start hook
+    // below: it catches a socket that reconnected mid-turn, a page that loaded
+    // after the launch, and any path that never produced a transcript card.
+    if (!isOpen()) openPanel();
     // One card per sub-agent call id; research aspects key on their label.
     const key = m.research ? ('research:' + (m.aspect || 'general'))
                            : ('call:' + (m.id || m.name || 'x'));
@@ -142,6 +151,30 @@
     cards.clear();
     order = [];
     renderMessages();
+  }
+
+  // ── auto-open on launch ────────────────────────────────────────────────
+  function isOpen() {
+    const panel = $('#dgPanel');
+    return !!(panel && panel.classList.contains('open'));
+  }
+
+  function openPanel() {
+    const panel = $('#dgPanel');
+    if (!panel || panel.classList.contains('open')) return;
+    panel.classList.add('open');
+    const btn = $('#dgToggle');
+    if (btn) btn.classList.add('on');
+    try { localStorage.setItem('tacit.delegationOpen', '1'); } catch (e) { /* ignore */ }
+    load();
+  }
+
+  // A delegation launches when the main transcript draws its tool card: the
+  // `task` and `research` tool_start events arrive before any sub-agent has run
+  // a step, so the panel is open before the first delegation_activity lands.
+  // app.js calls this from its tool_start handler.
+  function maybeLaunch(name) {
+    if (name === 'task' || name === 'research') openPanel();
   }
 
   // ── wiring ─────────────────────────────────────────────────────────────
@@ -184,5 +217,5 @@
     }
   } catch (e) { /* ignore */ }
 
-  window.TacitDelegation = { handle, clear, togglePanel, load };
+  window.TacitDelegation = { handle, clear, togglePanel, load, maybeLaunch };
 })();

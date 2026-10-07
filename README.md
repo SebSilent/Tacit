@@ -1014,10 +1014,9 @@ registry, standalone isolation, the memory vault with enforced budgeting, the ba
 analyzer with approval-first proposals, one-time migration from your own export, and the per-session
 Assistant with its own model, thinking level and budgeted read access to the session.
 
-The repository includes an automated test suite: 617 tests, no network and no real model. The suite
-needs no container daemon and no benchmark runner, and Tacit installs neither. One test skips itself
-on a machine where a container runtime is genuinely installed, because the refusal it exists to
-assert cannot happen there.
+The repository includes an automated test suite: no network and no real model. The suite needs no
+container daemon and no benchmark runner, and Tacit installs neither. Run it and see for yourself
+how many there are — the count is whatever the suite says it is, and it is not maintained by hand.
 
 ```sh
 python -m unittest discover -s tests -t .

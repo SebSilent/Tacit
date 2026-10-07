@@ -579,6 +579,12 @@ function handle(m) {
       // a tasks call can add items, so the strip is scheduled on the start
       // as well as refreshed on the end
       if (m.name === 'tasks') scheduleTaskStrip();
+      // A delegation launch is invisible in the transcript — the sub-agent's
+      // calls never reach it — so the panel that shows the work in flight
+      // opens itself here, before the first delegation_activity arrives.
+      if (window.TacitDelegation && window.TacitDelegation.maybeLaunch) {
+        window.TacitDelegation.maybeLaunch(m.name);
+      }
       break;
     case 'tool_end':
       finishToolCard(m);
