@@ -50,9 +50,10 @@ function openOverlay() { overlay.hidden = false; setNote(''); loadPanel(activeTa
 function closeOverlay() { overlay.hidden = true; setNote(''); }
 function activeTab() {
   const t = document.querySelector('.ho-tab.active');
-  return t ? t.dataset.tab : 'providers';
+  return t ? t.dataset.tab : 'general';
 }
 function loadPanel(tab) {
+  if (tab === 'general') return window.TacitPlatform && window.TacitPlatform.render('general');
   if (tab === 'providers') return renderProviders();
   if (tab === 'tools') return renderSkillsAndTools();
   if (tab === 'appearance') return renderAppearancePanel();
@@ -268,12 +269,12 @@ async function renderSkills(container) {
   panel.innerHTML = '<div class="ho-loading">Loading skills…</div>';
   const d = await api('/api/skills');
 
-  const skillCard = (s, deletable) => `
+  const skillCard = (s) => `
     <div class="skill-card" data-name="${esc(s.name)}">
       <div class="skill-head">
         <span class="skill-name">${esc(s.name)}</span>
-        <span class="badge">${esc(s.category || (deletable ? 'user' : 'bundled'))}</span>
-        ${deletable ? '<button class="ho-btn small danger skill-del" title="Delete">Delete</button>' : ''}
+        <span class="badge">${esc(s.kind || 'skill')}</span>
+        <button class="ho-btn small danger skill-del" title="Delete">Delete</button>
       </div>
       <div class="skill-desc">${esc(s.description || s.topic || '')}</div>
       <details class="skill-body"><summary>content</summary><pre>${esc(s.body || '')}</pre></details>
@@ -285,7 +286,7 @@ async function renderSkills(container) {
         <svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
         Add user skill
       </button>
-      <span class="ho-sub">User skills: <code>${esc(d.user_skills_dir || '')}</code></span>
+      <span class="ho-sub">Skills: <code>${esc(d.user_skills_dir || '')}</code> · Knowledge: <code>${esc(d.knowledge_dir || '')}</code></span>
     </div>
     <div class="ho-form" id="skForm" hidden>
       <div class="ho-form-grid">
@@ -301,18 +302,16 @@ async function renderSkills(container) {
       </div>
     </div>`;
 
-  html += `<div class="ho-section">Your skills <span class="ho-count">${(d.user_skills || []).length}</span></div>
+  // One list, not three sections: skills and knowledge differ only by the
+  // `kind` badge, and the old split rendered two usually-empty lists as if
+  // they were features. Every card is deletable — both kinds live under
+  // ~/.tacit, never inside the repo.
+  html += `<div class="ho-section">Skills <span class="ho-count">${(d.skills || []).length}</span></div>
     <div class="skill-grid">`;
-  html += (d.user_skills || []).length
-    ? d.user_skills.map(s => skillCard(s, true)).join('')
-    : '<div class="ho-empty sm">No user skills yet — add one above.</div>';
+  html += (d.skills || []).length
+    ? d.skills.map(s => skillCard(s)).join('')
+    : '<div class="ho-empty sm">No skills yet — add one above.</div>';
   html += '</div>';
-
-  html += `<div class="ho-section">Bundled tool skills <span class="ho-count">${(d.tool_skills || []).length}</span></div>
-    <div class="skill-grid">${(d.tool_skills || []).map(s => skillCard({ ...s, category: 'tool' }, false)).join('') || '<div class="ho-empty sm">none</div>'}</div>`;
-
-  html += `<div class="ho-section">Bundled knowledge <span class="ho-count">${(d.knowledge || []).length}</span></div>
-    <div class="skill-grid">${(d.knowledge || []).map(s => skillCard(s, false)).join('') || '<div class="ho-empty sm">none</div>'}</div>`;
 
   panel.innerHTML = html;
 
@@ -335,105 +334,39 @@ async function renderSkills(container) {
 
 // ═══════════════════════════ TOOLS ══════════════════════════════════
 async function renderTools(container) {
+  // Permissions, Server and Auto-Updater moved to the General tab (item 6):
+  // each setting has one home, and this tab is back to being the tool list.
   const panel = container;
   panel.innerHTML = '<div class="ho-loading">Loading tools…</div>';
-  const d = await api('/api/tools');
-  const vcs = await api('/api/harness/version-control');
-  const dg = await api('/api/harness/deliver-guarantee');
-  const au = await api('/api/autoupdater/status');
+  const [d, srv] = await Promise.all([
+    api('/api/tools'),
+    api('/api/server/status').catch(() => ({ mcp_servers: 0 })),
+  ]);
+  const mcpLive = !!(srv || {}).mcp_servers;
 
-  const toolRow = t => `
-    <div class="tool-row ${t.enabled ? '' : 'off'}" data-name="${esc(t.name)}">
+  const toolRow = t => {
+    // The four MCP helpers are gated on a configured server: with none, the
+    // toggle would lie (it does nothing the model can see), so the row says
+    // so instead of offering a switch.
+    const gated = t.name.startsWith('mcp_') && !mcpLive;
+    return `
+    <div class="tool-row ${t.enabled && !gated ? '' : 'off'}" data-name="${esc(t.name)}">
       <span class="tool-name">${esc(t.name)}</span>
-      <span class="tool-desc">${esc(t.description || '')}</span>
-      <button class="tgl ${t.enabled ? 'on' : ''}" data-act="toggle" role="switch" aria-checked="${t.enabled}" title="${t.enabled ? 'Disable' : 'Enable'}">
-        <span class="tgl-knob"></span>
-      </button>
+      <span class="tool-desc">${esc(t.description || '')}${gated
+        ? ' <b>Hidden from the agent — no MCP server configured.</b> Add one in the MCP tab and this turns on by itself.'
+        : ''}</span>
+      ${gated
+        ? '<span class="badge">gated</span>'
+        : `<button class="tgl ${t.enabled ? 'on' : ''}" data-act="toggle" role="switch" aria-checked="${t.enabled}" title="${t.enabled ? 'Disable' : 'Enable'}">
+             <span class="tgl-knob"></span>
+           </button>`}
     </div>`;
+  };
 
-  const on = !!vcs.allow_version_control;
   panel.innerHTML = `
     <div class="ho-toolbar"><span class="ho-sub">${esc(d.note || '')}</span></div>
-    <div class="ho-section">Permissions</div>
-    <div class="tool-row ${on ? '' : 'off'}" data-perm="version-control">
-      <span class="tool-name">Version control</span>
-      <span class="tool-desc">Off by default. Left to itself a model commits and pushes far more than
-        anyone asked for. The Git panel is the deliberate route; turn this on to let the agent run
-        git commands on its own.</span>
-      <button class="tgl ${on ? 'on' : ''}" data-act="toggle-vcs" role="switch" aria-checked="${on}" title="${on ? 'Disable' : 'Enable'}">
-        <span class="tgl-knob"></span>
-      </button>
-    </div>
-    <div class="tool-row ${dg.deliver_guarantee ? '' : 'off'}" data-perm="deliver-guarantee">
-      <span class="tool-name">Delivery guarantee</span>
-      <span class="tool-desc">On by default. When a turn would end without the file the task names,
-        the harness orders it written, makes it run, and spends the last rounds landing the
-        artifact instead of dying with one in hand. Off is the raw mode: no forcing, no
-        verification rounds, and the turn ends when the agent ends it.</span>
-      <button class="tgl ${dg.deliver_guarantee ? 'on' : ''}" data-act="toggle-dg" role="switch" aria-checked="${dg.deliver_guarantee}" title="${dg.deliver_guarantee ? 'Disable' : 'Enable'}">
-        <span class="tgl-knob"></span>
-      </button>
-    </div>
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>
-    <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>
-    <div class="ho-section">Server</div>
-    <div class="tool-row" data-perm="restart">
-      <span class="tool-name">Restart</span>
-      <span class="tool-desc">Stop this process and start a fresh one on the same port. The browser
-        reconnects on its own; a turn that is running is cut off.</span>
-      <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
-    </div>
-    <div class="ho-section">Auto-Updater</div>
-    <div class="tool-row ${au.enabled ? '' : 'off'}" data-perm="autoupdater-enabled">
-      <span class="tool-name">Auto-updater</span>
-      <span class="tool-desc">On by default. Checks GitHub for new commits every hour and can pull
-        changed files automatically. Tacit has no releases — every push is an update.</span>
-      <button class="tgl ${au.enabled ? 'on' : ''}" data-act="toggle-au" role="switch" aria-checked="${au.enabled}" title="${au.enabled ? 'Disable' : 'Enable'}">
-        <span class="tgl-knob"></span>
-      </button>
-    </div>
-    <div class="tool-row" data-perm="autoupdater-check" id="auCheckRow">
-      <span class="tool-name">Check for updates</span>
-      <span class="tool-desc">Manually check GitHub for new commits and changed files.</span>
-      <button class="ho-btn small" id="auCheckBtn">Check now</button>
-    </div>
-    <div class="tool-row" data-perm="autoupdater-pull" id="auPullRow" hidden>
-      <span class="tool-name">Pull updates</span>
-      <span class="tool-desc">Download and apply the available updates from GitHub.</span>
-      <button class="ho-btn small primary" id="auPullBtn">Pull updates</button>
-    </div>
-    <div class="tool-row" data-perm="autoupdater-status" id="auStatusRow" hidden>
-      <span class="tool-name">Status</span>
-      <span class="tool-desc" id="auStatusText"></span>
-      <span class="tool-spacer"></span>
-    </div>`;
-
-  // Update status display
-  updateAutoupdaterStatus(au);
-
-  panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {
-    const btn = e.target.closest('[data-act="toggle-vcs"]');
-    const enable = !btn.classList.contains('on');
-    const r = await post('/api/harness/version-control', { allow: enable });
-    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
-    btn.classList.toggle('on', enable);
-    btn.setAttribute('aria-checked', enable);
-    btn.closest('.tool-row').classList.toggle('off', !enable);
-    setNote(enable ? 'the agent may now run version-control commands'
-                   : 'version control is off for the agent');
-  });
-
-  panel.querySelector('[data-act="toggle-dg"]').addEventListener('click', async e => {
-    const btn = e.target.closest('[data-act="toggle-dg"]');
-    const enable = !btn.classList.contains('on');
-    const r = await post('/api/harness/deliver-guarantee', { deliver_guarantee: enable });
-    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
-    btn.classList.toggle('on', enable);
-    btn.setAttribute('aria-checked', enable);
-    btn.closest('.tool-row').classList.toggle('off', !enable);
-    setNote(enable ? 'the delivery guarantee is on: the turn lands the file it names'
-                   : 'the delivery guarantee is off: the turn ends when the agent ends it');
-  });
+    <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>`;
 
   panel.querySelectorAll('.tool-row [data-act="toggle"]').forEach(btn => {
     btn.addEventListener('click', async e => {
@@ -450,92 +383,6 @@ async function renderTools(container) {
     });
   });
 
-  panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
-    if (!confirm('Restart the Tacit server? A turn that is running is cut off; ' +
-        'this page reconnects on its own.')) return;
-    setNote('restarting the server…');
-    const r = await post('/api/server/restart', {});
-    if (!r.ok) { setNote(r.error || 'restart failed', true); return; }
-    setNote('server is restarting — reconnecting…');
-  });
-
-  // Autoupdater handlers
-  panel.querySelector('[data-act="toggle-au"]').addEventListener('click', async e => {
-    const btn = e.target.closest('[data-act="toggle-au"]');
-    const enable = !btn.classList.contains('on');
-    const r = await post('/api/autoupdater/toggle', { enabled: enable });
-    if (!r.ok) { setNote(r.error || 'Could not change that setting', true); return; }
-    btn.classList.toggle('on', enable);
-    btn.setAttribute('aria-checked', enable);
-    btn.closest('.tool-row').classList.toggle('off', !enable);
-    setNote(enable ? 'auto-updater enabled' : 'auto-updater disabled');
-  });
-
-  panel.querySelector('#auCheckBtn').addEventListener('click', async () => {
-    const btn = panel.querySelector('#auCheckBtn');
-    const pullRow = panel.querySelector('#auPullRow');
-    const statusRow = panel.querySelector('#auStatusRow');
-    const statusText = panel.querySelector('#auStatusText');
-    btn.disabled = true;
-    btn.textContent = 'Checking…';
-    setNote('checking for updates…');
-    const r = await post('/api/autoupdater/check', {});
-    btn.disabled = false;
-    btn.textContent = 'Check now';
-    if (!r.ok) { setNote(r.error || 'Check failed', true); return; }
-    if (r.update_available) {
-      setNote(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.commit_message}`);
-      pullRow.hidden = false;
-      statusRow.hidden = false;
-      statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — commit ${r.latest_commit.slice(0, 7)}`;
-    } else {
-      setNote('Already up to date');
-      pullRow.hidden = true;
-      statusRow.hidden = false;
-      statusText.textContent = `Up to date — commit ${r.latest_commit.slice(0, 7)}`;
-    }
-  });
-
-  panel.querySelector('#auPullBtn').addEventListener('click', async () => {
-    const btn = panel.querySelector('#auPullBtn');
-    const pullRow = panel.querySelector('#auPullRow');
-    const statusRow = panel.querySelector('#auStatusRow');
-    const statusText = panel.querySelector('#auStatusText');
-    if (!confirm('Pull updates from GitHub? This will overwrite local changes to tracked files.')) return;
-    btn.disabled = true;
-    btn.textContent = 'Pulling…';
-    setNote('pulling updates…');
-    const r = await post('/api/autoupdater/pull', {});
-    btn.disabled = false;
-    btn.textContent = 'Pull updates';
-    if (!r.ok) { setNote(r.error || 'Pull failed', true); return; }
-    if (r.updated) {
-      setNote(r.message + ' — restart the server to apply');
-      pullRow.hidden = true;
-      statusRow.hidden = false;
-      statusText.textContent = `Updated to ${r.commit.slice(0, 7)} — restart to apply`;
-    } else {
-      setNote(r.message);
-      pullRow.hidden = true;
-      statusRow.hidden = false;
-      statusText.textContent = `Up to date — commit ${r.commit.slice(0, 7)}`;
-    }
-  });
-}
-
-function updateAutoupdaterStatus(au) {
-  const pullRow = document.querySelector('#auPullRow');
-  const statusRow = document.querySelector('#auStatusRow');
-  const statusText = document.querySelector('#auStatusText');
-  if (!pullRow || !statusRow || !statusText) return;
-  if (au.last_commit) {
-    statusRow.hidden = false;
-    const lastCheck = au.last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
-    const lastUpdate = au.last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
-    statusText.textContent = `Last check: ${lastCheck} · Last update: ${lastUpdate} · Commit: ${au.last_commit.slice(0, 7)}`;
-  } else {
-    statusRow.hidden = true;
-  }
 }
 
 // ── keep the sidebar model dropdown in sync after registry edits ────

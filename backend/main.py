@@ -1,5 +1,6 @@
 import os
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyzer, autoupdater, config, mcp_registry, store
+from . import analyzer, autoupdater, config, mcp_registry, proctools, store
 from .routers import api, capabilities, chat, hosting, mcp, memory, plugins, profiles, vcs
 
 
@@ -17,6 +18,20 @@ async def lifespan(app: FastAPI):
     config.load_env()
     try:
         config.PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
+    # Orphan sweep, before anything else starts: children of a previous crash
+    # (turn workers, watchers, a replaced server) are identified by their argv
+    # marker — never by the exe name — and killed only when the current command
+    # line still proves they are ours. This process registers itself so
+    # /api/processes shows the server too.
+    try:
+        proctools.sweep()
+    except Exception:
+        pass
+    try:
+        proctools.register(proctools.ROLE_SERVER, os.getpid(),
+                           cmdline=" ".join(sys.argv))
     except Exception:
         pass
     # Reads finished transcripts on a timer and leaves proposals behind. It is
@@ -50,6 +65,12 @@ async def lifespan(app: FastAPI):
     try:
         if config.PID_FILE.read_text(encoding="utf-8").strip() == str(os.getpid()):
             config.PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    # The server's own registry row comes off at shutdown, so the next boot's
+    # sweep does not meet a dead pid wearing this boot's marker.
+    try:
+        proctools.unregister(os.getpid())
     except Exception:
         pass
 

@@ -35,7 +35,10 @@ import threading
 import time
 from pathlib import Path
 
-from . import config
+from . import config, proctools
+
+# Project root where the backend package lives
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # How long the parent waits for a clean cooperative exit before killing the
 # tree. One salvage round is bounded by the same reasoning as guidance's
@@ -90,10 +93,18 @@ class TurnWorker:
             "--max-steps", str(max_steps or 0),
         ]
         try:
-            self.proc = subprocess.Popen(
-                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", bufsize=1,
-                # Its own group, so the tree kill reaches everything it started.
+            # Spawned through proctools: the `tacit-turn-worker` argv marker
+            # makes the process identifiable on a machine full of python.exe,
+            # the job object takes it down if this parent dies hard, and the
+            # registry row is what /api/processes shows and the startup sweep
+            # sweeps. The tree-kill flags stay: the job contains orphans, the
+            # group is what the cooperative kill reaches first.
+            self.proc = proctools.spawn(
+                proctools.ROLE_WORKER, argv, session=session,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                cwd=str(PROJECT_ROOT),
+                env=os.environ.copy(),
                 creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
                                if os.name == "nt" else 0),
                 **({"start_new_session": True} if os.name != "nt" else {}))
@@ -158,6 +169,15 @@ class TurnWorker:
                 self._trace[:] = list(ev.get("steps") or [])
                 continue
             yield ev
+        # If we reach here, stdout closed (worker exited).
+        # Check if worker crashed vs clean exit.
+        if proc.poll() is not None:
+            proctools.reap(proc)
+            exit_code = proc.returncode
+            if exit_code != 0:
+                yield {"type": "error", "message": f"turn worker exited with code {exit_code}"}
+            else:
+                yield {"type": "error", "message": "turn worker exited unexpectedly (clean exit but no done event)"}
 
     # ── steering ──────────────────────────────────────────────────────────
     def steer(self, text: str) -> bool:
@@ -188,6 +208,8 @@ class TurnWorker:
         """
         proc = self.proc
         if proc is None or proc.poll() is not None:
+            if proc is not None:
+                proctools.reap(proc)
             return {"ok": True, "how": "already-exited"}
         with self._lock:
             if not self._cancel_sent:
@@ -199,10 +221,12 @@ class TurnWorker:
                     pass
         try:
             proc.wait(timeout=grace)
+            proctools.reap(proc)
             return {"ok": True, "how": "cancelled"}
         except subprocess.TimeoutExpired:
             pass
         self.kill()
+        proctools.reap(proc)
         return {"ok": True, "how": "killed"}
 
     def kill(self) -> None:
@@ -235,6 +259,18 @@ def spawn(sid: str) -> TurnWorker:
 # ── the worker process itself ─────────────────────────────────────────────
 def _run_worker(argv: list[str]) -> int:
     """The subprocess entry: run one turn, stream events as JSON lines."""
+    # Windows pipes default to cp1252, not UTF-8. The worker writes model
+    # output — reasoning full of em dashes and curly quotes — straight onto
+    # this pipe, and the parent reads it as UTF-8, so every non-ASCII
+    # character came back as a decode error that killed the turn mid-thought
+    # on ANY model, reading exactly like an abort. Reconfigure both ends of
+    # this process to UTF-8 before a single event is written.
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8",
+                                 errors="replace", line_buffering=True)
+
     from . import agent, audit, config
     from .ai import prompts
 
@@ -295,6 +331,7 @@ def _run_worker(argv: list[str]) -> int:
 
     out = sys.stdout
     started = time.time()
+    crashed = {"flag": False}
     trace: list[dict] = []
     try:
         for ev in agent.run_turn(messages, project=project, ref=ref, chat=chat,
@@ -319,18 +356,21 @@ def _run_worker(argv: list[str]) -> int:
                 out.flush()
             if cancelled["flag"]:
                 break
-    except Exception as exc:  # noqa: BLE001
-        out.write(json.dumps({"type": "error", "message": str(exc)[:400]}) + "\n")
+    except BaseException as exc:  # noqa: BLE001
+        # Catch BaseException to handle KeyboardInterrupt, SystemExit, etc.
+        out.write(json.dumps({"type": "error", "message": f"worker crashed: {exc}"[:400]}) + "\n")
         out.flush()
+        crashed["flag"] = True
     finally:
         # The trace goes back even on a clean cancel. A hard kill cannot
-        # reach this finally — which is why the parent also accepts the
+        # reach the finally — which is why the parent also accepts the
         # cumulative trace after every step (see the per-step event below),
         # so a killed turn keeps what streamed to the interface.
         out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
         out.flush()
         audit.record("turn_worker_exit", session=session, backend="turn_worker",
-                     status="ok", wall_s=round(time.time() - started, 1))
+                     status="error" if crashed["flag"] else "ok",
+                     wall_s=round(time.time() - started, 1))
     return 0
 
 

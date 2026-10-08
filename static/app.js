@@ -390,7 +390,14 @@ function connectSession(s) {
   if (!s) return;
   const existing = sockets.get(s.id);
   if (existing && existing.readyState === 1) {
-    if (s.id === activeId) ws = existing;
+    if (s.id === activeId) {
+      ws = existing;
+      // The state verifier, ask side: a socket that stayed open while you
+      // were in another session never re-sends hello, so the only way to
+      // learn whether a turn is running here is to ask. The server answers
+      // from the session registry — the same truth the indicator dots read.
+      try { existing.send(JSON.stringify({ type: 'get_state' })); } catch (e) {}
+    }
     return;                                        // transport already live
   }
   if (existing) { try { existing.onclose = null; existing.close(); } catch (e) {} sockets.delete(s.id); }
@@ -559,6 +566,10 @@ function handle(m) {
         flushPending();
       }
       sessionStarting = !!m.starting;
+      // The verifier's answer on a fresh socket: hello carries the session's
+      // live state, and a turn that survived a reconnect (server restart, or
+      // the socket being reaped and reopened) must re-arm the composer.
+      if (m.busy && !streaming) resumeLiveStream();
       if (m.usage) {
         const s = cur();
         if (s) s.usage = m.usage;
@@ -580,6 +591,17 @@ function handle(m) {
           if (m.allowed_tools != null) s.allowed_tools = m.allowed_tools;
           if (m.excluded_tools != null) s.excluded_tools = m.excluded_tools;
           if (m.permission_mode != null) s.permission_mode = m.permission_mode;
+        }
+      }
+      // The state verifier, client side: a busy delta is the session's live
+      // state, not a suggestion. It re-arms the composer when a turn is
+      // running (switch-back, reconnect), and an explicit not-busy delta
+      // clears it — this is the "off" that used to be invisible.
+      if (m.busy != null) {
+        if (m.busy) {
+          if (!streaming) resumeLiveStream();
+        } else {
+          endStreamQuiet();
         }
       }
       if (m.busy && !m.starting && !streaming) resumeLiveStream();
@@ -1819,13 +1841,19 @@ async function renderThinkSelect() {
   const ref = (s && s.model) || info.default || '';
   let levels = thinkCache[ref];
   if (!levels) {
+    // Render at once with the honest fallback; probing runs server-side in a
+    // background thread, so a re-fetch below picks the real ladder up when it
+    // lands. Waiting here froze the picker for as long as the probe ran.
+    levels = ['default'];
     try {
       const r = await fetch('/api/harness/thinking?ensure=1&ref=' + encodeURIComponent(ref));
       const d = await r.json();
-      levels = (d.thinking_levels && d.thinking_levels.length) ? d.thinking_levels : ['default'];
-    } catch (e) {
-      levels = ['default'];
-    }
+      if (d.thinking_levels && d.thinking_levels.length) levels = d.thinking_levels;
+      if (d.detected) {
+        // the probe was still running; ask again shortly for its result
+        setTimeout(() => { delete thinkCache[ref]; if (cur() && ((cur().model) || info.default || '') === ref) renderThinkSelect(); }, 4000);
+      }
+    } catch (e) { /* keep the fallback */ }
     thinkCache[ref] = levels;
   }
   if (thinkSelect.dataset.ref !== ref || thinkSelect.options.length !== levels.length) {

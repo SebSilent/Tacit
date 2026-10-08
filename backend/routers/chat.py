@@ -413,6 +413,11 @@ async def ws_session(ws: WebSocket, sid: str):
         running["starting"] = True
         running["stop"] = threading.Event()
         session_state.begin(rec["id"], "turn")
+        # The state verifier, push side: every other open view of this
+        # session (another tab, or this one after a switch-away) learns the
+        # session went busy the moment it did, not on its next poll.
+        await ws.send_text(_json({"type": "state_delta", "sid": rec["id"],
+                                  "busy": True, "starting": True}))
         # Stage 1b: this connection may be rebound to a fresh session while
         # this turn is still running (new_session / plan_implement are legal
         # at any time now). Everything from here to the final save reads
@@ -606,6 +611,15 @@ async def ws_session(ws: WebSocket, sid: str):
         t.start()
         await pump(queue)
         running["busy"] = False
+        # Push side of the state verifier, turn end: the views of this
+        # session stop showing "working" the moment the turn ends. The socket
+        # may already be gone (the turn outlived its view); that is not an
+        # error, just nobody left to tell.
+        try:
+            await ws.send_text(_json({"type": "state_delta", "sid": rec["id"],
+                                      "busy": False, "starting": False}))
+        except Exception:
+            pass
         # session_state.end() is the worker's own finally; this only covers the
         # case where the worker thread never started.
         if not running["thread"].is_alive():

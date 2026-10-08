@@ -9,9 +9,11 @@ code so the next refactor cannot quietly drop it.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -20,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import (agent, assistant, audit, config, deps, extras, guidance,  # noqa: E402
                      mcp_registry, metrics, model_settings, plugin_manager,
-                     project_context, tokens, turn_worker)
+                     proctools, project_context, tokens, turn_worker)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
 from backend.routers import chat  # noqa: E402
@@ -32,10 +34,13 @@ class Isolated(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {key: getattr(config, key) for key in self._keys}
         self._home = config.HOME
+        # Use addCleanup to guarantee restoration even if setUp fails mid-way
+        self.addCleanup(self._restore_config)
         config.HOME = home
         for key in self._keys:
             target = home / Path(self._orig[key]).name
@@ -43,11 +48,10 @@ class Isolated(unittest.TestCase):
             if key.endswith("_DIR"):
                 target.mkdir(parents=True, exist_ok=True)
 
-    def tearDown(self):
+    def _restore_config(self):
         config.HOME = self._home
         for key, value in self._orig.items():
             setattr(config, key, value)
-        self._tmp.cleanup()
 
 
 class ProjectFixture(Isolated):
@@ -1825,6 +1829,112 @@ class TestSessionIsolationClaims(Isolated):
                     if src.startswith("s._new = true", i)
                     or src.startswith("_new: true", i)]
         self.assertTrue(sets_new, "the New-session path must still set _new")
+
+
+# ── 15. every child is identifiable and cannot become an unnoticed orphan ──
+class TestProcessIdentity(Isolated):
+    """Stage 6.5: identity at spawn, job containment, the orphan sweep.
+
+    The problem this locks: during a stuck run, ~23 python.exe processes sat
+    unattributable in the task list and none could be killed safely, because
+    the user runs other Python projects on this machine. Tacit's children now
+    carry a marker in argv, TACIT_ROLE/TACIT_SESSION_ID in the environment,
+    a registry row, and (on Windows) a kill-on-close job object.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The registry is module-global; tests must not see each other's rows.
+        proctools._ROWS.clear()
+        self.addCleanup(proctools._ROWS.clear)
+
+    def test_a_spawned_child_is_registered_and_marked(self):
+        proc = proctools.spawn(
+            proctools.ROLE_WORKER, [sys.executable, "-c", "print('hi')"],
+            session="s-1", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True)
+        self.addCleanup(lambda: (proc.poll() is None) and proc.kill())
+        rows = proctools.rows()
+        self.assertEqual(len(rows), 1, "one spawn, one registry row")
+        row = rows[0]
+        self.assertEqual(row["pid"], proc.pid)
+        self.assertEqual(row["role"], "tacit-turn-worker")
+        self.assertEqual(row["session"], "s-1")
+        self.assertEqual(row["cmdline"].count("tacit-turn-worker"), 1,
+                         "the marker appears exactly once")
+        # The regression this pins: the marker as the FIRST argument after the
+        # interpreter — there Python reads it as a script file to run, and the
+        # worker died instantly with "can't open file" (measured: 7 suite
+        # failures, zero events). It must ride after the interpreter spec
+        # (`-m module` / `-c code`), never in the script position.
+        self.assertFalse(
+            row["cmdline"].startswith(sys.executable + " tacit-turn-worker"),
+            f"marker must not sit in the script position: {row['cmdline']}")
+        proc.wait(timeout=30)
+        proctools.reap(proc)
+        self.assertEqual(proctools.rows(), [], "a reaped child leaves no row")
+
+    def test_the_job_object_takes_the_child_down_with_the_parent(self):
+        if os.name != "nt":
+            self.skipTest("job objects are a Windows mechanism")
+        # A child that would otherwise outlive a hard kill: it ignores stdin
+        # and sleeps. The job's kill-on-close is what reaches it when the
+        # parent dies without a finally.
+        proc = proctools.spawn(
+            proctools.ROLE_WORKER, [sys.executable, "-c", "import time; time.sleep(120)"],
+            session="s-2", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.assertTrue(proctools._pid_alive(proc.pid))
+        # Simulate the parent dying hard: close the job handle, which is what
+        # the kernel does when the owning process exits by any means.
+        job = getattr(proc, "_tacit_job", None)
+        self.assertTrue(job, "the child must be in a job object")
+        proctools._kernel32.CloseHandle(job)
+        proc._tacit_job = None
+        deadline = time.time() + 15
+        while proctools._pid_alive(proc.pid) and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertFalse(proctools._pid_alive(proc.pid),
+                         "kill-on-close must take the child down")
+
+    def test_the_sweep_kills_a_stale_marked_pid_and_spares_an_unmarked_one(self):
+        # A long-running dummy with NO marker: the sweep must leave it alone
+        # even though its pid is alive and in the stored registry.
+        dummy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (dummy.poll() is None) and dummy.kill())
+        # A stale row from a "previous crash": a marked child that is not
+        # running, plus the unmarked dummy that is.
+        stale_marked = {"pid": 0, "role": "tacit-turn-worker", "session": "old",
+                        "started": 0.0, "cmdline": "python tacit-turn-worker -m x"}
+        orig_persist = proctools._persist
+        proctools._persist = lambda: None  # keep the file from fighting the test
+        self.addCleanup(setattr, proctools, "_persist", orig_persist)
+        config.write_json(config.HOME / proctools.REGISTRY_FILE,
+                          {"rows": [dict(stale_marked, pid=dummy.pid),
+                                    dict(stale_marked, pid=999999)]})
+        res = proctools.sweep()
+        self.assertEqual([r["pid"] for r in res["killed"]], [],
+                         "an unmarked process must never be killed, whatever its pid")
+        self.assertTrue(proctools._pid_alive(dummy.pid),
+                         "the unmarked dummy must survive the sweep")
+        self.assertIn(999999, [r["pid"] for r in res["dropped"]],
+                      "a dead marked pid is bookkeeping, not a kill")
+        # Now a row that IS provably ours: a real marked child, registered in
+        # a previous life (absent from the in-memory rows), still running.
+        marked = proctools.spawn(
+            proctools.ROLE_WORKER, [sys.executable, "-c", "import time; time.sleep(120)"],
+            session="s-3", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (marked.poll() is None) and marked.kill())
+        proctools._ROWS.clear()
+        config.write_json(config.HOME / proctools.REGISTRY_FILE,
+                          {"rows": [dict(stale_marked, pid=marked.pid)]})
+        res = proctools.sweep()
+        self.assertIn(marked.pid, [r["pid"] for r in res["killed"]],
+                      "a live marked orphan must be killed by the sweep")
+        deadline = time.time() + 15
+        while proctools._pid_alive(marked.pid) and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertFalse(proctools._pid_alive(marked.pid))
 
 
 if __name__ == "__main__":

@@ -33,23 +33,24 @@ class Isolated(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {key: getattr(config, key) for key in self._keys}
         self._home = config.HOME
+        self.addCleanup(self._restore_config)
         config.HOME = home
         for key in self._keys:
             target = home / Path(self._orig[key]).name
             setattr(config, key, target)
             if key.endswith("_DIR"):
                 target.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(mcp_registry.stop_all)
 
-    def tearDown(self):
-        mcp_registry.stop_all()
+    def _restore_config(self):
         config.HOME = self._home
         for key, value in self._orig.items():
             setattr(config, key, value)
-        self._tmp.cleanup()
 
 
 # ── 1. token estimator ─────────────────────────────────────────────────────

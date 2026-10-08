@@ -23,10 +23,12 @@ from tests.helpers import state_paths  # noqa: E402
 class Isolated(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {k: getattr(config, k) for k in self._keys}
         self._home = config.HOME
+        self.addCleanup(self._restore_config)
         config.HOME = home
         # Redirect *every* path-shaped setting under the home into the temporary
         # directory. Saving them for restore is not enough: a path that is not
@@ -34,11 +36,10 @@ class Isolated(unittest.TestCase):
         for key in self._keys:
             setattr(config, key, home / Path(self._orig[key]).name)
 
-    def tearDown(self):
+    def _restore_config(self):
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)
-        self._tmp.cleanup()
 
     def write_caps(self, data):
         config.write_json(config.CAPABILITIES_FILE, data)
@@ -791,9 +792,18 @@ class TestStandalone(Isolated):
         from backend import deps
         got = deps.check("container-isolation")
         self.assertTrue(got["ok"])
-        self.assertEqual(got["satisfied"], not got["missing"])
-        if not got["satisfied"]:
-            self.assertTrue(got["install_command"], "a blocked feature must say how to unblock it")
+        # One direction always holds: something missing means not satisfied.
+        if got["missing"]:
+            self.assertFalse(got["satisfied"])
+        # The other direction belongs to the probe: binaries present but the
+        # dependency not working (docker.exe present, daemon down) is still
+        # not satisfied — and must say what is wrong and what would fix it.
+        # The old `satisfied == not missing` broke on exactly that third
+        # state, and only on machines where the daemon happened to be down.
+        if not got["satisfied"] and not got["missing"]:
+            self.assertTrue(got["probe"], "a probe failure must explain itself")
+            self.assertTrue(got["install_command"],
+                            "a blocked feature must say how to unblock it")
 
     def test_migration_import_is_manual_only(self):
         from backend import migrate

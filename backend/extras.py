@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config
+from . import config, proctools
 
 BG: dict[str, dict] = {}
 TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
@@ -51,9 +51,15 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
         return "ERROR: empty command"
     work = cwd or project or str(config.USER_HOME)
     try:
-        proc = subprocess.Popen(cmd, shell=True, cwd=work, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                bufsize=1)
+        # Registry-only identity: the user's command must not be corrupted by
+        # an argv marker, so the child is identified by TACIT_ROLE /
+        # TACIT_SESSION_ID in its environment and by its registry row — not by
+        # its command line. The job object still contains it: a crashed parent
+        # takes its bg children down too.
+        proc = proctools.spawn(
+            "tacit-bg", cmd, session=str(session or ""), cwd=work,
+            contain=True, mark=False, shell=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
     except Exception as e:
         return f"ERROR: {e}"
     bid = _new_id()
@@ -421,9 +427,16 @@ def restart_server() -> dict:
     watcher = None
     try:
         with open(config.HOME / RESTART_LOG, "ab") as log:
-            watcher = subprocess.Popen(watcher_cmd, cwd=str(config.ROOT), stdout=log,
-                                       stderr=subprocess.STDOUT, creationflags=flags,
-                                       **kwargs)
+            # Spawned through proctools: the watcher is the one Tacit child
+            # that MUST outlive its parent by design, so it gets no job object
+            # (containment would kill it at restart) but keeps the argv marker
+            # and the registry row — it is identifiable, and the next boot's
+            # sweep reaps it if the restart never came back.
+            watcher = proctools.spawn(
+                proctools.ROLE_WATCHER, watcher_cmd, cwd=str(config.ROOT),
+                contain=False,
+                stdout=log, stderr=subprocess.STDOUT, creationflags=flags,
+                **kwargs)
     except Exception as e:  # noqa: BLE001
         (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
         return {"ok": False, "error": f"could not start the restart watcher: {e}"}
@@ -529,10 +542,23 @@ def restart_watch() -> None:
         return
     log_line(f"port {port} is free; starting {' '.join(cmd)}")
     try:
-        proc = subprocess.Popen(cmd, cwd=str(config.ROOT))
+        # The replacement server is marked (identifiable) but deliberately NOT
+        # job-contained: it must outlive the watcher that started it, and a
+        # kill-on-close job would take it down when the watcher exits. The
+        # registry row is what the next boot's sweep uses to tell a live
+        # server from an orphan.
+        proc = proctools.spawn(proctools.ROLE_SERVER, cmd, cwd=str(config.ROOT),
+                               contain=False)
     except Exception as e:  # noqa: BLE001
         log_line(f"failed to start the server: {e}")
         return
+    # The watcher's registry row comes off IMMEDIATELY, not once the server is
+    # confirmed back: the replacement's own startup sweep runs before its port
+    # is bound, so a watcher still registered at that moment looks exactly like
+    # an orphan from a previous crash — and tree-killing it would kill the
+    # server it just started. The log and the argv marker keep it identifiable
+    # regardless; it exits on its own when the server it babysits exits.
+    proctools.unregister(os.getpid())
     if _port_busy("127.0.0.1", port, COMEBACK_TIMEOUT):
         log_line(f"server is back on port {port} (pid {proc.pid})")
     else:

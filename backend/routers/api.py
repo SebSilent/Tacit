@@ -1,5 +1,7 @@
 import asyncio
 
+import os
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -640,14 +642,25 @@ async def get_thinking(ref: str = "", ensure: int = 0):
     from .. import thinking
 
     chosen = ref or config.prefs().get("model") or config.registry().get("default") or ""
-    found = None
+    detected = False
     if ensure and chosen and not thinking.known(chosen):
-        # Asked for explicitly by the picker the first time a model is shown, so the
-        # cost of measuring is paid once, in the view that needs the answer.
-        found = thinking.ensure(chosen)
+        # ensure() is several synchronous probe requests (up to 120s each against a
+        # dead endpoint). Awaiting it here blocks uvicorn's whole event loop — the
+        # interface, every socket and every poll with it — so it is run in a spare
+        # thread instead: this request answers at once with what is already known,
+        # and the picker re-reads the cache once the probe lands.
+        import threading as _threading
+
+        def _detect():
+            try:
+                thinking.ensure(chosen)
+            except Exception:  # noqa: BLE001
+                pass
+        _threading.Thread(target=_detect, daemon=True).start()
+        detected = True
     return {"default_thinking": config.prefs().get("thinking", "default"),
             "ref": chosen, **_thinking_block(chosen),
-            "detected": bool(found and found.get("ok") and not found.get("cached")),
+            "detected": detected,
             "thinking_info": thinking.meta(chosen)}
 
 
@@ -684,6 +697,9 @@ async def detect_thinking(request: Request):
     if not found.get("ok"):
         return _fail(found.get("error") or "the model did not answer")
     saved = thinking.save(ref, found)
+    # `saved` already carries ref/values/source/graded; passing ref again would
+    # duplicate the keyword and 500 the endpoint.
+    saved.pop("ref", None)
     return _ok(ref=ref, **saved, **_thinking_block(ref))
 
 
@@ -779,10 +795,14 @@ async def skills_list():
                 "body": s.get("body") or "", "kind": s.get("kind") or "skill",
                 "tokens": s.get("tokens") or 0}
 
-    return {"tool_skills": [],
-            "knowledge": [row(s) for s in rows if s.get("kind") == "knowledge"],
-            "user_skills": [row(s) for s in rows if s.get("kind") != "knowledge"],
-            "user_skills_dir": str(config.SKILLS_DIR)}
+    # One list: every skill and knowledge note, distinguished by the `kind`
+    # tag alone. The old shape split them into three lists — one of them
+    # (`tool_skills`) hardcoded empty — and the panel rendered the empties as
+    # sections. Nothing external consumes this shape, so the API and the
+    # panel moved together.
+    return {"skills": [row(s) for s in rows],
+            "user_skills_dir": str(config.SKILLS_DIR),
+            "knowledge_dir": str(config.KNOWLEDGE_DIR)}
 
 
 @router.post("/api/skills/user")
@@ -805,6 +825,29 @@ async def server_restart():
     from .. import extras
     res = extras.restart_server()
     return res if res.get("ok") else _fail(res.get("error") or "could not restart")
+
+
+@router.get("/api/server/status")
+async def server_status():
+    """Where this process listens and which pid it is — the General tab's Server section."""
+    from .. import agent as agent_mod
+    helpers = [t["function"]["name"] for t in agent_mod.tools_for()
+               if t["function"]["name"] in agent_mod.MCP_HELPER_NAMES]
+    return _ok(host=config.HOST, port=config.PORT, pid=os.getpid(),
+               mcp_helpers=len(helpers),
+               mcp_servers=len(mcp_registry.load()["servers"]))
+
+
+@router.get("/api/processes")
+async def processes():
+    """Everything Tacit has spawned and not yet reaped, from the live registry.
+
+    The point is attribution: on a machine full of python.exe, this says which
+    pids are Tacit's, what role each plays, and which session owns it — so a
+    stuck child can be killed deliberately instead of guessed at.
+    """
+    from .. import proctools
+    return _ok(processes=proctools.rows(), pid=os.getpid())
 
 
 # ═══════════════════════════ AUTOUPDATER ═══════════════════════════════════

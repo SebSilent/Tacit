@@ -327,6 +327,8 @@ def stream_chat(messages: list[dict], *, ref: str | None = None, tools=None,
                 yield from _consume_openai_stream(r, model)
     except httpx.HTTPError as e:
         raise EngineError(f"connection error: {e}") from e
+    except EngineError:
+        raise
 
 
 def _consume_openai_stream(r, model: dict | None = None):
@@ -334,44 +336,122 @@ def _consume_openai_stream(r, model: dict | None = None):
     pending: dict[int, dict] = {}
     usage = None
     finish = ""
-    for line in r.iter_lines():
-        if not line:
-            continue
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        chunk = line[5:].strip()
-        if chunk == "[DONE]":
-            continue
-        try:
-            ev = json.loads(chunk)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("usage"):
-            usage = ev["usage"]
-        choices = ev.get("choices") or []
-        if not choices:
-            continue
-        choice = choices[0]
-        if choice.get("finish_reason"):
-            finish = choice["finish_reason"]
-        delta = choice.get("delta") or {}
-        if isinstance(delta.get("content"), str) and delta["content"]:
-            yield {"type": "text", "delta": delta["content"]}
-        for k in REASON_KEYS:
-            if isinstance(delta.get(k), str) and delta[k]:
-                yield {"type": "reason", "delta": delta[k]}
-                break
-        for tc in delta.get("tool_calls") or []:
-            idx = tc.get("index", 0)
-            cur = pending.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-            if tc.get("id"):
-                cur["id"] = tc["id"]
-            fn = tc.get("function") or {}
-            if fn.get("name"):
-                cur["name"] += fn["name"]
-            if fn.get("arguments"):
-                cur["arguments"] += fn["arguments"]
+    
+    # Use iter_raw for real httpx responses (handles invalid UTF-8 gracefully),
+    # fall back to iter_lines for test fake responses.
+    use_raw = hasattr(r, "iter_raw")
+    
+    if use_raw:
+        # Real httpx response: read decompressed bytes and decode with error
+        # handling. iter_bytes (not iter_raw) so content-encoding is honoured —
+        # a gzip response iterated raw accumulates compressed bytes and only
+        # becomes parseable at the very end, which reads as a stream that
+        # "appears at the end only".
+        buffer = b""
+        for chunk in r.iter_bytes():
+            buffer += chunk
+            while b"\n" in buffer:
+                line_bytes, buffer = buffer.split(b"\n", 1)
+                try:
+                    line = line_bytes.decode("utf-8", "replace").strip()
+                except Exception:
+                    continue
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    continue
+                try:
+                    ev = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("usage"):
+                    usage = ev["usage"]
+                choices = ev.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if choice.get("finish_reason"):
+                    finish = choice["finish_reason"]
+                delta = choice.get("delta") or {}
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    try:
+                        yield {"type": "text", "delta": content}
+                    except UnicodeError:
+                        yield {"type": "text", "delta": content.encode("utf-8", "replace").decode("utf-8")}
+                for k in REASON_KEYS:
+                    val = delta.get(k)
+                    if isinstance(val, str) and val:
+                        try:
+                            yield {"type": "reason", "delta": val}
+                        except UnicodeError:
+                            yield {"type": "reason", "delta": val.encode("utf-8", "replace").decode("utf-8")}
+                        break
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    cur = pending.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        cur["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        cur["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        cur["arguments"] += fn["arguments"]
+    else:
+        # Test fake response or other: use iter_lines
+        for line in r.iter_lines():
+            if not line:
+                continue
+            try:
+                line = line.strip()
+            except Exception:
+                continue
+            if not line.startswith("data:"):
+                continue
+            chunk = line[5:].strip()
+            if chunk == "[DONE]":
+                continue
+            try:
+                ev = json.loads(chunk)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("usage"):
+                usage = ev["usage"]
+            choices = ev.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                try:
+                    yield {"type": "text", "delta": content}
+                except UnicodeError:
+                    yield {"type": "text", "delta": content.encode("utf-8", "replace").decode("utf-8")}
+            for k in REASON_KEYS:
+                val = delta.get(k)
+                if isinstance(val, str) and val:
+                    try:
+                        yield {"type": "reason", "delta": val}
+                    except UnicodeError:
+                        yield {"type": "reason", "delta": val.encode("utf-8", "replace").decode("utf-8")}
+                    break
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                cur = pending.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                if tc.get("id"):
+                    cur["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    cur["name"] += fn["name"]
+                if fn.get("arguments"):
+                    cur["arguments"] += fn["arguments"]
+    
     if pending:
         yield {"type": "tool_calls", "calls": [
             {"id": v["id"] or f"call_{i}", "name": v["name"], "arguments": v["arguments"]}

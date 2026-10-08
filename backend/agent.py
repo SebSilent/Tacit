@@ -1742,8 +1742,22 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 elif ev["type"] == "done":
                     model_used = ev.get("model")
                     finish = ev.get("finish") or finish
+                elif ev["type"] == "error":
+                    # Engine yielded an error event (e.g., encoding warning) —
+                    # treat as non-fatal: notify and continue the turn
+                    msg = ev.get("message", "")
+                    if "utf-8" in msg.lower() and "decode" in msg.lower():
+                        yield {"type": "notify", "level": "warn",
+                               "message": "model stream had encoding issues; continuing"}
+                    else:
+                        yield ev
         except engine.EngineError as e:
             yield {"type": "error", "message": str(e)}
+            yield {"type": "done"}
+            return
+        except Exception as e:
+            # Catch any other exception from the engine stream (e.g., UnicodeError)
+            yield {"type": "error", "message": f"engine stream error: {e}"}
             yield {"type": "done"}
             return
 

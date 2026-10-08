@@ -39,10 +39,12 @@ class Isolated(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {k: getattr(config, k) for k in self._keys}
         self._home = config.HOME
+        self.addCleanup(self._restore_config)
         config.HOME = home
         for k in self._keys:
             target = home / Path(self._orig[k]).name
@@ -51,11 +53,10 @@ class Isolated(unittest.TestCase):
                 target.mkdir(parents=True, exist_ok=True)
         self.addCleanup(setattr, providers, "load", providers.load)
 
-    def tearDown(self):
+    def _restore_config(self):
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)
-        self._tmp.cleanup()
 
 
 SANDBOX_PATCHED = ("_container_runtime", "_image_present", "_run_captured",

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import httpx
 
+from .ai import engine
+
 # Order, not equivalence. Names a model does not list are mapped to the nearest one
 # it does, instead of being passed through to resolve as the default.
 RANK = {"none": -1, "off": -1, "minimal": 0, "low": 1, "medium": 2,
@@ -40,7 +42,11 @@ def _ask(ref: str | None, effort: str | None, tokens: int = PROBE_TOKENS) -> dic
     """One non-streaming request with an exact effort name, unclamped.
 
     Deliberately bypasses engine.stream_chat: that applies the clamp this feeds, so
-    probing through it would test the clamp instead of the endpoint.
+    probing through it would test the clamp instead of the endpoint. The effort name
+    travels under the key the provider listens to — some (Ollama's OpenAI-compatible
+    endpoint) ignore reasoning_effort entirely and only read `thinking`, which is the
+    same mapping engine._payload applies, so the probe exercises the name the real
+    call would send rather than a field the endpoint discards.
     """
     model = _entry(ref)
     base = str(model.get("baseUrl") or "").rstrip("/")
@@ -49,10 +55,17 @@ def _ask(ref: str | None, effort: str | None, tokens: int = PROBE_TOKENS) -> dic
     body = {"model": model.get("model"), "max_tokens": tokens,
             "messages": [{"role": "user", "content": PROBE_QUESTION}]}
     if effort:
-        body["reasoning_effort"] = effort
+        key = "thinking" if str(model.get("provider") or "") in engine.THINKING_KEY \
+            else "reasoning_effort"
+        body[key] = effort
     try:
+        # apiKey on a model card may name an environment variable rather than carry
+        # the secret itself; resolving it the way every real call does is what lets
+        # the probe reach gated providers at all.
+        from . import config as _config
+        auth = _config.key_for(model) or model.get("apiKey")
         r = httpx.post(base + "/chat/completions",
-                       headers={"Authorization": f"Bearer {model.get('apiKey')}",
+                       headers={"Authorization": f"Bearer {auth}",
                                 "Content-Type": "application/json"},
                        json=body, timeout=120)
     except Exception as exc:
@@ -284,7 +297,9 @@ def discover(ref: str | None) -> dict:
     probe = base[: -len("/v1")] if base.endswith("/v1") else base
     url = probe.rstrip("/") + "/api/show"
     try:
-        r = httpx.post(url, headers={"Authorization": f"Bearer {model.get('apiKey')}",
+        from . import config as _config
+        auth = _config.key_for(model) or model.get("apiKey")
+        r = httpx.post(url, headers={"Authorization": f"Bearer {auth}",
                                      "Content-Type": "application/json"},
                        json={"model": model.get("model")}, timeout=TIMEOUT)
         if r.status_code != 200:

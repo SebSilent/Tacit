@@ -31,10 +31,12 @@ class TurnWorkerTest(unittest.TestCase):
         self._live = None
         self._worker_mode = None
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {k: getattr(config, k) for k in self._keys}
         self._home = config.HOME
+        self.addCleanup(self._restore_config)
         config.HOME = home
         for k in self._keys:
             target = home / Path(self._orig[k]).name
@@ -44,9 +46,8 @@ class TurnWorkerTest(unittest.TestCase):
         config.ensure_home()
         # A model whose endpoint is unreachable: the turn fails fast and
         # cleanly, which is all the lifecycle tests need.
-        config.save_registry({"default": "p/m", "providers": {
-            "p": {"baseUrl": "http://127.0.0.1:9", "apiKey": "k",
-                  "models": [{"id": "m", "contextWindow": 100000}]}}})
+        reg = {"default": "p/m", "providers": {"p": {"baseUrl": "http://127.0.0.1:9", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}
+        config.save_registry(reg)
         # The suite-wide guard pins the thread path (tests/__init__.py);
         # these tests exercise the process path, so they opt back in — and
         # restore the guard on the way out, or the next suite would spawn
@@ -78,14 +79,10 @@ class TurnWorkerTest(unittest.TestCase):
         else:
             os.environ["TACIT_TURN_WORKER"] = self._worker_mode
 
-    def tearDown(self):
+    def _restore_config(self):
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)
-        # A worker left running holds pipes and a python process; close both.
-        if getattr(self, "_live", None) is not None:
-            self._live.cancel(grace=1.0)
-        self._tmp.cleanup()
 
     def _spawn(self, sid="tw-1"):
         w = turn_worker.spawn(sid)
@@ -154,10 +151,8 @@ class TurnWorkerTest(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
         port = server.server_address[1]
-        config.save_registry({"default": "p/m", "providers": {
-            "p": {"baseUrl": f"http://127.0.0.1:{port}/v1", "apiKey": "k",
-                  "models": [{"id": "m", "contextWindow": 100000}]}}})
-
+        reg = {"default": "p/m", "providers": {"p": {"baseUrl": f"http://127.0.0.1:{port}/v1", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}
+        config.save_registry(reg)
         w, ok = self._spawn()
         self.assertTrue(ok)
         events = list(w.events())

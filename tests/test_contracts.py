@@ -215,9 +215,9 @@ class TestMeta(unittest.TestCase):
 
 
 class TestSkills(unittest.TestCase):
-    """The skills panel reads s.body and a separate knowledge list."""
+    """The skills panel reads one list; the kind tag is the only distinction."""
 
-    def test_split_and_body(self):
+    def test_one_list_with_kind_tags(self):
         orig = skills.load
         skills.load = lambda: [
             {"name": "fmt", "description": "formatting", "path": "/s/fmt.md",
@@ -229,9 +229,26 @@ class TestSkills(unittest.TestCase):
             d = asyncio.run(api.skills_list())
         finally:
             skills.load = orig
-        self.assertEqual([s["name"] for s in d["user_skills"]], ["fmt"])
-        self.assertEqual([s["name"] for s in d["knowledge"]], ["posix"])
-        self.assertEqual(d["user_skills"][0]["body"], "# Steps")
+        self.assertEqual([s["name"] for s in d["skills"]], ["fmt", "posix"])
+        self.assertEqual(d["skills"][0]["kind"], "skill")
+        self.assertEqual(d["skills"][1]["kind"], "knowledge")
+        self.assertEqual(d["skills"][0]["body"], "# Steps")
+        # The old three-list shape (one of it hardcoded empty) is gone, not
+        # deprecated: the API and the panel moved together.
+        for gone in ("tool_skills", "user_skills", "knowledge"):
+            self.assertNotIn(gone, d)
+        self.assertTrue(d["user_skills_dir"])
+        self.assertTrue(d["knowledge_dir"])
+
+
+class TestServerStatus(unittest.TestCase):
+    """The General tab's Server section reads where this process listens."""
+
+    def test_reports_host_port_pid(self):
+        d = asyncio.run(api.server_status())
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["port"], config.PORT)
+        self.assertGreater(d["pid"], 0)
 
 
 class TestAddModel(unittest.TestCase):

@@ -42,7 +42,7 @@
   // that is not plain Tacit is marked advanced and stays hidden until asked for,
   // so the settings panel opens with six tabs rather than ten.
   const TABS = [
-    { id: 'dashboard', label: 'Profile' },
+    { id: 'general', label: 'General' },
     { id: 'capabilities', label: 'Capabilities', advanced: true },
     { id: 'learning', label: 'Learning', advanced: true },
     { id: 'mcp', label: 'MCP', advanced: true },
@@ -125,7 +125,7 @@
   }
 
   function render(tab) {
-    if (tab === 'dashboard') renderDashboard();
+    if (tab === 'general') renderGeneral();
     else if (tab === 'capabilities') renderCapabilities();
     else if (tab === 'learning') renderLearning();
     else if (tab === 'mcp') renderMcp();
@@ -133,15 +133,28 @@
     else if (tab === 'plugins') renderPlugins();
   }
 
-  // ── Tokens dashboard ───────────────────────────────────────────────────
-  // The Profile tab is the selector and nothing else. The token tables that
-  // used to sit under it were removed at the operator's request: the numbers
-  // live in the backend's own accounting, and the tab's job is to choose a
-  // bundle, not to report on it.
-  async function renderDashboard() {
-    const panel = $('#panel-dashboard');
-    panel.innerHTML = '<div class="ho-loading">Loading profiles…</div>';
-    const pf = await api('/api/profiles');
+  // ── General ────────────────────────────────────────────────────────────
+  // Was "Profile": the selector and nothing else. Item 6 moves the sections
+  // that lived in the harness's Skills & Tools tab into it — Permissions,
+  // Server, Auto-Updater — so each setting has one home. The token tables
+  // that once sat under this tab were removed at the operator's request: the
+  // numbers live in the backend's own accounting, and the tab's job is to
+  // choose a bundle, not to report on it.
+  async function renderGeneral() {
+    const panel = $('#panel-general');
+    panel.innerHTML = '<div class="ho-loading">Loading…</div>';
+    // Tools are managed on the Skills & Tools tab only (one home per setting);
+    // General fetches the server status, which now also reports the MCP
+    // helper gate so the automatic on/off is visible where it is configured.
+    const [pf, vcs, dg, au, srv, procs] = await Promise.all([
+      api('/api/profiles'),
+      api('/api/harness/version-control'),
+      api('/api/harness/deliver-guarantee'),
+      api('/api/autoupdater/status'),
+      api('/api/server/status').catch(() => null),
+      api('/api/processes').catch(() => ({ processes: [] })),
+    ]);
+
     const profileRow = (p) => `
       <div class="prof-row ${p.active ? 'on' : ''}" data-name="${esc(p.name)}">
         <span class="prof-name">${esc(p.label)}</span>
@@ -152,12 +165,87 @@
       </div>`;
     const profiles = (pf.profiles || []).map(profileRow).join('');
 
+    const vcsOn = !!(vcs || {}).allow_version_control;
+    const dgOn = !!(dg || {}).deliver_guarantee;
+    const auOn = !!(au || {}).enabled;
+    const lastCheck = (au || {}).last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
+    const lastUpdate = (au || {}).last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
+    const commit = (au || {}).last_commit ? String(au.last_commit).slice(0, 7) : '';
+
     panel.innerHTML = `
+      <div class="ho-section">Profile <span class="ho-sub sm">a named bundle of cost and containment</span></div>
       <div class="prof-list">${profiles}</div>
       <div class="mcp-add">
         <input class="mcp-in" id="profName" placeholder="save current setup as…" spellcheck="false">
         <button class="ho-btn small" id="profSave">Save profile</button>
         <span class="ho-sub sm">Switching a profile applies immediately.</span>
+      </div>
+
+      <div class="ho-section">Permissions <span class="ho-sub sm">what the agent may do on its own</span></div>
+      <div class="tool-row ${vcsOn ? '' : 'off'}" data-perm="version-control">
+        <span class="tool-name">Version control</span>
+        <span class="tool-desc">Off by default. Left to itself a model commits and pushes far more than
+          anyone asked for. The Git panel is the deliberate route; turn this on to let the agent run
+          git commands on its own.</span>
+        <button class="tgl ${vcsOn ? 'on' : ''}" data-act="toggle-vcs" role="switch" aria-checked="${vcsOn}" title="${vcsOn ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>
+      <div class="tool-row ${dgOn ? '' : 'off'}" data-perm="deliver-guarantee">
+        <span class="tool-name">Delivery guarantee</span>
+        <span class="tool-desc">On by default. When a turn would end without the file the task names,
+          the harness orders it written, makes it run, and spends the last rounds landing the
+          artifact instead of dying with one in hand. Off is the raw mode: no forcing, no
+          verification rounds, and the turn ends when the agent ends it.</span>
+        <button class="tgl ${dgOn ? 'on' : ''}" data-act="toggle-dg" role="switch" aria-checked="${dgOn}" title="${dgOn ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>
+      <div class="ho-section">Server</div>
+      <div class="tool-row" data-perm="restart">
+        <span class="tool-name">Restart</span>
+        <span class="tool-desc">${srv ? `listening on ${esc(srv.host)}:${esc(srv.port)} · pid ${esc(srv.pid)}` : 'status unavailable'}.
+          Stop this process and start a fresh one on the same port. The browser reconnects on its own;
+          a turn that is running is cut off.</span>
+        <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
+      </div>
+      <div class="tool-row" data-perm="mcp-helpers">
+        <span class="tool-name">MCP helper tools</span>
+        <span class="tool-desc">${(srv || {}).mcp_servers
+          ? `offered to the agent — ${esc(srv.mcp_servers)} server(s) configured. With none configured the four helper schemas are hidden from the model automatically.`
+          : 'hidden — no MCP server configured. The four helper schemas (mcp_list_servers, mcp_search_tools, mcp_activate_tools, mcp_call) cost nothing and appear automatically the moment a server is added in the MCP tab.'}</span>
+        <span class="badge ${(srv || {}).mcp_servers ? 'on' : ''}">${(srv || {}).mcp_servers ? 'on' : 'off'}</span>
+      </div>
+      <div class="ho-section">Tacit processes <span class="ho-count">${(procs.processes || []).length}</span></div>
+      ${(procs.processes || []).length ? `<div class="tok-table">${(procs.processes || []).map((p) =>
+        `<div class="tok-row"><span class="tok-label">${esc(p.role)}${p.session ? ' · ' + esc(p.session) : ''}</span>` +
+        `<span class="tok-value">pid ${esc(p.pid)}</span>` +
+        `<span class="tok-hint">started ${esc(new Date((p.started || 0) * 1000).toLocaleString())}</span></div>`).join('')}</div>`
+      : '<div class="ho-empty sm">No Tacit child processes running.</div>'}
+
+      <div class="ho-section">Auto-Updater</div>
+      <div class="tool-row ${auOn ? '' : 'off'}" data-perm="autoupdater-enabled">
+        <span class="tool-name">Auto-updater</span>
+        <span class="tool-desc">On by default. Checks GitHub for new commits every hour and can pull
+          changed files automatically. Tacit has no releases — every push is an update.</span>
+        <button class="tgl ${auOn ? 'on' : ''}" data-act="toggle-au" role="switch" aria-checked="${auOn}" title="${auOn ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>
+      <div class="tool-row" data-perm="autoupdater-check" id="auCheckRow">
+        <span class="tool-name">Check for updates</span>
+        <span class="tool-desc">Manually check GitHub for new commits and changed files.</span>
+        <button class="ho-btn small" id="auCheckBtn">Check now</button>
+      </div>
+      <div class="tool-row" data-perm="autoupdater-pull" id="auPullRow" hidden>
+        <span class="tool-name">Pull updates</span>
+        <span class="tool-desc">Download and apply the available updates from GitHub.</span>
+        <button class="ho-btn small primary" id="auPullBtn">Pull updates</button>
+      </div>
+      <div class="tool-row" data-perm="autoupdater-status" id="auStatusRow" hidden>
+        <span class="tool-name">Status</span>
+        <span class="tool-desc" id="auStatusText"></span>
+        <span class="tool-spacer"></span>
       </div>`;
 
     panel.querySelectorAll('.prof-row').forEach((row) => {
@@ -168,13 +256,13 @@
         const r = await post(`/api/profiles/${encodeURIComponent(name)}/apply`);
         note(r.ok ? `${name} applied (${esc(fmt((r.cost || {}).total))} tokens of extras)`
                   : (r.error || 'failed'), !r.ok);
-        renderDashboard();
+        renderGeneral();
       });
       const del = row.querySelector('[data-act="del"]');
       if (del) del.addEventListener('click', async () => {
         if (!confirm(`Delete profile "${name}"?`)) return;
         await api('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' });
-        renderDashboard();
+        renderGeneral();
       });
     });
     $('#profSave').addEventListener('click', async () => {
@@ -182,8 +270,112 @@
       if (!name) { note('give the profile a name', true); return; }
       const r = await post('/api/profiles', { name });
       note(r.ok ? `saved profile "${r.name}"` : (r.error || 'failed'), !r.ok);
-      if (r.ok) renderDashboard();
+      if (r.ok) renderGeneral();
     });
+
+    panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-act="toggle-vcs"]');
+      const enable = !btn.classList.contains('on');
+      const r = await post('/api/harness/version-control', { allow: enable });
+      if (!r.ok) { note(r.error || 'Could not change that setting', true); return; }
+      btn.classList.toggle('on', enable);
+      btn.setAttribute('aria-checked', enable);
+      btn.closest('.tool-row').classList.toggle('off', !enable);
+      note(enable ? 'the agent may now run version-control commands'
+                  : 'version control is off for the agent');
+    });
+
+    panel.querySelector('[data-act="toggle-dg"]').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-act="toggle-dg"]');
+      const enable = !btn.classList.contains('on');
+      const r = await post('/api/harness/deliver-guarantee', { deliver_guarantee: enable });
+      if (!r.ok) { note(r.error || 'Could not change that setting', true); return; }
+      btn.classList.toggle('on', enable);
+      btn.setAttribute('aria-checked', enable);
+      btn.closest('.tool-row').classList.toggle('off', !enable);
+      note(enable ? 'the delivery guarantee is on: the turn lands the file it names'
+                  : 'the delivery guarantee is off: the turn ends when the agent ends it');
+    });
+
+    panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
+      if (!confirm('Restart the Tacit server? A turn that is running is cut off; ' +
+          'this page reconnects on its own.')) return;
+      note('restarting the server…');
+      const r = await post('/api/server/restart', {});
+      if (!r.ok) { note(r.error || 'restart failed', true); return; }
+      note('server is restarting — reconnecting…');
+    });
+
+    panel.querySelector('[data-act="toggle-au"]').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-act="toggle-au"]');
+      const enable = !btn.classList.contains('on');
+      const r = await post('/api/autoupdater/toggle', { enabled: enable });
+      if (!r.ok) { note(r.error || 'Could not change that setting', true); return; }
+      btn.classList.toggle('on', enable);
+      btn.setAttribute('aria-checked', enable);
+      btn.closest('.tool-row').classList.toggle('off', !enable);
+      note(enable ? 'auto-updater enabled' : 'auto-updater disabled');
+    });
+
+    panel.querySelector('#auCheckBtn').addEventListener('click', async () => {
+      const btn = panel.querySelector('#auCheckBtn');
+      const pullRow = panel.querySelector('#auPullRow');
+      const statusRow = panel.querySelector('#auStatusRow');
+      const statusText = panel.querySelector('#auStatusText');
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      note('checking for updates…');
+      const r = await post('/api/autoupdater/check', {});
+      btn.disabled = false;
+      btn.textContent = 'Check now';
+      if (!r.ok) { note(r.error || 'Check failed', true); return; }
+      if (r.update_available) {
+        note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.commit_message}`);
+        pullRow.hidden = false;
+        statusRow.hidden = false;
+        statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — commit ${r.latest_commit.slice(0, 7)}`;
+      } else {
+        note('Already up to date');
+        pullRow.hidden = true;
+        statusRow.hidden = false;
+        statusText.textContent = `Up to date — commit ${r.latest_commit.slice(0, 7)}`;
+      }
+    });
+
+    panel.querySelector('#auPullBtn').addEventListener('click', async () => {
+      const btn = panel.querySelector('#auPullBtn');
+      const pullRow = panel.querySelector('#auPullRow');
+      const statusRow = panel.querySelector('#auStatusRow');
+      const statusText = panel.querySelector('#auStatusText');
+      if (!confirm('Pull updates from GitHub? This will overwrite local changes to tracked files.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Pulling…';
+      note('pulling updates…');
+      const r = await post('/api/autoupdater/pull', {});
+      btn.disabled = false;
+      btn.textContent = 'Pull updates';
+      if (!r.ok) { note(r.error || 'Pull failed', true); return; }
+      if (r.updated) {
+        note(r.message + ' — restart the server to apply');
+        pullRow.hidden = true;
+        statusRow.hidden = false;
+        statusText.textContent = `Updated to ${r.commit.slice(0, 7)} — restart to apply`;
+      } else {
+        note(r.message);
+        pullRow.hidden = true;
+        statusRow.hidden = false;
+        statusText.textContent = `Up to date — commit ${r.commit.slice(0, 7)}`;
+      }
+    });
+
+    // The status row starts hidden and only shows once a check has run; the
+    // last-check/last-update line is still worth showing on open.
+    const statusRow = panel.querySelector('#auStatusRow');
+    const statusText = panel.querySelector('#auStatusText');
+    if ((au || {}).last_commit) {
+      statusRow.hidden = false;
+      statusText.textContent = `Last check: ${lastCheck} · Last update: ${lastUpdate} · Commit: ${commit}`;
+    }
   }
 
   // ── Capabilities ───────────────────────────────────────────────────────

@@ -57,10 +57,12 @@ class SessionIsolationTest(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         home = Path(self._tmp.name)
         self._keys = state_paths(config)
         self._orig = {k: getattr(config, k) for k in self._keys}
         self._home = config.HOME
+        self.addCleanup(self._restore_config)
         config.HOME = home
         for k in self._keys:
             target = home / Path(self._orig[k]).name
@@ -77,17 +79,13 @@ class SessionIsolationTest(unittest.TestCase):
         # called `_client` would shadow the method and every test would call
         # None. (First run of this suite died on exactly that.)
         self._http = None
-
-    def tearDown(self):
         if self._http:
-            try:
-                self._http.close()
-            except Exception:
-                pass
+            self.addCleanup(self._http.close)
+
+    def _restore_config(self):
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)
-        self._tmp.cleanup()
 
     def _client(self):
         if self._http is None:
