@@ -96,7 +96,7 @@ class TestSeveredToolCall(Isolated):
                  "arguments": '{"path": "attack.py", "content": "def attack(f'}]},
                 {"type": "done", "model": None}])
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             ran.append(n)
             out["result"] = "RAN"
             return iter([])
@@ -140,7 +140,7 @@ class TestSeveredToolCall(Isolated):
                  "arguments": '{"path": "attack.py", "content": "def attack(f): return 1"}'}]},
                 {"type": "done", "finish": "stop", "model": None}])
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             ran.append(a.get("path"))
             out["result"] = f"wrote {a.get('path')}"
             return iter([])

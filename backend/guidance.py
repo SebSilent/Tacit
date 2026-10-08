@@ -42,7 +42,7 @@ CARDS = {
              "need.",
     "browser": "browser: navigate first, then extract. Extract returns a chunk, so advance the "
                "cursor rather than re-reading the same span.",
-    "restore": "restore acts on a snapshot id from list_snapshots. Confirm the id before restoring.",
+
 }
 
 _DISCOVER = ("Before changing files, read the project's own instructions if it has them (README, "

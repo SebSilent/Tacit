@@ -33,7 +33,15 @@ try {
 }
 // sessions: [{id, title, model, mode, created, messages:[{role, content, tools?, reason?}]}]
 let activeId = localStorage.getItem('tacit.active') || null;
+// ONE SOCKET PER SESSION (stage 1b). The old single transport carried every
+// session through an in-band `switch`, which is how a turn running in session
+// A could be steered, stopped and saved into session B. Now a socket is born
+// attached to one session and stays attached: switching sessions opens a
+// different socket, and a busy session keeps streaming into its own socket
+// while you sit in another one. `ws` below is always the ACTIVE session's
+// socket — every send path reads it, so the rest of this file keeps working.
 let ws = null;
+let sockets = new Map();   // sid -> WebSocket, one per session
 let streaming = null;   // {msg, el} current assistant message being streamed
 let busy = false;
 let reconnectTimer = null;
@@ -371,19 +379,48 @@ function wsUrl(s) {
 
 function connect() {
   clearTimeout(reconnectTimer);
-  if (ws && ws.readyState === 1) return;           // transport already live
-  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; }
   const s = cur();
   if (!s) { setConn(''); return; }        // nothing to attach to yet
-  setConn('connecting…');
-  ws = new WebSocket(wsUrl(s));
-  ws.onopen = () => { wsDead = false; setConn(''); if (s) delete s._new; if (s) delete s._adopt; };
-  ws.onmessage = ev => {
-    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.sid && m.sid !== activeId) { bgIngest(m); return; }
-    handle(m);
+  connectSession(s);
+}
+
+// Open (or reuse) the socket for one session. The active session's socket is
+// also stored in `ws`, so every existing send path keeps reading `ws`.
+function connectSession(s) {
+  if (!s) return;
+  const existing = sockets.get(s.id);
+  if (existing && existing.readyState === 1) {
+    if (s.id === activeId) ws = existing;
+    return;                                        // transport already live
+  }
+  if (existing) { try { existing.onclose = null; existing.close(); } catch (e) {} sockets.delete(s.id); }
+  if (s.id === activeId) {
+    // The previous session's socket is NOT closed here: it stays in the map
+    // and keeps streaming if a turn is running there. Idle sockets are
+    // closed by the reaper. Only `ws` — the pointer the send paths read —
+    // moves to the new session's socket below.
+    setConn('connecting…');
+  }
+  const sock = new WebSocket(wsUrl(s));
+  sockets.set(s.id, sock);
+  if (s.id === activeId) ws = sock;
+  sock.onopen = () => {
+    if (s.id === activeId) { wsDead = false; setConn(''); }
+    delete s._new; delete s._adopt;
   };
-  ws.onclose = ev => {
+  sock.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    // Every event on this socket belongs to the session it was opened for.
+    // The old cross-session `bgIngest` merge is gone: a session's transcript
+    // is written only by its own socket, which is the isolation guarantee in
+    // the interface.
+    if (m.sid && m.sid !== s.id) return;
+    if (s.id === activeId) handle(m);
+    else handleBackground(m, s);
+  };
+  sock.onclose = ev => {
+    sockets.delete(s.id);
+    if (s.id !== activeId) return;   // a background socket closing is not this tab's problem
     wsDead = true;
     // 4404 is a different failure from a dead network: the server answered and
     // said it does not know this session. That happens when the store is
@@ -407,36 +444,40 @@ function connect() {
     setConn('disconnected — retrying');
     scheduleReconnect();
   };
-  ws.onerror = () => {};
+  sock.onerror = () => {};
 }
 
-// attach current session over the already-open socket
+// attach the current session to its own socket (stage 1b: no in-band switch)
 function attachCurrent() {
   if (window.TacitAssistant && window.TacitAssistant.sessionChanged) {
     window.TacitAssistant.sessionChanged(activeId);
   }
+  if (window.TacitDelegation && window.TacitDelegation.sessionChanged) {
+    window.TacitDelegation.sessionChanged(activeId);
+  }
   refreshTaskStrip();
   const s = cur();
   if (!s) return;
-  // A brand-new session must ride a socket that is allowed to create it, so
-  // drop the current one and reconnect rather than switching over it. Switching
-  // never created anything, which is why pressing New session did nothing.
-  if (s._new && ws && ws.readyState === 1) {
-    try { ws.onclose = null; ws.close(); } catch (e) {}
+  // A brand-new session must ride a socket that is allowed to create it
+  // (?create=1), so drop any socket it already had and open a fresh one.
+  // Switching never created anything, which is why pressing New session did
+  // nothing.
+  if (s._new || s._adopt) {
+    const old = sockets.get(s.id);
+    if (old) { try { old.onclose = null; old.close(); } catch (e) {} sockets.delete(s.id); }
     ws = null;
   }
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'switch', sid: s.id, model: s.model,
-      mode: s.mode, thinking: s.thinking || '' }));
-  } else {
-    connect();
-  }
+  connectSession(s);
+  // The session you left keeps its socket: if a turn is running there, it
+  // keeps streaming into its own transcript in the background. Idle sockets
+  // are closed by the reaper, not on every switch.
 }
 
-// background stream events for a non-active session: keep its transcript alive
-function bgIngest(m) {
-  const s = sessions.find(x => x.id === m.sid);
-  if (!s) return;
+// background stream events for a non-active session, arriving on that
+// session's own socket: keep its transcript alive without touching the
+// active session's view. This is the 1b replacement for bgIngest — same
+// purpose, but the events were never routed across sessions to get here.
+function handleBackground(m, s) {
   if (m.type === 'text') {
     let last = s.messages[s.messages.length - 1];
     if (!last || last.role !== 'assistant') {
@@ -446,7 +487,9 @@ function bgIngest(m) {
     last.content += m.delta;
     persist();
   } else if (m.type === 'done' || m.type === 'proc_exit') {
+    s._busy = false;
     persist();
+    renderSessionList();       // its indicator leaves the working state
   }
 }
 
@@ -454,6 +497,22 @@ function scheduleReconnect() {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(() => { if (cur()) connect(); }, 1200);
 }
+
+// Idle-socket reaper. Sockets are kept for sessions that are busy or were
+// recently active; everything else is closed after a grace period, so a long
+// session list cannot accumulate one live transport per row. The active
+// session's socket is never reaped.
+const SOCKET_IDLE_MS = 30000;
+setInterval(() => {
+  for (const [sid, sock] of sockets) {
+    if (sid === activeId || sock.readyState !== 1) continue;
+    const s = sessions.find(x => x.id === sid);
+    if (s && s._busy) continue;          // a working session keeps its transport
+    if (Date.now() - (s && s._lastActive || 0) < SOCKET_IDLE_MS) continue;
+    try { sock.onclose = null; sock.close(); } catch (e) {}
+    sockets.delete(sid);
+  }
+}, 10000).unref?.();
 
 function setConn(txt) { $('#connHint').textContent = txt; }
 function showBootDot(on) { $('#connHint').classList.toggle('booting', on); }
@@ -629,9 +688,11 @@ function handle(m) {
             <button class="ho-btn" id="plLater">Later (menu → Implement)</button>
           </div>`;
         $('#plImplement').addEventListener('click', () => {
+          // Stage 1b: the server creates the fresh session and returns its
+          // id; the rpc_response handler adopts it and opens its socket.
+          // No streaming bubble here — this session's turn is over.
           if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_implement' }));
           hidePlanStrip();
-          ensureStreamingBubble();
         });
         $('#plLater').addEventListener('click', hidePlanStrip);
       } else {
@@ -733,6 +794,7 @@ function send(text) {
   const el = appendMsg('assistant', '');
   streaming = { msg: s.messages[s.messages.length - 1], el };
   setBusy(true);
+  markActiveSessionState('busy');
 
   let payload;
   if (planModeOn) {
@@ -818,6 +880,7 @@ function endStream() {
   }
   streaming = null;
   setBusy(false);
+  markActiveSessionState('idle');
   persist();
 }
 
@@ -1008,31 +1071,100 @@ if (jumpBtn) jumpBtn.addEventListener('click', () => {
   inputEl.focus();
 });
 
+// ── left-bar activity indicators (plan item 2) ───────────────────────
+// Which sessions are working, waiting or failed, per session, like Claude
+// Code's sidebar. Two sources, one truth: the server's registry
+// (GET /api/sessions/state) is authoritative, and this tab's own socket
+// events refine it between polls.
+let sessionStates = {};        // sid -> {busy, starting, kind, since, turns}
+let statesTimer = null;
+
+async function pollSessionStates() {
+  try {
+    const r = await fetch('/api/sessions/state');
+    if (!r.ok) return;
+    const d = await r.json();
+    const next = d.states || {};
+    const changed = JSON.stringify(next) !== JSON.stringify(sessionStates);
+    sessionStates = next;
+    // Mirror busy into the session rows the reaper and the dots read.
+    for (const s of sessions) {
+      const st = next[s.id];
+      s._busy = !!(st && st.busy);
+      if (s._busy) s._lastActive = Date.now();
+    }
+    if (changed) renderSessionList();
+  } catch (e) { /* offline: the dots keep their last known state */ }
+}
+
+function startStatesPoll() {
+  if (statesTimer) return;
+  pollSessionStates();
+  statesTimer = setInterval(pollSessionStates, 3000);
+}
+
+// The active session's own events refine its dot immediately, without
+// waiting for the next poll.
+function markActiveSessionState(state) {
+  const s = cur();
+  if (!s) return;
+  if (state === 'busy') { s._busy = true; s._lastActive = Date.now(); }
+  else if (state === 'idle') s._busy = false;
+  renderSessionList();
+}
+
 function renderSessionList() {
   sessionListEl.innerHTML = '';
   for (const s of sessions.slice(0, 30)) {
+    const st = sessionStates[s.id] || {};
+    const working = !!(st.busy || s._busy);
     const el = document.createElement('div');
-    el.className = 'session-item' + (s.id === activeId ? ' active' : '');
+    el.className = 'session-item' + (s.id === activeId ? ' active' : '')
+      + (working ? ' working' : '');
     el.innerHTML = `
+      <span class="s-dot" title="${working ? 'working' : 'idle'}"></span>
       <svg class="s-icon" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v11H8l-3 3V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       <span class="s-title"></span>
+      ${working ? '<button class="s-stop" title="Stop this session\'s turn"><svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></button>' : ''}
       <button class="s-del" title="Delete"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>`;
     const titleEl = el.querySelector('.s-title');
     titleEl.textContent = s.title || 'untitled';
-    titleEl.title = 'Double-click to rename';
+    titleEl.title = working ? 'Working…' : 'Double-click to rename';
     titleEl.addEventListener('dblclick', e => {
       e.stopPropagation();
       inlineRename(titleEl, s.title, v => renameSession(s.id, v));
     });
     el.addEventListener('click', e => {
-      if (e.target.closest('.s-del')) return;
+      if (e.target.closest('.s-del') || e.target.closest('.s-stop')) return;
       switchSession(s.id);
+    });
+    const stopBtnRow = el.querySelector('.s-stop');
+    if (stopBtnRow) stopBtnRow.addEventListener('click', e => {
+      e.stopPropagation();
+      stopSession(s.id);
     });
     el.querySelector('.s-del').addEventListener('click', e => {
       e.stopPropagation();
       deleteSession(s.id);
     });
     sessionListEl.appendChild(el);
+  }
+}
+
+// Stop a session's turn from its row — possibly a session you are not
+// looking at. Its own socket carries the abort; nothing else is touched.
+function stopSession(id) {
+  const sock = sockets.get(id);
+  if (sock && sock.readyState === 1) {
+    sock.send(JSON.stringify({ type: 'abort' }));
+    toast('Stopping…');
+  } else {
+    // No live socket: the session cannot be mid-turn in this tab. The
+    // registry may still say busy (a turn running from another tab), and
+    // that turn is not this tab's to stop — say so rather than pretending.
+    toast(sessionStates[id] && sessionStates[id].busy
+      ? 'That turn is running in another window'
+      : 'That session is not running anything', true);
   }
 }
 
@@ -1091,6 +1223,10 @@ function endStreamQuiet() {
 function deleteSession(id) {
   sessions = sessions.filter(s => s.id !== id);
   if (activeId === id) activeId = sessions.length ? sessions[0].id : null;
+  // Its socket dies with it: a deleted session must not keep a live
+  // transport (or a running turn's stream) pointed at a record that is gone.
+  const sock = sockets.get(id);
+  if (sock) { try { sock.onclose = null; sock.close(); } catch (e) {} sockets.delete(id); }
   persist();
   fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
   renderSessionList();
@@ -1798,14 +1934,19 @@ $('#modeSeg').addEventListener('click', e => {
   const btn = e.target.closest('button[data-mode]');
   if (!btn) return;
   const s = cur();
+  if (!s || s.mode === btn.dataset.mode) return;
   s.mode = btn.dataset.mode;
   localStorage.setItem('tacit.mode', s.mode);
   document.querySelectorAll('#modeSeg button').forEach(b =>
     b.classList.toggle('active', b === btn));
   persist(); renderModelChip(); syncSessionMetadata(s);
+  // Stage 1b: a mode change starts a fresh session (the transcript is not
+  // carried across a mode boundary). The server creates it and returns its
+  // id; the rpc_response handler adopts it and opens its socket. This
+  // session keeps its own socket and its own transcript.
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'client_new_session', model: s.model, mode: s.mode }));
-  toast(s.mode === 'agent' ? 'Agent mode: tools on — transcript carried over'
-                           : 'Chat mode: pure conversation — transcript carried over');
+  toast(s.mode === 'agent' ? 'Agent mode: tools on — fresh session'
+                           : 'Chat mode: pure conversation — fresh session');
 });
 
 $('#sidebarToggle').addEventListener('click', () => {
@@ -2060,8 +2201,21 @@ function handleRpcResponse(m) {
   } else if (m.command === 'fork' || m.command === 'clone') {
     if (m.ok && m.data && m.data.sid) adoptSession(m.data.sid, m.command === 'fork' ? 'Forked — continuing from the copy' : 'Cloned');
     else toast((m.command === 'fork' ? 'Fork' : 'Clone') + ' failed: ' + (m.error || ''), true);
-  } else if (m.command === 'new_session') {
-    toast(m.ok ? 'Fresh session started' : ('New session failed: ' + (m.error || '')), !m.ok);
+  } else if (m.command === 'new_session' || m.command === 'client_new_session') {
+    // Stage 1b: the server created the session and handed back its id; this
+    // socket stays attached to the session it was born for. The client
+    // adopts the new session and opens a fresh socket for it.
+    if (m.ok && m.data && m.data.sid) {
+      adoptSession(m.data.sid, 'Fresh session started');
+    } else {
+      toast('New session failed: ' + (m.error || ''), true);
+    }
+  } else if (m.command === 'plan_implement') {
+    if (m.ok && m.data && m.data.sid) {
+      adoptSession(m.data.sid, 'Implementing in a fresh session');
+    } else {
+      toast('Implement failed: ' + (m.error || ''), true);
+    }
   }
 }
 
@@ -2187,6 +2341,7 @@ updateSteerHint();
   renderModelPickers();
   renderThinkSelect();
   renderModelChip();
+  startStatesPoll();          // the left-bar activity indicators
   inputEl.focus();
 })();
 

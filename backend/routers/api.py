@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, anthropic, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, project_context, skills, store, vcs
+from .. import agent, anthropic, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, project_context, session_state, skills, store, vcs
 from .. import tokens as token_mod
 from ..ai import engine, prompts
 
@@ -567,6 +567,21 @@ async def forget_folder(request: Request):
 @router.get("/api/sessions")
 async def list_sessions():
     return {"sessions": store.list_sessions()}
+
+
+@router.get("/api/sessions/state")
+async def sessions_state():
+    """Which sessions have a turn running right now, keyed by sid.
+
+    This is the interface's source for the per-session indicators (plan stage
+    2): busy, starting, the kind of work, when it began, and how many turns
+    the session has started. Process-local by design — a session is busy
+    because a worker in this process is running its turn, and for no other
+    reason.
+    """
+    states = session_state.all_states()
+    return {"ok": True, "states": states,
+            "busy": [sid for sid, s in states.items() if s.get("busy")]}
 
 
 @router.get("/api/sessions/registry")

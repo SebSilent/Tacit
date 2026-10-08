@@ -10,7 +10,7 @@ import time
 import threading
 from pathlib import Path
 
-from . import (audit, benchmarks, config, extras, guidance, mcp_registry, metrics,
+from . import (audit, config, extras, guidance, mcp_registry, metrics, model_settings,
                plugin_manager, sandbox, skills)
 from . import tokens as token_mod
 from .ai import engine, prompts
@@ -316,8 +316,9 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
     return clipped + hint if hint else clipped
 
 
-def t_bg_start(command: str, project: str | None = None, cwd: str | None = None) -> str:
-    return extras.bg_start(command, project=project, cwd=cwd)
+def t_bg_start(command: str, project: str | None = None, cwd: str | None = None,
+               session: str = "") -> str:
+    return extras.bg_start(command, project=project, cwd=cwd, session=session)
 
 
 def t_bg_output(id: str, tail: int = 4000) -> str:
@@ -330,18 +331,6 @@ def t_bg_stop(id: str) -> str:
 
 def t_fetch(url: str, max_chars: int | None = None) -> str:
     return extras.fetch(url, max_chars)
-
-
-def t_snapshot(label: str = "", project: str | None = None) -> str:
-    return extras.snapshot(project or str(config.USER_HOME), label)
-
-
-def t_list_snapshots(project: str | None = None) -> str:
-    return extras.list_snapshots()
-
-
-def t_restore(name: str, project: str | None = None) -> str:
-    return extras.restore(name, project or str(config.USER_HOME))
 
 
 def t_browser(action: str, url: str = "", selector: str = "", text: str = "",
@@ -376,17 +365,6 @@ def t_evidence(action: str, source: str = "", note: str = "", snippet: str = "",
     if act in ("list", ""):
         return E.listing()
     return "ERROR: action must be add|get|list"
-
-
-def t_benchmark(action: str, model: str = "", temperature=None, max_tokens=None,
-                context_budget=None, project: str | None = None) -> str:
-    from . import benchmarks as B
-    act = str(action or "").strip().lower()
-    if act == "list":
-        return B.listing()
-    if act == "set":
-        return B.set_profile(model, temperature, max_tokens, context_budget)
-    return "ERROR: action must be list|set"
 
 
 def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
@@ -502,12 +480,8 @@ EXECS = {
     "bg_output": t_bg_output,
     "bg_stop": t_bg_stop,
     "fetch": t_fetch,
-    "snapshot": t_snapshot,
-    "list_snapshots": t_list_snapshots,
-    "restore": t_restore,
     "browser": t_browser,
     "evidence": t_evidence,
-    "benchmark": t_benchmark,
     "research": None,         # dispatched through run_research (see call_tool)
     "skill": t_skill,
     "mcp_list_servers": t_mcp_list_servers,
@@ -516,19 +490,20 @@ EXECS = {
     "mcp_call": t_mcp_call,
 }
 
-READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop", "restore"}
+READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop"}
 
 # Read-only callers also lose these. Filtering the schema by name is not the whole
 # job: `mcp_call` reaches any external tool including destructive ones, and it can
-# be given confirm=true by the model itself, with nobody to ask. `snapshot` writes
-# to the checkpoint store, and `task` opens an unbounded nested delegation from a
-# panel that is advertised as a cheap side conversation.
-READONLY_BLOCKED |= {"snapshot", "task", "mcp_call", "mcp_activate_tools"}
+# be given confirm=true by the model itself, with nobody to ask. `task` opens an
+# unbounded nested delegation from a panel that is advertised as a cheap side
+# conversation. (Snapshots are not here because they are not agent tools at all:
+# the agent's undo is automatic, and restore belongs to the person.)
+READONLY_BLOCKED |= {"task", "mcp_call", "mcp_activate_tools"}
 
 # Tools that read in one action and write in another. The guard below refuses the
-# writing action rather than dropping the tool, so `benchmark list` and
-# `evidence get` still work for a read-only caller.
-READONLY_BLOCKED_ACTIONS = {"benchmark": {"set"}, "evidence": {"add"}}
+# writing action rather than dropping the tool, so `evidence get` still works for
+# a read-only caller.
+READONLY_BLOCKED_ACTIONS = {"evidence": {"add"}}
 
 
 def readonly_guard(name: str, args: dict) -> str:
@@ -587,11 +562,6 @@ TOOLS = [
     _fn("bg_stop", "Stop a background job.", {"id": _S}, ["id"]),
     _fn("fetch", "Fetch a URL and return its text (HTML is reduced to readable text). Use it to "
                  "read documentation instead of guessing.", {"url": _S, "max_chars": _I}, ["url"]),
-    _fn("snapshot", "Save a copy of the working project so changes can be undone. Take one "
-                    "before risky edits.", {"label": _S}, []),
-    _fn("list_snapshots", "List saved snapshots, newest first.", {}, []),
-    _fn("restore", "Restore the project from a snapshot, overwriting files with the saved "
-                   "copies.", {"name": _S}, ["name"]),
     _fn("browser", "Drive a real browser. action=open|text|links|click|type|screenshot|close. "
                    "open needs url; click/type need selector; type needs text. Use it for pages "
                    "that need JavaScript - plain pages are faster with fetch.",
@@ -603,10 +573,6 @@ TOOLS = [
     _fn("evidence", "Record a citable fact (action=add with source/note/snippet), read one back "
                     "(get, by id) or list what is recorded.",
         {"action": _S, "source": _S, "note": _S, "snippet": _S, "id": _S}, ["action"]),
-    _fn("benchmark", "Per-model settings. action=list, or action=set with model plus "
-                     "temperature / max_tokens / context_budget.",
-        {"action": _S, "model": _S, "temperature": {"type": "number"},
-         "max_tokens": _I, "context_budget": _I}, ["action"]),
     _fn("task", "Delegate a focused investigation to a sub-agent with its own fresh context. "
                 "Use it to map or search a codebase without filling your own context — only "
                 "its report comes back, so ask one narrow question per delegation.",
@@ -629,9 +595,18 @@ TOOLS = [
 SUBTASK = "task"
 
 # Tools whose first use in a turn triggers an automatic snapshot. `run_shell` is
-# deliberately absent: it may change nothing at all, and the sandbox layer already
-# reports every file it did change.
-MUTATING = {"write_file", "edit_file", "restore"}
+# included: a shell command can rewrite the tree, and a snapshot of this project
+# costs about half a second, once per turn. The sandbox layer still reports every
+# file a command changed.
+MUTATING = {"write_file", "edit_file", "run_shell"}
+
+# Tools the repeat guard never caches: a repeated write may be a recovery, and
+# silently skipping a mutation that was asked for would make the harness lie
+# about what it did to the project. `run_shell` is deliberately NOT exempt —
+# the guard exists because a cell spent 26 of 29 shell calls on refused
+# repeats, so an identical command is a loop, not a recovery. Kept separate
+# from MUTATING because "triggers a snapshot" is not "may loop freely".
+REPEAT_EXEMPT = {"write_file", "edit_file"}
 
 # How many times the same call with the same arguments may actually run in one turn before it is
 # answered from cache instead. Two is "you are checking twice"; four is the feal loop, where 59
@@ -718,6 +693,18 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
     if depth >= config.SUBAGENT_MAX_DEPTH:
         rows = [t for t in rows if t["function"]["name"] != SUBTASK]
 
+    # The MCP helper tools only earn their schemas when an MCP server is
+    # configured: with none in mcp.json they are four dead ends that cost
+    # tokens and invite calls that can only fail. Presence is the gate — a
+    # configured-but-stopped server still gets them, because listing and
+    # searching are how the model learns what it could start.
+    try:
+        if not mcp_registry.load()["servers"]:
+            rows = [t for t in rows
+                    if t["function"]["name"] not in MCP_HELPER_NAMES]
+    except Exception:  # noqa: BLE001
+        pass
+
     # Extra capabilities are *appended*, never baked into the base list:
     # plugin tools only from enabled plugins, MCP schemas only when activated or
     # pinned (unless the user turned on direct mode). Failures here must never
@@ -795,10 +782,10 @@ def context_budget(ref: str | None = None, rec: dict | None = None) -> int:
     1M-token window and four times an 8k one. Where the window is known the cap
     follows it, so a large model stops re-reading files the cap had thrown away
     and a small one is never sent a transcript it cannot hold. A per-model
-    ``context_budget`` set through the benchmark tool overrides both.
+    ``context_budget`` set for the model overrides both.
     """
     try:
-        override = int((benchmarks.profile_for(ref) or {}).get("context_budget") or 0)
+        override = int((model_settings.profile_for(ref) or {}).get("context_budget") or 0)
     except Exception:  # noqa: BLE001
         override = 0
     if override > 0:
@@ -1462,7 +1449,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     turn_tokens = 0
     warned: set = set()
     compactions = 0
-    prof = benchmarks.profile_for(ref)
+    prof = model_settings.profile_for(ref)
     if temperature is None and prof.get("temperature") is not None:
         temperature = prof["temperature"]
     prof_tokens = prof.get("max_tokens")
@@ -1889,7 +1876,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                        "message": f"discarded a {c['name']} call cut off mid-arguments"}
             elif c["id"] in parallel:
                 out = parallel[c["id"]]
-            elif (seen >= REPEAT_BLOCK_AFTER and c["name"] not in MUTATING
+            elif (seen >= REPEAT_BLOCK_AFTER and c["name"] not in REPEAT_EXEMPT
                     and key in call_cache
                     and not str(call_cache[key]).startswith("ERROR:")):
                 # Third identical successful call. Running it again is not new information, and

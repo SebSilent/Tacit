@@ -33,7 +33,11 @@ SESSIONS_DIR = HOME / "sessions"
 SKILLS_DIR = HOME / "skills"
 KNOWLEDGE_DIR = HOME / "knowledge"
 EVIDENCE_FILE = HOME / "evidence.jsonl"
-BENCHMARK_FILE = HOME / "benchmarks.json"
+# Per-model settings (temperature / max_tokens / context_budget overrides).
+# The file keeps its old name so existing installs keep their rows without a
+# migration; it used to be written by the benchmark harness, which is where the
+# name comes from.
+MODEL_SETTINGS_FILE = HOME / "benchmarks.json"
 PLANS_DIR = HOME / "plans"
 CHECKPOINT_DIR = HOME / "checkpoints"
 PID_FILE = HOME / "tacit.pid"
@@ -267,6 +271,24 @@ def delegate_model() -> str:
     if v:
         return v
     return str(os.environ.get("TACIT_DELEGATE_MODEL") or "").strip()
+
+
+def turn_worker_mode() -> str:
+    """How a session turn runs: its own process, or a thread in here.
+
+    "process" (the default) is the decision the plan records: a turn is a
+    unit of work a person must be able to kill, and a thread cannot be
+    killed in Python under any circumstance. The worker process gets a
+    cooperative cancel first and a process-tree kill after a short grace,
+    so a hung model read or a stuck shell command dies with the turn
+    instead of owning the server.
+
+    "thread" is the escape hatch: the old in-process path, which the tests
+    that fake the model engine use — a fake engine patched into this
+    process is invisible to a worker subprocess.
+    """
+    raw = os.environ.get("TACIT_TURN_WORKER", "process").strip().lower()
+    return "thread" if raw in ("thread", "0", "off", "false", "no") else "process"
 
 
 def deliver_guarantee() -> bool:

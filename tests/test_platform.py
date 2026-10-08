@@ -941,7 +941,7 @@ class TestAssistant(Isolated):
 
     def test_tools_are_read_only(self):
         names = {t["function"]["name"] for t in assistant.read_tools()}
-        for blocked in ("write_file", "edit_file", "run_shell", "restore", "bg_start"):
+        for blocked in ("write_file", "edit_file", "run_shell", "bg_start"):
             self.assertNotIn(blocked, names)
         self.assertIn("read_file", names)
 
@@ -1785,12 +1785,15 @@ class TestThinkingDiscovery(Isolated):
 
 
 class TestSwitchHandler(Isolated):
-    """A settings message names the session it belongs to, over a real socket.
+    """The deleted in-band switch answers with the reason, and rebinds nothing.
 
     switch used to apply model/mode/thinking to whichever session was open when the
     target id could not be found, so a stale or mistyped id quietly reconfigured a
-    different conversation. There was no websocket test anywhere, so nothing could
-    notice; this builds one.
+    different conversation. Stage 1a made it idle-only; stage 1b deleted it — a
+    socket is born attached to one session, and switching is the client opening a
+    different socket. Both tests survive the deletion: the command still answers,
+    and the invariant it was written to protect (a named session is the one that
+    gets the settings) is now enforced by the client's per-session sockets.
     """
 
     def _client(self):
@@ -1805,14 +1808,16 @@ class TestSwitchHandler(Isolated):
                 return msg
         self.fail("never saw a " + want + " message")
 
-    def test_an_unknown_target_leaves_the_open_session_alone(self):
+    def test_switch_is_refused_and_rebinds_nothing(self):
         keep = "ollama_cloud/deepseek-v4.1-flash"
         rec = store.create(title="mine", model=keep, mode="agent", thinking="high")
         store.save(rec)
+        other = store.create(title="other", model="m/b", thinking="high")
+        store.save(other)
         with self._client() as c:
             with c.websocket_connect("/ws/" + rec["id"]) as ws:
                 self._until(ws, "session_ready")
-                ws.send_json({"type": "switch", "sid": "no-such-session",
+                ws.send_json({"type": "switch", "sid": other["id"],
                               "model": "evil/model", "mode": "chat",
                               "thinking": "off"})
                 # Take the single reply and look at it, rather than scanning for the
@@ -1820,22 +1825,31 @@ class TestSwitchHandler(Isolated):
                 # sends hangs the test instead of failing it.
                 reply = ws.receive_json()
         self.assertEqual(reply.get("type"), "error", str(reply)[:120])
-        self.assertIn("unknown session", reply.get("message", ""))
+        self.assertIn("no longer supported", reply.get("message", ""))
+        # Neither session was touched: the command rebinds nothing, busy or idle.
         after = store.get(rec["id"])
         self.assertEqual(after["model"], keep)
         self.assertEqual(after["mode"], "agent")
         self.assertEqual(after["thinking"], "high")
+        self.assertEqual(store.get(other["id"])["thinking"], "high")
 
     def test_a_real_target_is_the_one_that_gets_the_settings(self):
+        """The settings route that replaced switch: per-session metadata.
+
+        The invariant the old test protected — the named session is the one
+        that gets the settings, and the session left behind is untouched —
+        now lives in the REST metadata route, which is what the client calls
+        per session before opening its socket.
+        """
         a = store.create(title="a", model="m/a", thinking="high")
         b = store.create(title="b", model="m/b", thinking="high")
         store.save(a)
         store.save(b)
         with self._client() as c:
-            with c.websocket_connect("/ws/" + a["id"]) as ws:
-                self._until(ws, "session_ready")
-                ws.send_json({"type": "switch", "sid": b["id"], "thinking": "off"})
-                self._until(ws, "hello")
+            # The client's own route: settings for b, sent to b's endpoint.
+            r = c.post(f"/api/sessions/{b['id']}/metadata",
+                       json={"thinking": "off"})
+            self.assertEqual(r.status_code, 200)
         self.assertEqual(store.get(b["id"])["thinking"], "off")
         self.assertEqual(store.get(a["id"])["thinking"], "high",
                          "the session left behind was the one edited")
@@ -1867,7 +1881,7 @@ class TestRepeatGuard(Isolated):
                              {"type": "done", "model": None}])
             return iter(next(turns))
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             runs.append(n)
             out["result"] = (calls or {}).get(n, "the same answer")
             return iter([])
@@ -1915,7 +1929,7 @@ class TestRepeatGuard(Isolated):
         def fake_stream(msgs, **k):
             return iter(next(turns))
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             runs.append(a)
             out["result"] = "ok"
             return iter([])
@@ -1948,7 +1962,7 @@ class TestRepeatGuard(Isolated):
                 return iter([{"type": "text", "delta": "done"}, {"type": "done", "model": None}])
             return iter(next(turns))
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             runs.append(n)
             out["result"] = "0x80808080 -> 0x02000002"
             return iter([])
@@ -2049,7 +2063,7 @@ class TestDeliverables(Isolated):
                            if m.get("role") == "system" and "named in the task" in str(m)])
             return iter(next(turns))
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             out["result"] = "ok"
             return iter([])
 
@@ -2172,7 +2186,7 @@ class TestStuckTurnExit(Isolated):
                  "arguments": '{"command": "python3 probe.py"}'}]},
                 {"type": "done", "model": None}])
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             runs.append((n, str(a.get("path") or "")))
             out["result"] = "same answer" if n == "run_shell" else "wrote attack.py"
             return iter([])
@@ -2232,7 +2246,7 @@ class TestStuckTurnExit(Isolated):
                 {"id": "p", "name": "run_shell", "arguments": '{"command": "python3 p.py"}'}]},
                 {"type": "done", "model": None}])
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             out["result"] = "ran, no output"
             return iter([])
 
@@ -2283,7 +2297,7 @@ class TestStuckTurnExit(Isolated):
                               '    return 1\\n"}'}]},
                 {"type": "done", "model": None}])
 
-        def fake_tool(n, a, ctx, out):
+        def fake_tool(n, a, ctx, out, call=None):
             if n == "write_file":
                 wrote.append(str(a.get("path") or ""))
                 out["result"] = f"wrote {a.get('path')}"

@@ -251,6 +251,33 @@ svg { display: block; }
 .session-item .s-del:hover { color: var(--err); }
 .session-item .s-del svg { width: 12px; height: 12px; }
 
+/* ── left-bar activity indicators (plan item 2) ─────────────────────── */
+/* One dot per session row: grey idle, pulsing accent while a turn runs. */
+.session-item .s-dot {
+  width: 7px; height: 7px; flex: none; border-radius: 50%;
+  background: var(--muted); opacity: .35;
+}
+.session-item.working .s-dot {
+  background: var(--accent); opacity: 1;
+  animation: s-dot-pulse 1.4s ease-in-out infinite;
+}
+.session-item.working { color: var(--text); }
+@keyframes s-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.82); }
+}
+/* Per-row stop control, shown only while that session has a turn running. */
+.session-item .s-stop {
+  display: none; border: 0; background: none; color: var(--err); padding: 2px;
+  cursor: pointer;
+}
+.session-item.working .s-stop { display: block; }
+.session-item .s-stop:hover { color: var(--text); }
+.session-item .s-stop svg { width: 12px; height: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .session-item.working .s-dot { animation: none; }
+}
+
 /* inline session rename input (sidebar + topbar) */
 .rename-input {
   width: 100%; min-width: 0; font: inherit; color: var(--text);

@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import agent, config, hosting, skills, vcs  # noqa: E402
+from backend import agent, config, hosting, session_state, skills, vcs  # noqa: E402
 from backend.ai import engine  # noqa: E402
 from backend.routers import api, chat  # noqa: E402
 
@@ -169,28 +169,49 @@ class TestSessionStats(unittest.TestCase):
 
 
 class TestMeta(unittest.TestCase):
-    """hello/get_state must report a live turn so the client can resume it."""
+    """hello/get_state must report a live turn so the client can resume it.
+
+    Live state is registry-backed since stage 1a: `_meta` reads the
+    sid-keyed session_state, not a socket's local flag, because two windows
+    can hold the same session open and the truth is whether a worker for
+    that sid is running in this process.
+    """
 
     def setUp(self):
         orig = chat.config.resolve_model
         self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 1000}
         self.rec = {"id": "s1", "model": "p/m", "messages": [], "title": "T"}
+        session_state.reset()
+        self.addCleanup(session_state.reset)
 
     def test_idle(self):
-        m = chat._meta(self.rec, None)
+        m = chat._meta(self.rec)
         self.assertFalse(m["busy"])
         self.assertFalse(m["starting"])
 
     def test_starting(self):
-        m = chat._meta(self.rec, {"busy": True, "starting": True})
+        session_state.begin("s1", "turn")       # starting=True until an event lands
+        m = chat._meta(self.rec)
         self.assertTrue(m["busy"])
         self.assertTrue(m["starting"])
 
     def test_midstream_is_busy_not_starting(self):
-        m = chat._meta(self.rec, {"busy": True, "starting": False})
+        session_state.begin("s1", "turn")
+        session_state.running("s1")             # the turn's first event arrived
+        m = chat._meta(self.rec)
         self.assertTrue(m["busy"])
         self.assertFalse(m["starting"])
+
+    def test_the_registry_outlives_the_socket(self):
+        """A second window attaching to a busy session sees the busy flag.
+
+        The old `_meta` took the socket's own running dict, so a reconnecting
+        window was told an idle session even while a turn ran in it.
+        """
+        session_state.begin("s1", "turn")
+        m = chat._meta(self.rec)
+        self.assertTrue(m["busy"])
 
 
 class TestSkills(unittest.TestCase):

@@ -4,8 +4,9 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import (agent, assistant, audit, config, mcp_registry, memory_modes, memory_store,
-                metrics, plan, plugin_manager, project_context, store)
+from .. import (agent, assistant, audit, config, extras, mcp_registry, memory_modes,
+                memory_store, metrics, plan, plugin_manager, project_context,
+                session_state, store, turn_worker)
 from .. import tokens as token_mod
 from ..ai import prompts
 
@@ -17,6 +18,13 @@ router = APIRouter()
 MAX_REASON = 8000
 MAX_TOOLS_PER_STEP = 20
 MAX_TOOL_RESULT = 6000
+
+# Stage 3.5: sid -> live TurnWorker, so a steer arriving on any socket can
+# reach the turn's process over its stdin. Entries are added at spawn and
+# popped in the worker thread's finally, so an entry is live exactly as long
+# as the turn is. The thread path never registers — it shares the socket's
+# steer list with run_turn directly.
+worker_registry: dict[str, turn_worker.TurnWorker] = {}
 
 
 def _json(msg: dict) -> str:
@@ -49,15 +57,17 @@ def _usage_snapshot(rec: dict) -> dict:
     }
 
 
-def _meta(rec: dict, running: dict | None = None) -> dict:
-    busy = bool(running and running.get("busy"))
-    starting = bool(running and running.get("starting"))
+def _meta(rec: dict) -> dict:
+    # Live state comes from the registry keyed by sid, never from a socket's
+    # local flag: two windows can hold the same session open, and the truth is
+    # whether a worker for that sid is running in this process.
+    live = session_state.get(rec["id"])
     return {
         "sid": rec["id"], "model": rec.get("model") or "",
         "mode": rec.get("mode") or "agent", "thinking": rec.get("thinking") or "default",
         "workdir": rec.get("project") or "", "name": rec.get("title") or "New session",
         "allowed_tools": "", "excluded_tools": "", "permission_mode": "accept-all",
-        "busy": busy, "starting": starting,
+        "busy": bool(live.get("busy")), "starting": bool(live.get("starting")),
         "usage": _usage_snapshot(rec),
     }
 
@@ -270,11 +280,17 @@ async def ws_session(ws: WebSocket, sid: str):
             changed = True
         if changed:
             store.save(rec)
+    # Everything below is per-connection and never rebound to another session.
+    # The old handler kept one `running` dict per socket and re-pointed `rec`
+    # at whichever session a `switch` named, so a turn started in session A
+    # could be steered, stopped and saved into session B — the leak. Here the
+    # socket is born attached to one session and stays attached: switching is
+    # the client opening a different socket (stage 1b), never a rebinding.
     running = {"thread": None, "stop": threading.Event(), "steer": [], "busy": False,
                "starting": False, "assistant": False, "assistant_stop": threading.Event()}
     plan_state = {"run": None}
 
-    await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
+    await ws.send_text(_json({"type": "hello", **_meta(rec)}))
     await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
                               "model": rec.get("model"), "mode": rec.get("mode"),
                               "thinking": rec.get("thinking"), "name": rec.get("title")}))
@@ -305,12 +321,15 @@ async def ws_session(ws: WebSocket, sid: str):
         await pump(queue)
 
     async def start_plan(text: str):
-        if not (text or "").strip() or running["busy"]:
+        if not (text or "").strip() or running["busy"] or session_state.busy(rec["id"]):
+            await ws.send_text(_json({"type": "notify", "level": "warn",
+                                      "message": "a turn is already running"}))
             return
         if not rec.get("model"):
             rec["model"] = config.registry().get("default") or ""
         running["busy"] = True
         running["starting"] = True
+        session_state.begin(rec["id"], "plan")
         store.append(rec, "user", text)
         if (rec.get("title") or "New session") == "New session":
             rec["title"] = _title(text)
@@ -319,8 +338,11 @@ async def ws_session(ws: WebSocket, sid: str):
 
         run = plan.Plan(rec["id"], text, rec.get("project") or None, rec.get("model") or None)
         plan_state["run"] = run
-        await _drive(plan.explore(run), rec["id"])
-        running["busy"] = False
+        try:
+            await _drive(plan.explore(run), rec["id"])
+        finally:
+            running["busy"] = False
+            session_state.end(rec["id"])
 
     async def start_assistant(text: str):
         """A turn in the side conversation. It never touches the agent's window."""
@@ -373,55 +395,72 @@ async def ws_session(ws: WebSocket, sid: str):
                                   "preview": assistant.preview(rec)}))
 
     async def start_turn(text: str, images=None):
-        if running["busy"]:
+        # Two guards, because two windows can hold this session open. The
+        # socket's own flag stops a double-submit from this connection; the
+        # registry stops a second window from starting a concurrent turn in
+        # the same session. One session, one running turn.
+        if running["busy"] or session_state.busy(rec["id"]):
             await ws.send_text(_json({"type": "notify", "level": "warn",
                                       "message": "a turn is already running"}))
             return
         if not (text or "").strip():
             return
-        if not rec.get("model"):
-            first = config.registry().get("default") or ""
-            if first:
-                rec["model"] = first
-
-        if agent.should_compact(rec):
-            info = agent.compact_history(rec, ref=rec.get("model") or None)
-            if info and info.get("compacted"):
-                store.save(rec)
-                saved = token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0)) \
-                    - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0))
-                metrics.bump(rec, saved_compaction=max(0, saved))
-                await ws.send_text(_json({
-                    "type": "notify", "level": "info", "sid": rec["id"],
-                    "message": (f"compacted {info['compacted']} earlier messages "
-                                f"({info['chars_before']} \u2192 {info['chars_after']} chars)")}))
-
+        # The flags go up before any await. Between the guard above and the
+        # compaction block below there are awaits, and two prompts arriving in
+        # that window would both pass the guard and both compact. Claiming the
+        # session here makes the second prompt a refusal instead.
         running["busy"] = True
         running["starting"] = True
         running["stop"] = threading.Event()
-        store.append(rec, "user", text)
-        if (rec.get("title") or "New session") == "New session":
-            rec["title"] = _title(text)
-        store.save(rec)
-        await ws.send_text(_json({"type": "state_delta", "name": rec["title"],
-                                  "model": rec.get("model")}))
+        session_state.begin(rec["id"], "turn")
+        # Stage 1b: this connection may be rebound to a fresh session while
+        # this turn is still running (new_session / plan_implement are legal
+        # at any time now). Everything from here to the final save reads
+        # `turn_rec` — the record this turn was started against — never `rec`,
+        # which the message loop may have re-pointed by then. The worker's
+        # events, metrics and transcript writes belong to the session the
+        # turn was started in, whatever the socket is attached to later.
+        turn_rec = rec
+        if not turn_rec.get("model"):
+            first = config.registry().get("default") or ""
+            if first:
+                turn_rec["model"] = first
 
-        chat = (rec.get("mode") or "agent") == "chat"
+        if agent.should_compact(turn_rec):
+            info = agent.compact_history(turn_rec, ref=turn_rec.get("model") or None)
+            if info and info.get("compacted"):
+                store.save(turn_rec)
+                saved = token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0)) \
+                    - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0))
+                metrics.bump(turn_rec, saved_compaction=max(0, saved))
+                await ws.send_text(_json({
+                    "type": "notify", "level": "info", "sid": turn_rec["id"],
+                    "message": (f"compacted {info['compacted']} earlier messages "
+                                f"({info['chars_before']} \u2192 {info['chars_after']} chars)")}))
+
+        store.append(turn_rec, "user", text)
+        if (turn_rec.get("title") or "New session") == "New session":
+            turn_rec["title"] = _title(text)
+        store.save(turn_rec)
+        await ws.send_text(_json({"type": "state_delta", "name": turn_rec["title"],
+                                  "model": turn_rec.get("model")}))
+
+        chat = (turn_rec.get("mode") or "agent") == "chat"
         messages = [{"role": "system",
-                     "content": prompts.system_prompt(rec.get("project"), False, chat=chat)}]
+                     "content": prompts.system_prompt(turn_rec.get("project"), False, chat=chat)}]
         # The project's own instructions go in the standing prefix, before the
         # transcript: they depend only on the folder, so putting them here keeps
         # the cached prefix stable across turns instead of invalidating it.
-        instructions = {} if chat else project_context.block(rec.get("project"))
+        instructions = {} if chat else project_context.block(turn_rec.get("project"))
         if instructions.get("text"):
             messages.append({"role": "system", "content": instructions["text"]})
-            metrics.bump(rec, instruction_tokens=instructions.get("tokens") or 0)
-            audit.record("project_instructions", session=rec["id"], backend="context",
+            metrics.bump(turn_rec, instruction_tokens=instructions.get("tokens") or 0)
+            audit.record("project_instructions", session=turn_rec["id"], backend="context",
                          mode=str(instructions.get("mode") or ""),
                          tokens=int(instructions.get("tokens") or 0),
                          files=[f["name"] for f in instructions.get("files") or []],
                          held_back=int(instructions.get("held_back") or 0))
-        messages.extend(_history(rec))
+        messages.extend(_history(turn_rec))
 
         # The task list is session state, not transcript, so it survives compaction
         # by construction. Injected only when there is something in it: an unused
@@ -430,62 +469,89 @@ async def ws_session(ws: WebSocket, sid: str):
         if not chat and plugin_manager.is_enabled("task_list"):
             try:
                 from ..plugins import task_list as _tl
-                task_block = _tl.block(rec["id"])
+                task_block = _tl.block(turn_rec["id"])
             except Exception:  # noqa: BLE001
                 task_block = {}
         if task_block.get("text"):
             messages.append({"role": "system", "content": task_block["text"]})
-            metrics.bump(rec, task_tokens=task_block.get("tokens") or 0)
+            metrics.bump(turn_rec, task_tokens=task_block.get("tokens") or 0)
 
-        block = {} if chat else _memory_block(rec.get("project"))
+        block = {} if chat else _memory_block(turn_rec.get("project"))
         text_block = (block or {}).get("text") or ""
         if text_block:
             messages.append({"role": "system", "content": text_block})
             injected = token_mod.estimate_tokens(text_block)
-            metrics.bump(rec, memory_tokens=injected)
+            metrics.bump(turn_rec, memory_tokens=injected)
             # What the budget refused is as much a fact as what it allowed. This
             # is the number behind the dashboard's "saved by memory budgeting"
             # row, which was permanently zero because nothing ever recorded it.
             try:
-                available = int(memory_store.stats(rec.get("project") or "").get("total_tokens") or 0)
+                available = int(memory_store.stats(turn_rec.get("project") or "").get("total_tokens") or 0)
             except Exception:  # noqa: BLE001
                 available = 0
             held = max(0, available - injected)
             if held:
-                metrics.bump(rec, saved_memory_budget=held)
-            audit.record("memory_injection", session=rec["id"], backend="memory_vault",
+                metrics.bump(turn_rec, saved_memory_budget=held)
+            audit.record("memory_injection", session=turn_rec["id"], backend="memory_vault",
                          mode=str(block.get("mode") or ""), tokens=injected,
                          count=int(block.get("count") or 0),
                          held_back=int(block.get("held_back") or 0),
                          budget=int(block.get("budget") or 0))
 
         if not chat:
-            _account_context(rec)
+            _account_context(turn_rec)
 
         if images:
-            if config.accepts_images(rec.get("model")):
+            if config.accepts_images(turn_rec.get("model")):
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].get("role") == "user":
                         messages[i] = {"role": "user", "content": _content_parts(text, images)}
                         break
             else:
                 await ws.send_text(_json({
-                    "type": "notify", "level": "warn", "sid": rec["id"],
-                    "message": (f"{rec.get('model') or 'this model'} does not accept images — "
+                    "type": "notify", "level": "warn", "sid": turn_rec["id"],
+                    "message": (f"{turn_rec.get('model') or 'this model'} does not accept images — "
                                 f"sent the text only")}))
         queue: asyncio.Queue = asyncio.Queue()
-        project = rec.get("project") or None
-        ref = rec.get("model") or None
+        project = turn_rec.get("project") or None
+        ref = turn_rec.get("model") or None
         trace: list[dict] = []
+        # The worker's identity is fixed at spawn. Every closure below reads
+        # `sid` and `turn_rec` — the local copies — never `rec`, which the
+        # message loop may rebind while this turn is still running (1b makes
+        # that legal again). The worker's events, metrics and transcript
+        # writes belong to the session the turn was started in.
+        sid = turn_rec["id"]
+
+        # Stage 3: the turn runs in its own process by default, so a person
+        # can kill it — a thread cannot be killed in Python under any
+        # circumstance. The thread path stays as the escape hatch
+        # (TACIT_TURN_WORKER=thread), and is what the engine-faking tests
+        # use, because a fake engine patched into this process is invisible
+        # to a worker subprocess.
+        worker_proc = turn_worker.spawn(sid)
+        use_process = worker_proc.start(
+            project=project, ref=ref, chat=chat, session=sid,
+            has_instructions=bool(instructions.get("text")),
+            reasoning=config.reasoning_for(turn_rec.get("thinking")),
+            max_steps=None, messages=messages, trace=trace)
+        running["worker"] = worker_proc if use_process else None
+        # Stage 3.5: the steer handler finds the worker by sid, so a steer
+        # arriving on this socket reaches the turn even if the socket's
+        # `running` dict has been replaced by a reconnect in the meantime.
+        if use_process:
+            worker_registry[sid] = worker_proc
 
         def worker():
             try:
-                for ev in agent.run_turn(messages, project=project, ref=ref, chat=chat,
-                                         session=rec["id"],
+                stream = (worker_proc.events() if use_process else
+                          agent.run_turn(messages, project=project, ref=ref, chat=chat,
+                                         session=sid,
                                          has_instructions=bool(instructions.get("text")),
                                          stop=running["stop"], steer=running["steer"],
-                                         reasoning=config.reasoning_for(rec.get("thinking")),
-                                         trace=trace):
+                                         reasoning=config.reasoning_for(turn_rec.get("thinking")),
+                                         trace=trace))
+                for ev in stream:
                     kind = ev.get("type")
                     if kind in ("text", "reason", "tool_start", "tool_end", "notify") and \
                             (ev.get("subagent") or ev.get("research")):
@@ -495,12 +561,12 @@ async def ws_session(ws: WebSocket, sid: str):
                         # dedicated event. Forwarded as its own type, the panel's
                         # job, not the transcript's.
                         loop.call_soon_threadsafe(queue.put_nowait, {
-                            **ev, "type": "delegation_activity", "sid": rec["id"]})
+                            **ev, "type": "delegation_activity", "sid": sid})
                     if kind == "usage":
-                        ev = _usage_event(rec, ev.get("usage") or {},
+                        ev = _usage_event(turn_rec, ev.get("usage") or {},
                                           subagent=bool(ev.get("subagent")))
                     elif kind == "delegation":
-                        metrics.bump(rec, saved_subagent=int(ev.get("saved") or 0))
+                        metrics.bump(turn_rec, saved_subagent=int(ev.get("saved") or 0))
                         ev = {"type": "notify", "level": "info",
                               "message": ("sub-agent spent "
                                           f"{token_mod.label(ev.get('spent') or 0)} tokens in its "
@@ -511,21 +577,28 @@ async def ws_session(ws: WebSocket, sid: str):
                         # Mid-turn compaction is a real saving and has to reach the
                         # ledger, or the dashboard's row stays at zero while the
                         # turn it describes actually reclaimed the tokens.
-                        metrics.bump(rec, saved_compaction=int(ev.get("saved") or 0))
-                        rec.setdefault("usage", {})["compacting"] = False
+                        metrics.bump(turn_rec, saved_compaction=int(ev.get("saved") or 0))
+                        turn_rec.setdefault("usage", {})["compacting"] = False
                         ev = {"type": "notify", "level": "info",
                               "message": (f"compacted {ev.get('compacted')} earlier steps "
                                           f"({ev.get('chars_before')} → {ev.get('chars_after')} "
                                           "chars)")}
                     elif kind == "tool_start":
-                        rec["tool_calls"] = int(rec.get("tool_calls") or 0) + 1
+                        turn_rec["tool_calls"] = int(turn_rec.get("tool_calls") or 0) + 1
                     if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
                         running["starting"] = False
-                    loop.call_soon_threadsafe(queue.put_nowait, {**ev, "sid": rec["id"]})
+                        session_state.running(sid)
+                    loop.call_soon_threadsafe(queue.put_nowait, {**ev, "sid": sid})
             except Exception as e:
                 loop.call_soon_threadsafe(queue.put_nowait,
-                                          {"type": "error", "message": str(e), "sid": rec["id"]})
+                                          {"type": "error", "message": str(e), "sid": sid})
             finally:
+                # The registry is the worker's own responsibility, not the
+                # socket's: a browser that disconnects mid-turn must not mark
+                # the session idle while the turn is still running in here.
+                session_state.end(sid)
+                # Stage 3.5: the steer registry entry dies with the turn.
+                worker_registry.pop(sid, None)
                 loop.call_soon_threadsafe(queue.put_nowait, None)
 
         t = threading.Thread(target=worker, daemon=True)
@@ -533,9 +606,14 @@ async def ws_session(ws: WebSocket, sid: str):
         t.start()
         await pump(queue)
         running["busy"] = False
+        # session_state.end() is the worker's own finally; this only covers the
+        # case where the worker thread never started.
+        if not running["thread"].is_alive():
+            session_state.end(sid)
         # One transcript entry per step, tools and reasoning attached to the step
         # that produced them. Flattening a whole turn into one text message is what
-        # erased the agent's own history.
+        # erased the agent's own history. The steps go to `turn_rec` — the session
+        # the turn was started in — even if the socket was rebound while it ran.
         for step in trace:
             extra = {}
             if step.get("reason"):
@@ -544,8 +622,8 @@ async def ws_session(ws: WebSocket, sid: str):
                 extra["tools"] = step["tools"]
             if not (step.get("text") or "").strip() and not extra:
                 continue
-            store.append(rec, "assistant", step.get("text") or "", extra or None)
-        store.save(rec)
+            store.append(turn_rec, "assistant", step.get("text") or "", extra or None)
+        store.save(turn_rec)
 
     try:
         while True:
@@ -565,15 +643,41 @@ async def ws_session(ws: WebSocket, sid: str):
             elif kind == "steer":
                 text = msg.get("message") or ""
                 if text.strip():
-                    running["steer"].append(text)
+                    # Stage 3.5: in process mode the worker owns the turn and
+                    # the socket's list is dead storage — the steer must ride
+                    # the worker's stdin, like the cancel does. The list stays
+                    # for the thread path, which shares it with run_turn.
+                    proc = worker_registry.get(rec["id"])
+                    carried = proc.steer(text) if proc else False
+                    if not carried:
+                        running["steer"].append(text)
                     await ws.send_text(_json({"type": "notify", "level": "info",
                                               "message": "steering applied",
                                               "sid": rec["id"]}))
 
             elif kind == "abort":
+                # Scoped to this socket's session by construction: `running`
+                # belongs to the one session this connection was opened for,
+                # and the worker's stop event is this session's. There is no
+                # code path here that could stop a turn in another session.
                 running["stop"].set()
                 running["assistant_stop"].set()
                 running["steer"].clear()
+                # Stage 3: a turn in its own process does not watch this
+                # event loop's flags — it gets the two-stage stop. The
+                # cooperative cancel runs off the event loop (it waits up to
+                # the grace period); the tree kill, if needed, follows it.
+                w = running.get("worker")
+                if w is not None and w.alive():
+                    asyncio.get_running_loop().run_in_executor(
+                        None, lambda: audit.record(
+                            "turn_cancel", session=rec["id"], backend="turn_worker",
+                            status="ok", **(w.cancel() or {})))
+                # The turn's background jobs die with it, either way.
+                stopped_jobs = extras.stop_session_jobs(rec["id"])
+                if stopped_jobs:
+                    audit.record("turn_jobs_stopped", session=rec["id"],
+                                 backend="bg", status="ok", count=stopped_jobs)
 
             elif kind == "assistant_prompt":
                 asyncio.create_task(start_assistant(msg.get("message") or ""))
@@ -591,24 +695,19 @@ async def ws_session(ws: WebSocket, sid: str):
                                           "preview": assistant.preview(rec), "sid": rec["id"]}))
 
             elif kind == "switch":
-                target = msg.get("sid") or ""
-                nxt = store.get(target) if target else None
-                if not nxt:
-                    # The settings in this message belong to the session named in it.
-                    # Writing them onto whichever session happens to be open is how a
-                    # stale or mistyped id silently reconfigured a different
-                    # conversation, and nothing was ever wrong on the surface.
-                    await ws.send_text(_json({
-                        "type": "error", "sid": rec["id"],
-                        "message": "unknown session: " + str(target)[:40]}))
-                    continue
-                rec = nxt
-                sid = rec["id"]
-                for key in ("model", "mode", "thinking", "workdir"):
-                    if msg.get(key) is not None:
-                        rec[key] = msg[key]
-                store.save(rec)
-                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
+                # Deleted in stage 1b. A socket is born attached to one
+                # session and stays attached; switching is the client opening
+                # a different socket. The command is kept only to answer old
+                # clients with the reason, instead of the generic
+                # "not supported" — and it must never rebind this
+                # connection's session record, which is how a turn started in
+                # session A came to be steered, stopped and saved into
+                # session B.
+                await ws.send_text(_json({
+                    "type": "error", "sid": rec["id"],
+                    "message": ("switch is no longer supported: every session has its "
+                                "own socket now — reload the page to pick up the new "
+                                "interface")}))
 
             elif kind == "set_model":
                 rec["model"] = msg.get("model") or rec.get("model")
@@ -630,19 +729,25 @@ async def ws_session(ws: WebSocket, sid: str):
                 pass
 
             elif kind in ("new_session", "client_new_session"):
+                # Stage 1b, per the plan decision: no server-side rebinding,
+                # ever. A socket is born attached to one session and stays
+                # attached. Creating a session hands the new id back; the
+                # client closes nothing and opens a fresh socket for it. (The
+                # old rebind also desynced the interface, which kept its own
+                # active session while the server silently moved.)
                 fresh = store.create(model=rec.get("model") or "", mode=rec.get("mode") or "agent",
                                      thinking=rec.get("thinking") or "default",
                                      project=rec.get("project") or "")
-                rec = fresh
-                sid = rec["id"]
-                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
-                await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
-                                          "model": rec.get("model"), "mode": rec.get("mode"),
-                                          "thinking": rec.get("thinking"),
-                                          "name": rec.get("title")}))
+                await ws.send_text(_json({
+                    "type": "rpc_response", "command": kind, "ok": True,
+                    "data": {"sid": fresh["id"], "name": fresh["title"],
+                             "model": fresh.get("model") or "", "mode": fresh.get("mode") or "agent",
+                             "thinking": fresh.get("thinking") or "default",
+                             "workdir": fresh.get("project") or ""},
+                    "sid": rec["id"]}))
 
             elif kind == "get_state":
-                await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
+                await ws.send_text(_json({"type": "hello", **_meta(rec)}))
 
             elif kind == "get_session_stats":
                 await ws.send_text(_json({
@@ -709,8 +814,11 @@ async def ws_session(ws: WebSocket, sid: str):
                 else:
                     running["busy"] = True
                     running["starting"] = True
-                    await _drive(plan.synthesise(run, msg.get("answers") or {}), rec["id"])
-                    running["busy"] = False
+                    try:
+                        await _drive(plan.synthesise(run, msg.get("answers") or {}), rec["id"])
+                    finally:
+                        running["busy"] = False
+                        session_state.end(rec["id"])
 
             elif kind == "plan_approve":
                 run = plan_state.get("run")
@@ -725,29 +833,29 @@ async def ws_session(ws: WebSocket, sid: str):
                     run.cancelled = True
                 plan_state["run"] = None
                 running["busy"] = False
+                session_state.end(rec["id"])
                 await ws.send_text(_json({"type": "plan_status", "phase": "cancelled",
                                           "detail": "cancelled", "explorers": [], "sid": rec["id"]}))
 
             elif kind == "plan_implement":
+                # Stage 1b, per the plan decision: no server-side rebinding.
+                # The implementation runs in a fresh session (the approval
+                # notice promises a clean context, leaving the planning
+                # discussion behind), and the client opens a socket for it —
+                # this connection stays attached to the planning session.
                 run = plan_state.get("run")
                 if run and run.text.strip():
                     prompt = plan.implement_prompt(run)
                     plan_state["run"] = None
-                    # The approval notice promises a fresh session: give the
-                    # implementation a clean context and leave the planning
-                    # discussion (and its explorers) behind.
                     fresh = store.create(model=rec.get("model") or "",
                                          mode=rec.get("mode") or "agent",
                                          thinking=rec.get("thinking") or "default",
                                          project=rec.get("project") or "")
-                    rec = fresh
-                    sid = rec["id"]
-                    await ws.send_text(_json({"type": "hello", **_meta(rec, running)}))
-                    await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
-                                              "model": rec.get("model"), "mode": rec.get("mode"),
-                                              "thinking": rec.get("thinking"),
-                                              "name": rec.get("title")}))
-                    asyncio.create_task(start_turn(prompt))
+                    await ws.send_text(_json({
+                        "type": "rpc_response", "command": "plan_implement", "ok": True,
+                        "data": {"sid": fresh["id"], "name": fresh["title"],
+                                 "prompt": prompt},
+                        "sid": rec["id"]}))
                 else:
                     await ws.send_text(_json({"type": "notify", "level": "warn",
                                               "message": "approve a plan first",

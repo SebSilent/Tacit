@@ -18,8 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, assistant, audit, benchmarks, config, deps, extras, guidance,  # noqa: E402
-                     metrics, plugin_manager, project_context, tokens)
+from backend import (agent, assistant, audit, config, deps, extras, guidance,  # noqa: E402
+                     mcp_registry, metrics, model_settings, plugin_manager,
+                     project_context, tokens, turn_worker)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
 from backend.routers import chat  # noqa: E402
@@ -240,9 +241,9 @@ class TestContextBudget(Isolated):
         super().setUp()
         self._orig_resolve = config.resolve_model
         self.addCleanup(setattr, config, "resolve_model", self._orig_resolve)
-        self._orig_profile = benchmarks.profile_for
-        self.addCleanup(setattr, benchmarks, "profile_for", self._orig_profile)
-        benchmarks.profile_for = lambda ref: {}
+        self._orig_profile = model_settings.profile_for
+        self.addCleanup(setattr, model_settings, "profile_for", self._orig_profile)
+        model_settings.profile_for = lambda ref: {}
 
     def test_unknown_window_falls_back_to_the_configured_default(self):
         config.resolve_model = lambda ref=None: {"contextWindow": 0}
@@ -266,9 +267,9 @@ class TestContextBudget(Isolated):
         self.assertGreater(agent.context_budget("p/m", rec), config.AGENT_CONTEXT_BUDGET)
 
     def test_per_model_override_is_honoured(self):
-        # `benchmark action=set context_budget=` was stored and never read back.
+        # a per-model context_budget must be stored and read back, not ignored.
         config.resolve_model = lambda ref=None: {"contextWindow": 1_000_000}
-        benchmarks.profile_for = lambda ref: {"context_budget": 42000}
+        model_settings.profile_for = lambda ref: {"context_budget": 42000}
         self.assertEqual(agent.context_budget("p/m"), 42000)
 
 
@@ -293,33 +294,61 @@ class TestReportClipping(unittest.TestCase):
         self.assertIn("delegation budget", out)
 
 
+# ── 6b. the mcp helpers exist only when mcp does ──────────────────────────
+class TestMcpHelperGate(Isolated):
+    """Four helper schemas are dead weight until a server is configured."""
+
+    HELPERS = ("mcp_list_servers", "mcp_search_tools", "mcp_activate_tools",
+               "mcp_call")
+
+    def _names(self):
+        return {t["function"]["name"] for t in agent.tools_for()}
+
+    def test_no_servers_means_no_helper_schemas(self):
+        names = self._names()
+        for h in self.HELPERS:
+            self.assertNotIn(h, names)
+
+    def test_one_configured_server_offers_every_helper(self):
+        mcp_registry.add_server({"id": "fake", "command": "echo"})
+        names = self._names()
+        for h in self.HELPERS:
+            self.assertIn(h, names)
+
+    def test_presence_is_the_gate_not_a_running_server(self):
+        # add_server only records the spec; nothing here starts a process.
+        mcp_registry.add_server({"id": "idle", "command": "echo"})
+        self.assertIn("mcp_list_servers", self._names())
+
+
 # ── 7. read-only means read-only ──────────────────────────────────────────
 class TestReadOnlyGuard(Isolated):
     """The Assistant's switch and the sub-agent both claim they cannot write."""
 
     def test_mutating_tools_are_not_offered(self):
         names = {t["function"]["name"] for t in agent.tools_for(readonly=True)}
-        for blocked in ("write_file", "edit_file", "run_shell", "snapshot",
-                        "mcp_call", "mcp_activate_tools", "task", "restore"):
+        for blocked in ("write_file", "edit_file", "run_shell",
+                        "mcp_call", "mcp_activate_tools", "task"):
             self.assertNotIn(blocked, names)
 
     def test_reading_tools_are_still_offered(self):
         names = {t["function"]["name"] for t in agent.tools_for(readonly=True)}
+        # mcp_search_tools left this list: the helper tools are gated on a
+        # configured server now (TestMcpHelperGate below), and isolation
+        # runs with none.
         for kept in ("read_file", "list_files", "grep_files", "glob_files", "fetch",
-                     "skill", "mcp_search_tools"):
+                     "skill"):
             self.assertIn(kept, names)
 
     def test_writing_action_of_a_reading_tool_is_refused(self):
-        self.assertTrue(agent.readonly_guard("benchmark", {"action": "set"}))
         self.assertTrue(agent.readonly_guard("evidence", {"action": "add"}))
-        self.assertEqual(agent.readonly_guard("benchmark", {"action": "list"}), "")
         self.assertEqual(agent.readonly_guard("evidence", {"action": "list"}), "")
 
     def test_call_tool_refuses_even_when_the_model_names_it(self):
         # Hiding the schema is not the guard: a model that remembers the name can
         # still emit the call.
         out = {}
-        for _ in agent.call_tool("snapshot", {"label": "x"},
+        for _ in agent.call_tool("task", {"prompt": "x"},
                                  {"readonly": True, "project": None}, out):
             pass
         self.assertTrue(out["result"].startswith("ERROR:"), out["result"])
@@ -330,11 +359,11 @@ class TestReadOnlyGuard(Isolated):
         # point is call_tool, and only when the context says the caller is
         # read-only. The main agent's context does not.
         out = {}
-        for _ in agent.call_tool("list_snapshots", {}, {"project": None}, out):
+        for _ in agent.call_tool("list_files", {}, {"project": None}, out):
             pass
         self.assertNotIn("read-only", str(out.get("result")))
         names = {t["function"]["name"] for t in agent.tools_for(readonly=False)}
-        for kept in ("snapshot", "write_file", "edit_file", "run_shell", "task"):
+        for kept in ("write_file", "edit_file", "run_shell", "task"):
             self.assertIn(kept, names)
 
 
@@ -483,11 +512,14 @@ class TestPublishedFigures(Isolated):
         self.assertEqual(cost["tool_count"], 7)
         self.assertLess(cost["total"], 900)
 
-    def test_default_profile_tool_count_matches_the_readme(self):
+    def test_default_profile_tool_count_matches_the_schema(self):
         from backend import profiles
         cost = profiles.cost_of(profiles.BUILTIN["default"])
         self.assertEqual(cost["tool_count"], len(agent.TOOLS))
-        self.assertEqual(len(agent.TOOLS), 24)
+        # 21 became 20 when the benchmark tool was deleted (stage 5, item 10);
+        # the README still says 21 and is frozen by instruction, so the drift
+        # lives here until the doc is next allowed to move.
+        self.assertEqual(len(agent.TOOLS), 20)
 
     def test_memory_profiles_report_their_plugin_tools(self):
         # The README's profile table said ~2,100 for these; the memory vault adds
@@ -579,14 +611,16 @@ class TestRunTurnWiring(ProjectFixture):
         self.assertEqual(rows[0]["status"], "error")
 
     def test_readonly_caller_is_refused_at_the_call_not_just_the_schema(self):
+        # `task` is hidden from the read-only schema and refused at the call: the
+        # same two-layer guarantee the snapshot tools used to be tested with.
         events, _, _ = self._drive(
-            [_tool_step(("c1", "snapshot", {"label": "x"})), _text_step("done")],
+            [_tool_step(("c1", "task", {"prompt": "x"})), _text_step("done")],
             session="SID-3", readonly=True)
         ended = [e for e in events if e["type"] == "tool_end"]
         self.assertTrue(ended[0]["is_error"])
         self.assertIn("read-only", ended[0]["result"])
-        # ...and nothing was written to the checkpoint store to refuse it.
-        self.assertEqual(list(config.CHECKPOINT_DIR.iterdir()), [])
+        # ...and no sub-agent was spawned to refuse it.
+        self.assertEqual([e for e in events if e.get("subagent")], [])
 
     def test_the_task_reaches_the_model_on_every_step(self):
         # Pinning only messages[0] let elision drop the question. Drive a
@@ -1287,7 +1321,7 @@ class TestParallelDelegation(Isolated):
         barrier = threading.Barrier(2, timeout=10)
         order = []
 
-        def fake_call(name, args, ctx, out):
+        def fake_call(name, args, ctx, out, call=None):
             barrier.wait()
             order.append(args.get("n"))
             out["result"] = f"report {args.get('n')}"
@@ -1305,7 +1339,7 @@ class TestParallelDelegation(Isolated):
         self.assertEqual(sorted(order), [1, 2])
 
     def test_a_failing_delegation_does_not_take_the_other_down(self):
-        def fake_call(name, args, ctx, out):
+        def fake_call(name, args, ctx, out, call=None):
             if args.get("boom"):
                 raise RuntimeError("sub-agent exploded")
             out["result"] = "fine"
@@ -1333,7 +1367,7 @@ class TestParallelDelegation(Isolated):
         self.addCleanup(setattr, agent.engine, "stream_chat", orig_stream)
         orig_sub = agent.run_subagent
 
-        def fake_sub(task, ctx, out):
+        def fake_sub(task, ctx, out, parent_call_id=""):
             out["result"] = "a report"
             return iter(())
         agent.run_subagent = fake_sub
@@ -1615,6 +1649,182 @@ class TestTaskStripEndpoint(Isolated):
         self.assertEqual(res["tasks"], [])
         self.assertEqual(res["open"], 0)
         self.assertEqual(res["count"], 0)
+
+
+# ── 22. sessions are isolated from each other ─────────────────────────────
+class TestSessionIsolationClaims(Isolated):
+    """Stage 1a: one session, one running turn, no cross-session bleed.
+
+    The leak the user reported was structural: one socket held one `running`
+    dict while `switch` re-pointed the handler's session record, so a turn
+    started in session A could be steered, stopped and saved into session B.
+    The invariants here are the ones the interface now relies on.
+    """
+
+    def test_the_worker_is_keyed_by_sid_not_by_socket(self):
+        from backend import session_state
+        session_state.begin("sid-x", "turn")
+        self.assertTrue(session_state.busy("sid-x"))
+        # A second window asking about the same sid sees the same truth.
+        self.assertEqual(session_state.get("sid-x")["turns"], 1)
+        session_state.running("sid-x")
+        self.assertFalse(session_state.get("sid-x")["starting"])
+        session_state.end("sid-x")
+        self.assertFalse(session_state.busy("sid-x"))
+
+    def test_a_second_begin_on_the_same_sid_counts_turns(self):
+        from backend import session_state
+        session_state.begin("sid-y", "turn")
+        session_state.end("sid-y")
+        session_state.begin("sid-y", "turn")
+        self.assertEqual(session_state.get("sid-y")["turns"], 2)
+        session_state.end("sid-y")
+
+    def test_abort_is_scoped_to_its_session(self):
+        """Each connection owns its stop event; the registry is sid-keyed.
+
+        There is no shared stop event left to reach: two sockets each create
+        their own `running` dict inside their own connection, and the
+        registry carries no stop state at all.
+        """
+        from backend import session_state
+        session_state.begin("sid-a", "turn")
+        session_state.begin("sid-b", "turn")
+        # Ending A leaves B exactly as it was.
+        session_state.end("sid-a")
+        self.assertFalse(session_state.busy("sid-a"))
+        self.assertTrue(session_state.busy("sid-b"))
+        session_state.end("sid-b")
+
+    def test_the_state_endpoint_reports_the_registry(self):
+        import asyncio
+        from backend import session_state
+        from backend.routers import api as api_router
+        session_state.begin("sid-api", "plan")
+        res = asyncio.run(api_router.sessions_state())
+        self.assertTrue(res["ok"])
+        self.assertIn("sid-api", res["busy"])
+        self.assertEqual(res["states"]["sid-api"]["kind"], "plan")
+        session_state.end("sid-api")
+        res = asyncio.run(api_router.sessions_state())
+        self.assertNotIn("sid-api", res["busy"])
+
+    def test_switch_is_deleted_and_rebinding_cannot_redirect(self):
+        """Stage 1b: the in-band switch is gone; rebinding cannot steal a turn.
+
+        Read straight from the handler source. `switch` must answer with the
+        reason and must not rebind the connection's session record. The turn
+        worker must read its own captured record, not the socket's current
+        one — the capture is defence in depth, because the server no longer
+        rebinds at all.
+        """
+        src = Path(chat.__file__).read_text(encoding="utf-8")
+        at = src.index('elif kind == "switch":')
+        body = src[at:src.index("elif kind ==", at + 10)]
+        self.assertIn("no longer supported", body)
+        self.assertNotIn("rec = nxt", body,
+                         "switch must not rebind the connection's session record")
+        # The turn worker reads the record it was started against.
+        self.assertIn("turn_rec = rec", src)
+        self.assertIn("store.append(turn_rec,", src)
+        self.assertIn("store.save(turn_rec)", src)
+
+    def test_the_server_never_rebinds_a_connection(self):
+        """new_session / client_new_session / plan_implement return the sid.
+
+        Stage 1b's decision: a socket is born attached to one session. The
+        creating handlers answer with an rpc_response carrying the new
+        session's id, and the client opens a fresh socket for it. None of
+        the three may rebind this connection's session record.
+        """
+        src = Path(chat.__file__).read_text(encoding="utf-8")
+        for anchor in ('elif kind in ("new_session", "client_new_session"):',
+                       'elif kind == "plan_implement":'):
+            at = src.index(anchor)
+            body = src[at:src.index("elif kind ==", at + 10)]
+            self.assertIn('"data": {"sid"', body,
+                          "the handler must return the new session's id")
+            self.assertNotIn("rec = fresh", body,
+                             "the handler must not rebind this connection")
+            self.assertNotIn("session_ready", body,
+                             "no hello/session_ready: the socket is not moving")
+
+    def test_the_frontend_holds_one_socket_per_session(self):
+        """The interface's isolation guarantee, read from its source.
+
+        One WebSocket per session, keyed by sid; the in-band switch is not
+        sent by anyone; cross-session event routing is gone.
+        """
+        src = Path("static/app.js").read_text(encoding="utf-8")
+        self.assertIn("sockets = new Map()", src)
+        self.assertNotIn("type: 'switch'", src,
+                         "the client must not send the deleted in-band switch")
+        self.assertNotIn("function bgIngest", src,
+                         "cross-session event routing is deleted")
+        self.assertIn("connectSession(s)", src)
+        # The delegation panel is per-session too.
+        dsrc = Path("static/delegation.js").read_text(encoding="utf-8")
+        self.assertIn("keyFor", dsrc)
+        self.assertIn("sessionChanged", dsrc)
+
+    def test_a_turn_runs_in_its_own_killable_process(self):
+        """Stage 3: the turn worker, and the two-stage stop.
+
+        The decision the plan records: a thread cannot be killed in Python,
+        so a turn runs in its own process by default. Stop is cooperative
+        cancel first, tree kill after a grace — and the interface is told
+        which one ran, the same honesty the sandbox layer applies.
+        """
+        src = Path(turn_worker.__file__).read_text(encoding="utf-8")
+        self.assertIn("def cancel(", src)
+        self.assertIn("taskkill", src, "the Windows tree kill")
+        self.assertIn("killpg", src, "the POSIX tree kill")
+        self.assertIn("CANCEL_GRACE_S", src)
+        # The escape hatch is real, not decorative.
+        self.assertIn("TACIT_TURN_WORKER", Path(config.__file__).read_text(encoding="utf-8"))
+        # The abort handler runs the two-stage stop, off the event loop.
+        csrc = Path(chat.__file__).read_text(encoding="utf-8")
+        at = csrc.index('elif kind == "abort":')
+        body = csrc[at:csrc.index("elif kind ==", at + 10)]
+        self.assertIn("w.cancel()", body, "abort must reach the worker process")
+        self.assertIn("stop_session_jobs", body,
+                      "the turn's background jobs die with it")
+
+    def test_the_worker_owns_no_accounting(self):
+        """The parent bills the turn, in both paths.
+
+        The worker streams events; the parent's shared event body runs the
+        usage meter and the metrics. Accounting in the worker too would bill
+        every process-path turn twice.
+        """
+        src = Path(turn_worker.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("metrics.bump", src)
+        self.assertNotIn("store.save", src)
+        # And the kill-safe trace: the worker re-sends its cumulative trace
+        # after every step, so a hard-killed turn keeps what it completed.
+        self.assertIn('"type": "trace"', src)
+
+    def test_adopting_a_server_created_session_opens_a_plain_socket(self):
+        """adoptSession must not send ?create=1 for a session that exists.
+
+        Server-created sessions (new_session, plan_implement) already exist
+        by the time the client adopts them: their socket must open without
+        the create flag, or a reconnect would materialise phantom sessions
+        — the exact bug the create=1 discipline exists to prevent.
+        """
+        src = Path("static/app.js").read_text(encoding="utf-8")
+        at = src.index("function adoptSession")
+        body = src[at:src.index("function switchSession", at)]
+        self.assertNotIn("_new", body,
+                         "adopting an existing session must not mark it _new")
+        self.assertNotIn("_adopt", body,
+                         "adopting an existing session must not mark it _adopt")
+        # And the only places that set those flags are the New-session
+        # action and the 4404 re-adopt path.
+        sets_new = [i for i in range(len(src))
+                    if src.startswith("s._new = true", i)
+                    or src.startswith("_new: true", i)]
+        self.assertTrue(sets_new, "the New-session path must still set _new")
 
 
 if __name__ == "__main__":

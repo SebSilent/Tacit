@@ -68,7 +68,7 @@ class TestUncappedRetry(Isolated):
             return iter([{"type": "text", "delta": "finished"},
                          {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append((name, str(a.get("path") or "")))
             out["result"] = "wrote attack.py"
             return iter([])
@@ -119,7 +119,7 @@ class TestUncappedRetry(Isolated):
             return iter([{"type": "text", "delta": "done"},
                          {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append(name)
             out["result"] = "wrote"
             return iter([])
@@ -160,7 +160,7 @@ class TestWallBudgetAwareness(Isolated):
                  "arguments": '{"command": "python3 probe.py"}'}]},
                 {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append(name)
             out["result"] = "ok"
             return iter([])
@@ -226,7 +226,7 @@ class TestDeliveryOff(Isolated):
                  "arguments": '{"command": "python3 probe' + str(n) + '.py"}'}]},
                 {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             out["result"] = "ok"
             return iter([])
 
@@ -295,7 +295,7 @@ class TestProseExtraction(Isolated):
             return iter([{"type": "text", "delta": "considering the differential"},
                          {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append((name, str(a.get("path") or ""), str(a.get("content") or "")))
             out["result"] = "wrote" if name == "write_file" else "ok"
             return iter([])
@@ -379,7 +379,7 @@ class TestVerifyPresentFile(Isolated):
             return iter([{"type": "text", "delta": "That should do it."},
                          {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append((name, str(a.get("path") or "")))
             out["result"] = "wrote attack.py" if name == "write_file" else "ok"
             return iter([])
@@ -452,7 +452,7 @@ class TestMidTurnDemand(Isolated):
                  "arguments": '{"command": "python3 probe' + str(n) + '.py"}'}]},
                 {"type": "done", "model": None, "finish": "stop"}])
 
-        def fake_tool(name, a, ctx, out):
+        def fake_tool(name, a, ctx, out, call=None):
             runs.append((name, str(a.get("path") or "")))
             out["result"] = "wrote" if name == "write_file" else "ok"
             return iter([])

@@ -14,10 +14,16 @@
 
   let models = [];
   let delegateModel = '';
-  // key -> {label, state, ts, trace: [{type, name, args, result, is_error, delta, ...}]}
+  // Per-session (plan item 3): cards are stored per session and the panel
+  // renders only the active session's. Key is `sid + '\n' + delegation key`,
+  // so two sessions delegating the same call id never cross-report.
   let cards = new Map();
   let order = [];            // insertion order of keys
   let settingsOpen = false;
+  let activeSid = '';        // which session's cards are on show
+
+  const sid = () => (window.Tacit && window.Tacit.getSid ? window.Tacit.getSid() : '');
+  const keyFor = (k) => sid() + '\n' + k;
 
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
@@ -33,14 +39,17 @@
   function renderMessages() {
     const box = $('#dgMessages');
     if (!box) return;
-    if (!order.length) {
+    // Only this session's cards are on show. Other sessions' delegations
+    // exist in their own keys and are rendered when their session is active.
+    const mine = order.filter((k) => k.startsWith(sid() + '\n'));
+    if (!mine.length) {
       box.innerHTML = '<div class="as-empty">Nothing is running. When the agent delegates to a ' +
         'sub-agent or calls research, what those are doing shows up here, live.<br><br>' +
         '<span class="as-note">Sub-agents run in their own context; only their report reaches ' +
         'the transcript.</span></div>';
       return;
     }
-    box.innerHTML = order.map((k) => {
+    box.innerHTML = mine.map((k) => {
       const c = cards.get(k);
       const age = Math.max(0, Math.round((Date.now() - (c.ts || 0)) / 1000));
       const traceHtml = renderTrace(c.trace || []);
@@ -154,16 +163,13 @@
 
   // ── the socket's delegation_activity events ────────────────────────────
   function handle(m) {
-    // A card arriving while the panel is closed means a delegation is running
-    // that the person cannot see. This is the backstop for the tool_start hook
-    // below: it catches a socket that reconnected mid-turn, a page that loaded
-    // after the launch, and any path that never produced a transcript card.
-    if (!isOpen()) openPanel();
-    // One card per sub-agent call id; research aspects key on their label.
-    // Use parent_call_id to group all events from the same delegation together.
+    // One card per sub-agent call id, namespaced by session (plan item 3):
+    // the events carry their sid, and a card from session B must never
+    // render while session A is on screen.
     const parentId = m.parent_call_id || '';
-    const key = m.research ? ('research:' + (m.aspect || 'general'))
-                           : ('call:' + (parentId || m.id || m.name || 'x'));
+    const local = m.research ? ('research:' + (m.aspect || 'general'))
+                             : ('call:' + (parentId || m.id || m.name || 'x'));
+    const key = keyFor(local);
     const label = m.research
       ? ('research · ' + (m.aspect || 'general'))
       : ('sub-agent ' + String(parentId || m.id || '').slice(0, 8));
@@ -219,8 +225,12 @@
   }
 
   function clear() {
-    cards.clear();
-    order = [];
+    // Clearing means this session's cards, not every session's: the panel is
+    // per-session, and so is its clear action.
+    const prefix = sid() + '\n';
+    for (const k of [...order]) {
+      if (k.startsWith(prefix)) { cards.delete(k); order.splice(order.indexOf(k), 1); }
+    }
     renderMessages();
   }
 
@@ -246,6 +256,13 @@
   // app.js calls this from its tool_start handler.
   function maybeLaunch(name) {
     if (name === 'task' || name === 'research') openPanel();
+  }
+
+  // The panel follows the session: switching sessions swaps the card set.
+  function sessionChanged(newSid) {
+    if (newSid === activeSid) return;
+    activeSid = newSid;
+    renderMessages();
   }
 
   // ── wiring ─────────────────────────────────────────────────────────────
@@ -288,5 +305,5 @@
     }
   } catch (e) { /* ignore */ }
 
-  window.TacitDelegation = { handle, clear, togglePanel, load, maybeLaunch };
+  window.TacitDelegation = { handle, clear, togglePanel, load, maybeLaunch, sessionChanged };
 })();

@@ -1,10 +1,28 @@
+"""Per-model settings: optional overrides for temperature, max_tokens and
+context_budget, keyed by model reference.
+
+Renamed from ``benchmarks.py`` in stage 5 (plan item 10): the name described
+who used to write these rows — the benchmark harness — not what they are. The
+``benchmark`` agent tool that managed them is deleted; per-model settings are
+configuration, not an agent capability, so they are managed from the interface
+(Providers / General) instead. The mechanism itself is load-bearing:
+``agent.context_budget()`` reads ``profile_for(ref)`` for the window cap, and
+``run_turn`` reads ``temperature``/``max_tokens`` from it, so deleting the
+store would change model behaviour.
+
+The file stays ``~/.tacit/benchmarks.json`` so an existing install keeps its
+rows without a migration.
+"""
+
+from __future__ import annotations
+
 import json
 
 from . import config
 
 
 def all_profiles() -> dict:
-    rows = config.read_json(config.BENCHMARK_FILE, {})
+    rows = config.read_json(config.MODEL_SETTINGS_FILE, {})
     return rows if isinstance(rows, dict) else {}
 
 
@@ -39,13 +57,13 @@ def set_profile(ref: str, temperature=None, max_tokens=None, context_budget=None
         rows[name] = cur
     else:
         rows.pop(name, None)
-    config.write_json(config.BENCHMARK_FILE, rows)
+    config.write_json(config.MODEL_SETTINGS_FILE, rows)
     return f"{name}: {json.dumps(cur) if cur else '(cleared)'}"
 
 
 def listing() -> str:
     rows = all_profiles()
     if not rows:
-        return (f"no profiles yet - stored in {config.BENCHMARK_FILE}\n"
-                "set one with benchmark(action='set', model='provider/id', temperature=0.1)")
+        return (f"no per-model settings yet - stored in {config.MODEL_SETTINGS_FILE}\n"
+                "set them from the interface (Providers), or in the file directly")
     return "\n".join(f"{k}: {json.dumps(v)}" for k, v in sorted(rows.items()))

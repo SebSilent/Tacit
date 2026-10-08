@@ -44,7 +44,8 @@ def _drain(proc, buf: list, cap: int):
             threading.Thread(target=run, args=(stream,), daemon=True).start()
 
 
-def bg_start(command: str, project: str | None = None, cwd: str | None = None) -> str:
+def bg_start(command: str, project: str | None = None, cwd: str | None = None,
+             session: str = "") -> str:
     cmd = str(command or "").strip()
     if not cmd:
         return "ERROR: empty command"
@@ -57,7 +58,10 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None) -
         return f"ERROR: {e}"
     bid = _new_id()
     out: list[str] = []
-    BG[bid] = {"proc": proc, "cmd": cmd, "cwd": work, "out": out, "started": time.time()}
+    # The session tag is what makes a turn's background jobs stoppable with
+    # the turn (stage 3): call_tool injects it, and stop_session uses it.
+    BG[bid] = {"proc": proc, "cmd": cmd, "cwd": work, "out": out,
+               "started": time.time(), "session": str(session or "")}
     _drain(proc, out, 4000)
     return f"started [{bid}] in {work}: {cmd}\nread it with bg_output(id='{bid}')"
 
@@ -87,6 +91,29 @@ def bg_stop(bid: str) -> str:
             pass
     BG.pop(key, None)
     return f"stopped [{key}]"
+
+
+def stop_session_jobs(session: str) -> int:
+    """Stop every background job a session started. Returns how many.
+
+    Part of the kill contract (stage 3): a turn's work does not outlive the
+    turn. Jobs started outside any session are nobody's to stop here.
+    """
+    key = str(session or "")
+    if not key:
+        return 0
+    n = 0
+    for bid, rec in list(BG.items()):
+        if rec.get("session") != key:
+            continue
+        if rec["proc"].poll() is None:
+            try:
+                rec["proc"].terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        BG.pop(bid, None)
+        n += 1
+    return n
 
 
 def fetch(url: str, max_chars: int | None = None) -> str:
