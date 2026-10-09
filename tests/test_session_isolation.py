@@ -282,7 +282,14 @@ class SessionIsolationTest(unittest.TestCase):
                         break
                 self.assertEqual(m.get("sid"), "iso-ns-1",
                                  "the turn's events carry the session they belong to")
-                # And its transcript landed in the original record.
+                # And its transcript landed in the original record. done is
+                # published before the epilogue saves the store — and a read
+                # racing that write gets None back (read_json's fallback) — so
+                # wait for the bus to die first: the save precedes the release.
+                from backend import turn_bus
+                deadline = time.time() + 5
+                while turn_bus.alive("iso-ns-1") and time.time() < deadline:
+                    time.sleep(0.05)
                 rec = store.get("iso-ns-1")
                 self.assertTrue(any(m.get("role") == "assistant" and (m.get("content") or "").strip()
                                     for m in rec.get("messages") or []),
@@ -347,7 +354,13 @@ class SessionIsolationTest(unittest.TestCase):
                 self.assertGreater(row["turns"], 0)
                 prov.release()
                 self._until(ws, "done")
+                # done is published before the worker's finally ends the
+                # session; poll the endpoint instead of racing it once.
+                deadline = time.time() + 5
                 r = self._client().get("/api/sessions/state").json()
+                while "iso-api-1" in r["busy"] and time.time() < deadline:
+                    time.sleep(0.05)
+                    r = self._client().get("/api/sessions/state").json()
                 self.assertNotIn("iso-api-1", r["busy"])
         finally:
             engine.stream_chat = orig

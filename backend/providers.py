@@ -24,7 +24,10 @@ DEFAULTS = {
     "sandbox": {"backend": "none", "network": False, "timeout": 180,
                 "memory_mb": 0, "cpu_seconds": 0, "readonly_project": False},
     "memory": {"mode": "off", "budget": 120, "ttl_days": 0, "reinforce": True},
-    "learning": {"mode": "propose"},
+    # Learning proposals are off by default (stage 8): the analyzer reads
+    # finished transcripts on a timer, and that is a choice, not a default.
+    # `propose` remains one explicit selection in Settings.
+    "learning": {"mode": "learn-off"},
     "analyzer": {"enabled": True, "interval_s": 120},
     # Per-turn guidance blocks. On by default: it changes how the agent behaves
     # without touching the standing prompt or adding a model call.
@@ -224,7 +227,7 @@ def resolve(kind: str) -> dict:
     elif kind == "memory":
         chosen = str(cfg["memory"].get("mode") or "off")
     elif kind == "learning":
-        chosen = str(cfg["learning"].get("mode") or "propose")
+        chosen = str(cfg["learning"].get("mode") or "learn-off")
     elif kind == "gateway":
         chosen = str((cfg.get("gateway") or {}).get("id") or "none")
     else:

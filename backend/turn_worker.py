@@ -153,31 +153,47 @@ class TurnWorker:
         proc = self.proc
         if proc is None:
             return
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if ev.get("type") == "trace":
-                # Kill-safe: the worker re-sends its cumulative trace after
-                # every step, so the LAST one seen is the most complete. A
-                # hard-killed worker's finally never runs; this per-step copy
-                # is what the parent keeps.
-                self._trace[:] = list(ev.get("steps") or [])
-                continue
-            yield ev
-        # If we reach here, stdout closed (worker exited).
-        # Check if worker crashed vs clean exit.
-        if proc.poll() is not None:
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "trace":
+                    # Kill-safe: the worker re-sends its cumulative trace after
+                    # every step, so the LAST one seen is the most complete. A
+                    # hard-killed worker's finally never runs; this per-step copy
+                    # is what the parent keeps.
+                    self._trace[:] = list(ev.get("steps") or [])
+                    continue
+                yield ev
+            # If we reach here, stdout closed (worker exited).
+            # Check if worker crashed vs clean exit.
+            if proc.poll() is not None:
+                exit_code = proc.returncode
+                if exit_code != 0:
+                    yield {"type": "error", "message": f"turn worker exited with code {exit_code}"}
+                else:
+                    yield {"type": "error", "message": "turn worker exited unexpectedly (clean exit but no done event)"}
+        finally:
+            # The registry row dies with the process, however consumption ends.
+            # The reap used to live after the read loop, so a parent that
+            # abandoned the generator mid-turn — an exception in the pump, a
+            # browser gone mid-turn — left the row behind forever: the listing
+            # then showed workers that had exited, which is exactly the lie
+            # that sent an operator hunting for zombies that were not there.
+            # The row is dropped before the error events above are consumed,
+            # which is fine: the row describes the process, not the events.
+            # `self.proc` stays: a consumed worker is an exited worker, and
+            # the caller still owns it — `wait()`, `cancel()`'s honest
+            # already-exited answer and `alive()`'s poll() all read it. Nulling
+            # it here turned every clean exhaustion into a lost handle (the
+            # Popen fell to the GC with its pipes unclosed) and broke every
+            # lifecycle test that waits on the process after the stream ends.
             proctools.reap(proc)
-            exit_code = proc.returncode
-            if exit_code != 0:
-                yield {"type": "error", "message": f"turn worker exited with code {exit_code}"}
-            else:
-                yield {"type": "error", "message": "turn worker exited unexpectedly (clean exit but no done event)"}
 
     # ── steering ──────────────────────────────────────────────────────────
     def steer(self, text: str) -> bool:

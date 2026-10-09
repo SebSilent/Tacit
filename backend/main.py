@@ -36,8 +36,10 @@ async def lifespan(app: FastAPI):
         pass
     # Reads finished transcripts on a timer and leaves proposals behind. It is
     # never on the request path, and it cannot change an answer by itself.
+    # Stage 8: the startup check is authoritative — learning off means the
+    # worker is not even started.
     try:
-        analyzer.worker.start()
+        analyzer.sync_worker()
     except Exception:
         pass
     # Start autoupdater background task

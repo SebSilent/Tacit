@@ -6,7 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .. import (agent, assistant, audit, config, extras, mcp_registry, memory_modes,
                 memory_store, metrics, plan, plugin_manager, project_context,
-                session_state, store, turn_worker)
+                session_state, store, turn_bus, turn_worker)
 from .. import tokens as token_mod
 from ..ai import prompts
 
@@ -291,6 +291,14 @@ async def ws_session(ws: WebSocket, sid: str):
     plan_state = {"run": None}
 
     await ws.send_text(_json({"type": "hello", **_meta(rec)}))
+    # Stage 3.6: a hello that lands while a turn is running is followed by the
+    # turn's buffered events so far. The viewer draws the past from the replay
+    # instead of waiting on events that already streamed past; the bus dies
+    # with the turn (finish), so a replay can never double onto the transcript.
+    # busy/starting ride on hello itself, via _meta.
+    if turn_bus.alive(rec["id"]):
+        await ws.send_text(_json({"type": "replay", "sid": rec["id"],
+                                  "events": turn_bus.replay(rec["id"])}))
     await ws.send_text(_json({"type": "session_ready", "sid": rec["id"],
                               "model": rec.get("model"), "mode": rec.get("mode"),
                               "thinking": rec.get("thinking"), "name": rec.get("title")}))
@@ -412,6 +420,11 @@ async def ws_session(ws: WebSocket, sid: str):
         running["busy"] = True
         running["starting"] = True
         running["stop"] = threading.Event()
+        # The bus opens before the session is marked busy, so any viewer that
+        # can observe "busy" can also subscribe to the turn behind it. `rec`
+        # is still this turn's record here — the socket's rebinding to a fresh
+        # session happens later, inside the message loop.
+        bus = turn_bus.start(rec["id"], loop)
         session_state.begin(rec["id"], "turn")
         # The state verifier, push side: every other open view of this
         # session (another tab, or this one after a switch-away) learns the
@@ -517,7 +530,6 @@ async def ws_session(ws: WebSocket, sid: str):
                     "type": "notify", "level": "warn", "sid": turn_rec["id"],
                     "message": (f"{turn_rec.get('model') or 'this model'} does not accept images — "
                                 f"sent the text only")}))
-        queue: asyncio.Queue = asyncio.Queue()
         project = turn_rec.get("project") or None
         ref = turn_rec.get("model") or None
         trace: list[dict] = []
@@ -534,13 +546,35 @@ async def ws_session(ws: WebSocket, sid: str):
         # (TACIT_TURN_WORKER=thread), and is what the engine-faking tests
         # use, because a fake engine patched into this process is invisible
         # to a worker subprocess.
-        worker_proc = turn_worker.spawn(sid)
-        use_process = worker_proc.start(
-            project=project, ref=ref, chat=chat, session=sid,
-            has_instructions=bool(instructions.get("text")),
-            reasoning=config.reasoning_for(turn_rec.get("thinking")),
-            max_steps=None, messages=messages, trace=trace)
+        try:
+            worker_proc = turn_worker.spawn(sid)
+            use_process = worker_proc.start(
+                project=project, ref=ref, chat=chat, session=sid,
+                has_instructions=bool(instructions.get("text")),
+                reasoning=config.reasoning_for(turn_rec.get("thinking")),
+                max_steps=None, messages=messages, trace=trace)
+        except Exception:
+            # A turn that never got its worker must not leave the bus or the
+            # busy mark behind: both outlive this connection, and the worker's
+            # finally — their real owner — does not exist yet.
+            turn_bus.finish(sid)
+            session_state.end(sid)
+            raise
         running["worker"] = worker_proc if use_process else None
+        # The starting socket joins the bus before the turn's thread exists,
+        # so it cannot miss the turn's first event by arriving a beat late.
+        try:
+            replay, live = bus.subscribe()
+            for ev in replay:
+                await ws.send_text(_json(ev))
+        except Exception:
+            # The turn's thread does not exist yet, so its finally will never
+            # run: a viewer lost during the replay handoff must not leave the
+            # bus behind (a later viewer would subscribe to a dead turn and
+            # hang) or the busy mark the guards above raised.
+            turn_bus.finish(sid)
+            session_state.end(sid)
+            raise
         # Stage 3.5: the steer handler finds the worker by sid, so a steer
         # arriving on this socket reaches the turn even if the socket's
         # `running` dict has been replaced by a reconnect in the meantime.
@@ -558,15 +592,14 @@ async def ws_session(ws: WebSocket, sid: str):
                                          trace=trace))
                 for ev in stream:
                     kind = ev.get("type")
+                    # Delegated work is invisible in the main transcript by
+                    # design — the sub-agent's calls never enter it — so the
+                    # only way the person can see what it is doing is a
+                    # dedicated event. Forwarded as its own type, the panel's
+                    # job, not the transcript's.
                     if kind in ("text", "reason", "tool_start", "tool_end", "notify") and \
                             (ev.get("subagent") or ev.get("research")):
-                        # Delegated work is invisible in the main transcript by
-                        # design — the sub-agent's calls never enter it — so the
-                        # only way the person can see what it is doing is a
-                        # dedicated event. Forwarded as its own type, the panel's
-                        # job, not the transcript's.
-                        loop.call_soon_threadsafe(queue.put_nowait, {
-                            **ev, "type": "delegation_activity", "sid": sid})
+                        bus.publish({**ev, "type": "delegation_activity", "sid": sid})
                     if kind == "usage":
                         ev = _usage_event(turn_rec, ev.get("usage") or {},
                                           subagent=bool(ev.get("subagent")))
@@ -593,23 +626,49 @@ async def ws_session(ws: WebSocket, sid: str):
                     if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
                         running["starting"] = False
                         session_state.running(sid)
-                    loop.call_soon_threadsafe(queue.put_nowait, {**ev, "sid": sid})
+                    # One publish, once. The bus is the single fan-out point:
+                    # every viewer — the socket that started the turn, a
+                    # reload, a second window — sees the same stream.
+                    bus.publish({**ev, "sid": sid})
             except Exception as e:
-                loop.call_soon_threadsafe(queue.put_nowait,
-                                          {"type": "error", "message": str(e), "sid": sid})
+                bus.publish({"type": "error", "message": str(e), "sid": sid})
             finally:
-                # The registry is the worker's own responsibility, not the
+                # The epilogue belongs to the turn, not to the socket that
+                # happened to start it: a browser that disconnects mid-turn
+                # must not take the transcript save, the idle mark or the
+                # registry rows down with it. The turn outlives its viewer.
+                for step in trace:
+                    extra = {}
+                    if step.get("reason"):
+                        extra["reason"] = step["reason"]
+                    if step.get("tools"):
+                        extra["tools"] = step["tools"]
+                    if not (step.get("text") or "").strip() and not extra:
+                        continue
+                    store.append(turn_rec, "assistant", step.get("text") or "", extra or None)
+                store.save(turn_rec)
+                # The registry is the turn's own responsibility, not the
                 # socket's: a browser that disconnects mid-turn must not mark
                 # the session idle while the turn is still running in here.
                 session_state.end(sid)
                 # Stage 3.5: the steer registry entry dies with the turn.
                 worker_registry.pop(sid, None)
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                # Last: the bus. Releasing it is what tells every viewer the
+                # turn is over, and forgetting it is what keeps a late viewer
+                # from replaying a turn that is already in the transcript.
+                turn_bus.finish(sid)
 
         t = threading.Thread(target=worker, daemon=True)
         running["thread"] = t
         t.start()
-        await pump(queue)
+        try:
+            await pump(live)
+        finally:
+            # A socket that dies mid-pump must not skip the thread-never-
+            # started fallback: it is the only cleanup a turn gets when its
+            # worker died before producing a single event.
+            if not running["thread"].is_alive():
+                session_state.end(sid)
         running["busy"] = False
         # Push side of the state verifier, turn end: the views of this
         # session stop showing "working" the moment the turn ends. The socket
@@ -620,24 +679,10 @@ async def ws_session(ws: WebSocket, sid: str):
                                       "busy": False, "starting": False}))
         except Exception:
             pass
-        # session_state.end() is the worker's own finally; this only covers the
-        # case where the worker thread never started.
-        if not running["thread"].is_alive():
-            session_state.end(sid)
-        # One transcript entry per step, tools and reasoning attached to the step
-        # that produced them. Flattening a whole turn into one text message is what
-        # erased the agent's own history. The steps go to `turn_rec` — the session
-        # the turn was started in — even if the socket was rebound while it ran.
-        for step in trace:
-            extra = {}
-            if step.get("reason"):
-                extra["reason"] = step["reason"]
-            if step.get("tools"):
-                extra["tools"] = step["tools"]
-            if not (step.get("text") or "").strip() and not extra:
-                continue
-            store.append(turn_rec, "assistant", step.get("text") or "", extra or None)
-        store.save(turn_rec)
+        # (The thread-never-started fallback lives in the finally around the
+        # pump above: it runs whether the pump returns or the socket dies.)
+        # The transcript save, the idle mark and the bus release all belong to
+        # the worker's finally now; the socket only drains its queue.
 
     try:
         while True:

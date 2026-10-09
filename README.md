@@ -17,11 +17,11 @@ Three properties decide what an agent costs you and what it can do to you. Tacit
 three.
 
 1. **The fixed cost per turn is the smallest in its class.** 975 characters of standing
-   instructions, about 745 tokens on Minimal and 2,150 on Default; DSH pays 8,390 and Hermes
+   instructions, about 768 tokens on Minimal and 1,889 on Default; DSH pays 8,390 and Hermes
    18,970 every turn. The full accounting is below.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
-   sandboxing and autonomous learning are all off or proposal-only until you turn them on. An
-   approved rule goes back through the same budgets as everything else, never around them.
+   sandboxing and learning are all off until you turn them on. Even then, learning only proposes:
+   an approved rule goes back through the same budgets as everything else, never around them.
 3. **It reports what it actually enforces.** On Windows, Tacit says `mechanism: none` and enforces a
    timeout, because the base operating system offers no stronger primitive. It does not describe
    limits it cannot apply.
@@ -35,7 +35,7 @@ refusing to act where you have not let it. Tacit is built around both, and the n
 they are because of it.
 
 **Paperwork per turn: the smallest in its class.** 975 characters of standing instructions plus
-your profile's tool descriptions: roughly 745 tokens on Minimal and 2,150 on Default, against
+your profile's tool descriptions: roughly 768 tokens on Minimal and 1,889 on Default, against
 8,390 for DSH and 18,970 for Hermes, tool descriptions included. At twenty-five turns a task that
 gap is tens of thousands of tokens paid before the model reasons about a single line of your
 code. Everything else is lazy: skills, knowledge, MCP tool descriptions and project instructions
@@ -80,9 +80,9 @@ token meter, so nothing is measured by a standard it does not already apply to i
 
 | System | System prompt | Tools | Tool schemas | Fixed cost per turn |
 |---|---|---|---|---|
-| **Tacit, Minimal** | **975 chars** | **7** | **2.0 KB** | **~745 tokens** |
+| **Tacit, Minimal** | **975 chars** | **7** | **2.0 KB** | **~768 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **975 chars** | **24** | **7.6 KB** | **~2,150** |
+| **Tacit, default profile** | **975 chars** | **20** | **6.4 KB** | **~1,889** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
@@ -100,7 +100,7 @@ list and glob, and nothing else.
 |---|---|---|
 | Tool schemas | **2,001 chars** | 4,626 chars |
 | System prompt | **975 chars** | 1,352 chars |
-| **Fixed cost per turn** | **~745 tokens** | **~1,600** |
+| **Fixed cost per turn** | **~768 tokens** | **~1,600** |
 
 Same tools, less than half the cost. Two things account for it. Pi's descriptions are longer: its
 `read` tool takes the same three parameters as Tacit's and still costs 182 tokens against 67. And
@@ -112,9 +112,9 @@ so that one is not a fair fight, but the rest are.
 | Property | Tacit | DSH | Hermes Agent |
 |---|---|---|---|
 | Runtime dependency on another harness | **none** | plugin runtime | gateway ecosystem |
-| Fixed cost per turn | **~745 to ~2,565** | ~8,390 | ~18,970 |
+| Fixed cost per turn | **~768 to ~2,308** | ~8,390 | ~18,970 |
 | Memory in the prompt | **off by default, hard token budget** | not applicable | accumulated in the system prompt |
-| Learning that changes behaviour | **approval first, proposal state by default** | not applicable | automatic |
+| Learning that changes behaviour | **approval first, off by default** | not applicable | automatic |
 | Isolation on Windows | **not available: says so** | not verified here | not applicable |
 | Where state lives | **one folder you can delete** | its own | its own |
 
@@ -138,7 +138,7 @@ machine, not from their marketing.
 | | Tacit | Claude Code | Hermes | little-coder | DSH |
 |---|---|---|---|---|---|
 | Standing prompt | **975 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
-| Tool schemas | **7.6 KB / 24** | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
+| Tool schemas | **5.2 KB / 16** (6.6 KB / 20 once an MCP server is configured) | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
 | External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
 | Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
 | Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | none | none |
@@ -387,12 +387,15 @@ it by itself.
 4. **A repeated rule raises confidence instead of duplicating.** Seeing the same correction five
    times produces one proposal that is more certain, not five proposals.
 
-The default learning mode is `propose`, and it cannot change anything. `auto` and `auto-low-risk`
-exist if you want them, and they are your decision to make, in **Settings > Learning**, which also
-holds the proposals and their approve, reject, edit and delete actions.
+The default learning mode is `learn-off`: nothing is read, nothing is proposed, and no background
+worker runs. `propose` is the explicit opt-in, and it still cannot change anything; `auto` and
+`auto-low-risk` exist if you want them, and they are your decision to make, in **Settings >
+Learning**, which also holds the proposals and their approve, reject, edit and delete actions. An
+install from before this default keeps whatever mode it had stored — only the default moved.
 
-The analyzer adds no tool to the agent, changes no prompt text, and is switched off entirely when
-learning is set to `learn-off`.
+The analyzer adds no tool to the agent and changes no prompt text. The background worker exists
+only while learning is on: it is not started when learning is off, a mode change starts or stops it,
+and switching learning off stops a running worker rather than leaving it waking up to do nothing.
 
 ---
 
@@ -429,12 +432,12 @@ several things each time you change how you are working. Switching applies immed
 
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
-| **minimal** | 7 | none | off | propose | ~745 tokens |
-| **default** | 24 | none | off | propose | ~2,150 tokens |
-| **safe** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
-| **power-isolation** | 24 | tacit-micro | explicit | propose | ~2,565 tokens |
-| **power-memory** | 24 | none | full, budgeted | propose | ~2,565 tokens + budget |
-| **full** | 24 | tacit-micro | full, budgeted | propose | ~2,565 tokens + budget |
+| **minimal** | 7 | none | off | off | ~768 tokens |
+| **default** | 20 | none | off | off | ~1,889 tokens |
+| **safe** | 20 | tacit-micro | explicit | off | ~2,308 tokens |
+| **power-isolation** | 20 | tacit-micro | explicit | off | ~2,308 tokens |
+| **power-memory** | 20 | none | full, budgeted | off | ~2,308 tokens + budget |
+| **full** | 20 | tacit-micro | full, budgeted | off | ~2,308 tokens + budget |
 
 The four profiles that turn the Memory Vault on cost about 419 tokens more than `default`, because
 the vault contributes five tool schemas of its own. That is the whole difference between the rows:
@@ -442,8 +445,9 @@ they are identical in prompt cost and differ only in what is switched on. Every 
 recomputed from the live configuration by **Settings > Profile**, so the table cannot drift without
 the interface disagreeing with it.
 
-No profile enables automatic learning. That is a deliberate choice: a profile sets cost and
-containment, and does not decide what Tacit is allowed to remember on its own.
+No profile turns learning on — not even proposing. That is a deliberate choice: a profile sets cost
+and containment, and does not decide what Tacit is allowed to remember on its own. Proposing is a
+selection in **Settings > Learning**, made explicitly or not at all.
 
 **minimal** is the one to reach for on a small model or a tight context window. It hands the agent
 read, write, edit, shell, grep, list and glob, and switches off the other seventeen built-in tools
@@ -604,9 +608,9 @@ shown before anything is sent:
 ```
 
 Read-only tools add roughly **1,130 tokens** on their own, which is why they are off by default, and
-they are read-only in fact and not only by label: the switches that write: snapshots, delegation,
-`benchmark set`, `evidence add`, and any external tool call: are refused at the point of the call,
-not merely hidden from the schema. Hiding a tool does not stop a model that remembers its name. The
+they are read-only in fact and not only by label: the switches that write — delegation, `evidence
+add`, and any external tool call — are refused at the point of the call, not merely hidden from the
+schema. Hiding a tool does not stop a model that remembers its name. The
 Assistant has its own provider, model and thinking level as well, so pointing a reasoning-heavy
 model at the thinking and a cheap one at the code is a couple of clicks.
 
@@ -624,7 +628,9 @@ any executable path, or by providing an HTTP endpoint.
 
 When you connect a server, Tacit discovers its tools and lists them, but does not insert their
 descriptions into your prompt. The agent receives four small helper tools instead, and looks up what
-it needs:
+it needs — and with **no server configured, those four schemas are not offered at all**: they cost
+nothing and appear the moment a server is added, with no restart and no profile switch. The helpers
+are:
 
 - search the tool catalogue by intent
 - activate a tool for a limited number of turns
@@ -731,12 +737,72 @@ workspace picker, opens this session's timeline. For each snapshot you can:
 - **compare** it with the project as it is now, listing changed, added and removed files
 - **restore** it, after a confirmation prompt
 
-The agent takes a snapshot automatically before the first edit of a turn, and you can request one at
-any time. It used to be offered the choice and left to take one; across two real sessions it never
-did, so the undo timeline was empty at exactly the moment it would have been needed. One snapshot per
-turn keeps it cheap, and a snapshot that fails is reported without blocking the edit. Snapshots taken
-before per-session tracking carry no session marker; they are counted in the panel's note line rather
-than silently vanishing.
+The agent takes a snapshot automatically before the first edit of a turn — the first `write_file`,
+`edit_file` or `run_shell` of a turn, once, whether the edit goes through a tool or a shell command.
+It used to be offered the choice and left to take one; across two real sessions it never did, so the
+undo timeline was empty at exactly the moment it would have been needed. It is also not offered the
+tools any more: `snapshot`, `list_snapshots` and `restore` were removed from the agent's tool list,
+because a model that can restore its own work can hide what it just did, and the undo timeline is a
+person's instrument. One snapshot per turn keeps it cheap, and a snapshot that fails is reported
+without blocking the edit. Snapshots taken before per-session tracking carry no session marker; they
+are counted in the panel's note line rather than silently vanishing.
+
+---
+
+## Sessions are isolated from each other
+
+Sessions are standalone. Work done in one never appears in another, in the
+backend or in the interface, and the guarantees are enforced rather than
+promised:
+
+- **One session, one running turn.** Live turn state — busy, starting, what kind
+  of work, since when, how many turns the session has started — is held in a
+  process-local registry keyed by session id (`backend/session_state.py`), not on
+  a socket and not in the stored record. A second window attaching to a busy
+  session sees the busy flag, and a second prompt for that session is refused
+  from any window. The interface reads the registry at `GET /api/sessions/state`
+  — it is also what draws the left bar's activity indicators.
+- **A turn's worker is bound to its session at spawn.** Its events, its metrics
+  and its transcript writes go to the session it was started in. Nothing can
+  redirect them to another session afterwards — the worker carries its own
+  session id, and the registry is cleared by the worker's own exit, so a browser
+  that disconnects mid-turn cannot mark a running session idle.
+- **Stop is scoped, and it really stops.** Abort on one session cannot touch a
+  turn in another; each connection owns its own stop event, and the registry
+  carries no stop state at all. The left bar carries a stop control on every
+  working session's row, and it stops that session's turn through that
+  session's own socket — including a session you are not currently looking at.
+- **A turn runs in its own process, so it can be killed.** A thread cannot be
+  killed in Python under any circumstance, and a turn is a unit of work a
+  person must be able to kill: blocked in a model read, a stuck shell command,
+  a runaway regex. So the turn runs in a worker process owned by its session
+  (`backend/turn_worker.py`), streaming its events back as JSON lines. Stop is
+  two-stage: a cooperative cancel first — the worker stops between events,
+  closes its model stream, kills its own shell trees and exits cleanly, so the
+  partial transcript is preserved — and if it has not exited within five
+  seconds, the process tree is killed outright (`taskkill /T /F` on Windows,
+  `killpg` on POSIX). The interface is told which one ran. The turn's
+  background jobs die with it. `TACIT_TURN_WORKER=thread` restores the old
+  in-process path.
+- **A socket is born attached to one session.** The interface holds one
+  WebSocket per session, not one per tab: switching sessions opens a different
+  socket, and a session with a running turn keeps streaming into its own
+  socket — and its own transcript — while you sit in another one. The in-band
+  `switch` command is deleted from the protocol: a socket is never re-pointed
+  at another session, and the server answers the old command with the reason.
+- **The server never rebinds a connection.** Creating a session, changing mode,
+  or implementing an approved plan creates the session and returns its id; the
+  client opens a fresh socket for it. A running turn's worker keeps writing
+  into the session it was started in regardless — the capture is defence in
+  depth, not the mechanism.
+- **The left bar shows what is working.** Every session row carries a state
+  dot — idle, or pulsing while a turn runs — fed by `GET /api/sessions/state`
+  (polled lightly) and refined live by the session's own socket events. A
+  working row carries its own stop control.
+- **Delegation is per-session.** The sub-agent panel shows the active
+  session's delegations, keyed by session id and call id, so two sessions
+  delegating at once never cross-report; switching sessions swaps the card
+  set.
 
 ---
 
@@ -760,7 +826,7 @@ and nothing is written into another tool's directory.
 ├─ mcp.json           external tool servers (Settings > MCP)
 ├─ plugins.json       plugin state          (Settings > Plugins)
 ├─ mcp_audit.jsonl    external tool activity log
-├─ benchmarks.json    per-model temperature / max_tokens
+├─ benchmarks.json    per-model temperature / max_tokens (model_settings.py)
 ├─ evidence.jsonl     recorded citable facts
 ├─ checkpoints/       project snapshots for undo
 ├─ plans/             approved plans
@@ -777,7 +843,7 @@ Deleting `~/.tacit` removes all stored data.
 
 ```
 backend/
-├─ main.py            FastAPI app, serves static/, /health, starts the analyzer
+├─ main.py            FastAPI app, serves static/, /health, starts the analyzer when learning is on
 ├─ config.py          every path + setting  (the single source of truth)
 ├─ agent.py           the agent loop, the tools, the sandbox
 ├─ tokens.py          token accounting (exact when possible, estimate otherwise)
@@ -802,12 +868,16 @@ backend/
 ├─ research.py        multi-source research with citations
 ├─ browser.py         optional Playwright driver
 ├─ evidence.py        citable fact store
-├─ benchmarks.py      per-model profiles
+├─ model_settings.py  per-model temperature / max_tokens / context budget
+├─ proctools.py       process identity, job containment, the orphan sweep
 ├─ extras.py          background processes, fetch, snapshots
 ├─ store.py           sessions, transcripts, cross-device registry
+├─ session_state.py   live per-session turn state, keyed by sid
+├─ turn_bus.py        one running turn's event buffer + fan-out; a mid-turn viewer is replayed
+├─ turn_worker.py     one process per running turn, two-stage stop
 ├─ vcs.py             the version-control panel
 ├─ hosting.py         the repository hosting panel
-└─ routers/           api, chat (WebSocket), mcp, memory, plugins, capabilities, vcs
+└─ routers/           api, chat (WebSocket), mcp, memory, plugins, capabilities, profiles, hosting, vcs
 ```
 
 The design rule is that a feature which enlarges the starting prompt must be optional and must show
@@ -824,11 +894,10 @@ directory, and no assumption about where your projects are stored.
 |---|---|
 | `list_files` `read_file` `write_file` `edit_file` `glob_files` `grep_files` | files |
 | `run_shell`, `bg_start` `bg_output` `bg_stop` | commands, foreground and background |
-| `snapshot` `list_snapshots` `restore` | undo for the agent's own edits |
 | `task` | delegate to a sub-agent with a separate context |
 | `skill`, `research`, `fetch`, `browser` | knowledge on demand |
-| `mcp_search_tools` `mcp_activate_tools` `mcp_call` `mcp_list_servers` | external tools without the prompt cost |
-| `evidence`, `benchmark` | citable facts, per-model settings |
+| `mcp_search_tools` `mcp_activate_tools` `mcp_call` `mcp_list_servers` | external tools without the prompt cost; offered only when an MCP server is configured |
+| `evidence` | citable facts |
 | `memory_recall` `memory_add` `memory_update` `memory_delete` `memory_list_summary` | memory, only when the vault is enabled |
 
 Version control is off for the agent by default. A model left to itself commits and pushes far more
@@ -896,16 +965,50 @@ Container isolation is configured in **Settings > Capabilities** rather than by 
 is a capability choice: the image (default `python:3.12-slim`), whether a missing image may be pulled
 (default no), and the PID ceiling (default 256).
 
-**Settings > Tools** also has **Restart server**: it stops this process and starts a fresh one on the
-same port. A detached watcher waits for the port to free, then starts the server once and blocks on
-it; the exit itself goes through uvicorn's own shutdown, so the analyzer, the MCP servers and the pid
-file are cleaned up. The browser reconnects on its own. A turn that is running is cut off, and the
-button says so before you press it. The restart is recorded in the audit ledger as `server_restart`.
+**Settings > General** also has **Restart server**: it stops this process and starts a fresh one on
+the same port. A detached watcher waits for the port to free, then starts the server once and blocks
+on it; the exit itself goes through uvicorn's own shutdown, so the analyzer, the MCP servers and the
+pid file are cleaned up. The browser reconnects on its own. A turn that is running is cut off, and
+the button says so before you press it. The restart is recorded in the audit ledger as
+`server_restart`. Every process Tacit spawns — turn workers, the restart watcher, the server itself —
+carries a `tacit-*` marker in its command line, a `TACIT_ROLE`/`TACIT_SESSION_ID` pair in its
+environment, and a row in the live process registry (`GET /api/processes`, shown in **Settings >
+General**); on Windows each child is also bound to a kill-on-close job object, so a crashed parent
+takes its children with it. At startup the server sweeps the registry: a dead pid is dropped, and a
+live pid whose command line still proves it is Tacit's is killed as an orphan from a previous crash.
+Nothing is ever matched on the executable name.
 | `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
 | `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
 | `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
+
+---
+
+## Staying current
+
+**Settings > General** holds the auto-updater. Tacit is an open-source project with no releases:
+every push to the default branch is an update, and the updater's job is to make applying one a
+single decision you can see the shape of first.
+
+- **The check is one small GET.** The updater reads the `VERSION` file at the repository root and
+  compares it with the same file upstream. Same version, nothing else is fetched — which is what
+  keeps the hourly auto-check cheap.
+- **The update is an archive copy, not a git operation.** When the versions differ, the branch
+  tarball is downloaded and unpacked over the checkout: changed files are overwritten, new files are
+  created, and the result names what it did. No git, no tokens, no API. An install that was made
+  from an archive updates the same way it was installed, and a checkout that happens to be a git
+  repository is left entirely alone — no fetch, no pull, no dirty-tree complaints.
+- **User state is never touched.** The protected list — `models.json`, `prefs.json`, `mcp.json`,
+  `sessions/`, `skills/`, `knowledge/` and the rest of what `~/.tacit` owns — is skipped on every
+  path, and only tracked source extensions are considered.
+- **A file upstream no longer has is reported, never deleted.** The archive cannot tell "upstream
+  removed this" from "you added this", so the updater leaves it on disk and says so in the result.
+- **Applying takes a restart.** The running server keeps its loaded code; the result says what was
+  updated and the **Restart server** action above applies it.
+
+The check runs on a timer you set — an hour by default — and can be switched off. Nothing is ever
+downloaded or applied without the button.
 
 ---
 
@@ -1009,10 +1112,15 @@ same cells is what turns this from one box's word into a field.
 Working and covered by tests: chat and agent turns against any OpenAI-compatible endpoint,
 sub-agents, plan mode, skills, compaction, background processes, snapshots with comparison and
 restore, the terminal, providers, sessions, token accounting and the dashboard, capability profiles,
-MCP servers over stdio and HTTP with lazy tool activation, the plugin system, the capability
-registry, standalone isolation, the memory vault with enforced budgeting, the background session
-analyzer with approval-first proposals, one-time migration from your own export, and the per-session
-Assistant with its own model, thinking level and budgeted read access to the session.
+per-session turn state with session isolation (one running turn per session, sid-scoped abort,
+`GET /api/sessions/state`), the killable turn worker with its two-stage stop, the turn's event bus
+with mid-turn replay (a viewer that arrives while a turn runs is caught up from the buffer, and a
+socket that dies mid-turn takes nothing with it), MCP servers over stdio and HTTP with lazy tool
+activation, the plugin system, the capability registry, standalone isolation, the memory vault with
+enforced budgeting, the background session analyzer with approval-first proposals, one-time
+migration from your own export, the self-update transport (a `VERSION` check and an archive copy,
+no git required), and the per-session Assistant with its own model, thinking level and budgeted
+read access to the session.
 
 The repository includes an automated test suite: no network and no real model. The suite needs no
 container daemon and no benchmark runner, and Tacit installs neither. Run it and see for yourself
@@ -1030,6 +1138,10 @@ python -m unittest discover -s tests -t .
 | `test_claims.py` | each behaviour this README claims, including the agent loop end to end |
 | `test_engine.py` | the provider stream protocol, the Anthropic transport, and a full turn over the WebSocket |
 | `test_isolation.py` | the container backend and the timeout guarantee, with a stubbed runtime |
+| `test_session_isolation.py` | sessions are standalone: one running turn per session, sid-scoped abort, over two real sockets |
+| `test_turn_worker.py` | the turn worker against a real subprocess: spawn, event stream, cooperative cancel, tree kill, the thread escape hatch |
+| `test_steer.py` | steering a running turn across the process boundary, and the worker registry's sid keying |
+| `test_autoupdater.py` | the update transport against a stubbed HTTP seam: version check, archive apply, protected paths, dry run, a failed download changes nothing |
 
 `test_claims.py` exists because a documented behaviour and the running program disagreed, and the
 disagreement was only visible in a transcript: an agent re-reading the same file five times, a

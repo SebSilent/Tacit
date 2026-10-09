@@ -191,7 +191,23 @@ def unregister(pid: int) -> None:
 
 
 def rows() -> list[dict]:
+    """The live rows, pruned of the provably dead.
+
+    unregister() is the normal exit — reap() calls it — but a process that
+    dies without its parent reaping it (a crash, a kill from outside) would
+    otherwise haunt every listing until the next server restart. A read is
+    the one moment someone is actually looking, so the dead are dropped
+    there too: only rows whose pid is provably gone are removed, and a pid
+    that cannot be checked is left alone. The lock is held throughout, so
+    a concurrent register cannot resurrect a dropped pid's row.
+    """
     with _lock():
+        dead = [pid for pid, row in _ROWS.items()
+                if pid != os.getpid() and not _pid_alive(pid)]
+        for pid in dead:
+            _ROWS.pop(pid, None)
+        if dead:
+            _persist()
         return [dict(r) for r in _ROWS.values()]
 
 

@@ -5,7 +5,9 @@ have said so, and even then only within limits. So a proposal is an **artifact**
 a stored record with its own state, which you can read, accept, edit, reject,
 disable or delete.
 
-The default mode is ``propose``, which cannot change anything.
+The default mode is ``learn-off`` (stage 8): nothing is read, nothing is
+proposed, until the user opts into ``propose`` in Settings — which still
+cannot change anything on its own.
 
 When a proposal is approved, it is not written into the prompt. It goes to one of
 the two places that already exist and are already budgeted:

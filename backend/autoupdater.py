@@ -1,25 +1,40 @@
-"""Autoupdater — checks Git for changes and pulls them.
+"""Autoupdater — plain HTTPS downloads from GitHub. No git, no API keys.
 
 Tacit is an open-source project with no releases; every push to the default
-branch is an update. The autoupdater uses git commands (fetch/diff/pull)
-to verify and apply updates, similar to how Tacit is installed.
+branch is an update. The transport is two plain GETs: the remote VERSION file
+(a few bytes — the cheap check), and, when it differs from the local one, the
+branch tarball, which is unpacked over the checkout honouring the protected
+paths and the tracked-extension filter. An archive install updates exactly
+the way it was installed. If the checkout happens to be a git repository it
+is left entirely alone — no fetch, no pull, no dirty-tree complaints; the
+archive copy is the only mechanism, and "version control is a human action"
+is why this module never shells out to anything.
+
+What an update may touch is narrower than what git would: user state is
+never touched (PROTECTED_PATHS), only tracked source extensions are
+considered, and a file the upstream tree no longer contains is reported —
+never deleted — because the archive cannot distinguish "upstream removed
+this" from "the user added this".
 """
 import asyncio
 import hashlib
-import json
+import io
 import os
-import subprocess
+import tarfile
 import time
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+
+import httpx
 
 from . import config
-from . import vcs
 
 REPO_OWNER = "SebSilent"
 REPO_NAME = "Tacit"
 DEFAULT_BRANCH = "master"
-REMOTE_NAME = "origin"
+VERSION_URL = (f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/"
+               f"{DEFAULT_BRANCH}/VERSION")
+TARBALL_URL = (f"https://codeload.github.com/{REPO_OWNER}/{REPO_NAME}/"
+               f"tar.gz/refs/heads/{DEFAULT_BRANCH}")
 
 # Files that should never be auto-updated (user config, local data)
 PROTECTED_PATHS = {
@@ -61,6 +76,15 @@ PROTECTED_PATHS = {
 # Files we track for updates (source code, static assets, install scripts)
 TRACKED_EXTENSIONS = {".py", ".js", ".css", ".html", ".md", ".txt", ".sh", ".ps1", ".bat", ".json", ".toml", ".yaml", ".yml"}
 
+# Directories that are machinery wherever they appear; pruned during the
+# vanished-file walk so a big checkout (.venv alone is thousands of files)
+# is not traversed at all.
+_TECHNICAL_DIRS = {".venv", "venv", "node_modules", "__pycache__",
+                   ".pytest_cache", ".mypy_cache", "dist", "build", ".git"}
+# Directory-form protected paths are top-level state dirs; they are pruned
+# at the root of the walk only (backend/plugins is code and must survive).
+_STATE_DIRS = {p.rstrip("/") for p in PROTECTED_PATHS if p.endswith("/")}
+
 
 def _is_protected(path: Path) -> bool:
     """Check if a path is protected from auto-updates."""
@@ -84,33 +108,41 @@ def _file_hash(path: Path) -> str:
         return ""
 
 
-def _git_repo_root() -> Path:
-    """Get the git repository root."""
-    return config.ROOT
+def _local_version() -> str:
+    """The checkout's VERSION file, stripped. Empty when the install predates
+    version tracking — the check then says so instead of guessing."""
+    try:
+        return (config.ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
 
 
-def _run_git(args: list[str], cwd: Path | None = None) -> dict:
-    """Run a git command and return result dict."""
-    workdir = cwd or _git_repo_root()
-    return vcs.run_argv([vcs.BIN, *args], str(workdir))
+def _http_get(url: str, timeout: float = 30.0) -> bytes:
+    """The one seam every fetched byte comes through; the tests stub this."""
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        return resp.content
 
 
-async def _run_git_async(args: list[str], cwd: Path | None = None) -> dict:
-    """Run a git command asynchronously."""
-    workdir = cwd or _git_repo_root()
-    return await asyncio.to_thread(vcs.run_argv, [vcs.BIN, *args], str(workdir))
+async def _http_get_async(url: str, timeout: float = 30.0) -> bytes:
+    return await asyncio.to_thread(_http_get, url, timeout)
 
 
 def load_state() -> dict:
     """Load autoupdater state from prefs."""
     prefs = config.prefs()
-    return prefs.get("autoupdater", {
-        "enabled": True,
-        "last_check": 0,
-        "last_commit": "",
-        "last_update": 0,
-        "auto_check_interval": 3600,  # 1 hour
-    })
+    state = prefs.get("autoupdater", {})
+    # Installs from the git era kept the last commit sha under last_commit;
+    # the version transport renamed the field — carry the old value across.
+    if "last_version" not in state and state.get("last_commit"):
+        state["last_version"] = state["last_commit"]
+    state.setdefault("enabled", True)
+    state.setdefault("last_check", 0)
+    state.setdefault("last_version", "")
+    state.setdefault("last_update", 0)
+    state.setdefault("auto_check_interval", 3600)  # 1 hour
+    return state
 
 
 def save_state(state: dict) -> None:
@@ -118,164 +150,191 @@ def save_state(state: dict) -> None:
     config.save_prefs({"autoupdater": state})
 
 
+def _walk_tracked() -> list[Path]:
+    """Tracked, unprotected files in the checkout, machinery dirs pruned."""
+    out = []
+    root = config.ROOT
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root)
+        dirnames[:] = [d for d in dirnames if d not in _TECHNICAL_DIRS]
+        if rel_dir == Path("."):
+            dirnames[:] = [d for d in dirnames if d not in _STATE_DIRS]
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            rel = p.relative_to(root)
+            if _is_protected(rel) or not _is_tracked(rel):
+                continue
+            out.append(p)
+    return out
+
+
+def _apply_archive(data: bytes, dry_run: bool) -> dict:
+    """Unpack the branch tarball over the checkout.
+
+    One pass enumerates and (unless dry_run) writes: changed files are
+    overwritten, new files created, protected paths and untracked extensions
+    skipped, and local files the archive no longer contains are reported —
+    never deleted, because the archive cannot tell "upstream removed this"
+    from "the user added this".
+    """
+    changed: list[dict] = []
+    new: list[dict] = []
+    failed: list[str] = []
+    skipped_protected: list[str] = []
+    upstream: set[str] = set()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            parts = PurePosixPath(member.name).parts
+            # Zip-slip guard: an archive entry must never escape the checkout.
+            if not parts or ".." in parts or member.name.startswith(("/", "\\")) \
+                    or (len(parts[0]) >= 2 and parts[0][1] == ":"):
+                continue
+            if len(parts) < 2:
+                continue          # the archive's own root directory
+            rel = "/".join(parts[1:])
+            if _is_protected(Path(rel)):
+                skipped_protected.append(rel)
+                continue
+            # VERSION is the one extensionless file the transport itself
+            # depends on: the archive's copy is how the checkout learns its
+            # new version, so it is always tracked.
+            if rel != "VERSION" and not _is_tracked(Path(rel)):
+                continue
+            upstream.add(rel)
+            local = config.ROOT.joinpath(*parts[1:])
+            payload = tar.extractfile(member).read()
+            digest = hashlib.sha256(payload).hexdigest()
+            if local.exists():
+                if _file_hash(local) == digest:
+                    continue      # identical already — not an update
+                entry = {"path": rel, "local_hash": (_file_hash(local) or "unreadable")[:16],
+                         "remote_hash": digest[:16], "size": len(payload)}
+                if not dry_run:
+                    try:
+                        local.parent.mkdir(parents=True, exist_ok=True)
+                        local.write_bytes(payload)
+                    except Exception:
+                        failed.append(rel)
+                        continue
+                changed.append(entry)
+            else:
+                entry = {"path": rel, "remote_hash": digest[:16], "size": len(payload)}
+                if not dry_run:
+                    try:
+                        local.parent.mkdir(parents=True, exist_ok=True)
+                        local.write_bytes(payload)
+                    except Exception:
+                        failed.append(rel)
+                        continue
+                new.append(entry)
+    removed_upstream = [p.relative_to(config.ROOT).as_posix()
+                        for p in _walk_tracked() if p.relative_to(config.ROOT).as_posix() not in upstream]
+    return {"changed": changed, "new": new, "failed": failed,
+            "skipped_protected": skipped_protected,
+            "removed_upstream": removed_upstream}
+
+
 async def check_for_updates() -> dict:
-    """Check git remote for updates. Returns info about available updates."""
-    state = load_state()
-    repo_root = _git_repo_root()
+    """Check the remote VERSION against the local one.
 
-    # Ensure we have a git repo
-    if not (repo_root / ".git").exists():
-        return {"ok": False, "error": "Not a git repository"}
+    Same-version checks cost one small GET. A differing version costs one
+    more GET (the tarball) so the answer can say what would change — the
+    same shape the git transport reported, sourced from the archive.
+    """
+    local = _local_version()
+    if not local:
+        return {"ok": False,
+                "error": "no local VERSION file — this install predates version tracking"}
+    try:
+        remote = (await _http_get_async(VERSION_URL)).decode("utf-8").strip()
+    except Exception as e:
+        return {"ok": False, "error": f"VERSION fetch failed: {e}"}
+    if not remote:
+        return {"ok": False, "error": "the remote VERSION file is empty"}
 
-    # Fetch latest from remote
-    fetch_result = await _run_git_async(["fetch", REMOTE_NAME])
-    if not fetch_result.get("ok"):
-        return {"ok": False, "error": f"git fetch failed: {fetch_result.get('stderr', 'unknown error')}"}
-
-    # Get current local commit
-    local_commit_result = await _run_git_async(["rev-parse", "HEAD"])
-    if not local_commit_result.get("ok"):
-        return {"ok": False, "error": f"Failed to get local commit: {local_commit_result.get('stderr')}"}
-    local_sha = local_commit_result.get("stdout", "").strip()
-
-    # Get remote commit
-    remote_ref = f"{REMOTE_NAME}/{DEFAULT_BRANCH}"
-    remote_commit_result = await _run_git_async(["rev-parse", remote_ref])
-    if not remote_commit_result.get("ok"):
-        return {"ok": False, "error": f"Failed to get remote commit: {remote_commit_result.get('stderr')}"}
-    remote_sha = remote_commit_result.get("stdout", "").strip()
-
-    if not remote_sha:
-        return {"ok": False, "error": "No remote commit SHA returned"}
-
-    # If we're already on this commit, no update needed
-    if state.get("last_commit") == remote_sha or local_sha == remote_sha:
+    if remote == local:
         return {
             "ok": True,
             "update_available": False,
-            "current_commit": local_sha,
-            "latest_commit": remote_sha,
-            "message": "Already up to date",
+            "current_version": local,
+            "latest_version": remote,
+            "note": "Already up to date",
         }
 
-    # Get commit message for the remote commit
-    commit_msg_result = await _run_git_async(["log", "-1", "--pretty=format:%s", remote_sha])
-    commit_msg = commit_msg_result.get("stdout", "").strip() if commit_msg_result.get("ok") else ""
-
-    commit_date_result = await _run_git_async(["log", "-1", "--pretty=format:%cI", remote_sha])
-    commit_date = commit_date_result.get("stdout", "").strip() if commit_date_result.get("ok") else ""
-
-    # Get list of changed files between local and remote
-    diff_result = await _run_git_async(["diff", "--name-only", f"{local_sha}..{remote_sha}"])
-    if not diff_result.get("ok"):
-        return {"ok": False, "error": f"git diff failed: {diff_result.get('stderr')}"}
-
-    changed_paths = [p.strip() for p in diff_result.get("stdout", "").split("\n") if p.strip()]
-
-    # Also check for new files (in remote but not in local)
-    # This is covered by diff --name-only for new files too
-
-    changed_files = []
-    new_files = []
-
-    for path in changed_paths:
-        # Skip protected paths
-        if _is_protected(Path(path)):
-            continue
-
-        # Only track relevant extensions
-        if not _is_tracked(Path(path)):
-            continue
-
-        local_path = repo_root / path
-
-        # Get the blob SHA from remote for this file
-        blob_result = await _run_git_async(["ls-tree", remote_sha, path])
-        remote_blob_sha = ""
-        if blob_result.get("ok"):
-            parts = blob_result.get("stdout", "").split()
-            if len(parts) >= 3:
-                remote_blob_sha = parts[2]
-
-        if local_path.exists():
-            local_hash = _file_hash(local_path)
-            if local_hash != remote_blob_sha:
-                changed_files.append({
-                    "path": path,
-                    "local_hash": local_hash[:16] if local_hash else "missing",
-                    "remote_hash": remote_blob_sha[:16] if remote_blob_sha else "unknown",
-                    "size": local_path.stat().st_size if local_path.exists() else 0,
-                })
-        else:
-            new_files.append({
-                "path": path,
-                "remote_hash": remote_blob_sha[:16] if remote_blob_sha else "unknown",
-                "size": 0,
-            })
-
-    has_changes = bool(changed_files or new_files)
-
+    try:
+        data = await _http_get_async(TARBALL_URL)
+    except Exception as e:
+        return {"ok": False, "error": f"archive download failed: {e}"}
+    plan = _apply_archive(data, dry_run=True)
     return {
         "ok": True,
-        "update_available": has_changes,
-        "current_commit": local_sha,
-        "latest_commit": remote_sha,
-        "commit_message": commit_msg,
-        "commit_date": commit_date,
-        "changed_files": changed_files,
-        "new_files": new_files,
-        "changed_count": len(changed_files),
-        "new_count": len(new_files),
+        "update_available": True,
+        "current_version": local,
+        "latest_version": remote,
+        "note": f"version {local} → {remote}",
+        "changed_files": plan["changed"],
+        "new_files": plan["new"],
+        "removed_upstream": plan["removed_upstream"],
+        "changed_count": len(plan["changed"]),
+        "new_count": len(plan["new"]),
     }
 
 
 async def pull_updates(dry_run: bool = False) -> dict:
-    """Pull updates from git remote. Returns result of the update operation."""
-    state = load_state()
-    repo_root = _git_repo_root()
+    """Apply the update: download the tarball, unpack over the checkout.
 
-    # First check what's available
-    check = await check_for_updates()
-    if not check.get("ok"):
-        return check
-    if not check.get("update_available"):
+    One download per pull — the check's archive was enumerated, not kept.
+    """
+    local = _local_version()
+    if not local:
+        return {"ok": False,
+                "error": "no local VERSION file — this install predates version tracking"}
+    try:
+        remote = (await _http_get_async(VERSION_URL)).decode("utf-8").strip()
+    except Exception as e:
+        return {"ok": False, "error": f"VERSION fetch failed: {e}"}
+    if not remote or remote == local:
         return {"ok": True, "updated": False, "message": "Already up to date"}
 
-    latest_sha = check["latest_commit"]
-    changed_files = check.get("changed_files", [])
-    new_files = check.get("new_files", [])
-
-    all_files = changed_files + new_files
-    if not all_files:
-        return {"ok": True, "updated": False, "message": "No files to update"}
+    try:
+        data = await _http_get_async(TARBALL_URL)
+    except Exception as e:
+        return {"ok": False, "error": f"archive download failed: {e}"}
+    plan = _apply_archive(data, dry_run=True)
 
     if dry_run:
         return {
             "ok": True,
             "updated": False,
             "dry_run": True,
-            "would_update": len(all_files),
-            "files": all_files,
+            "would_update": len(plan["changed"]) + len(plan["new"]),
+            "files": plan["changed"] + plan["new"],
+            "removed_upstream": plan["removed_upstream"],
         }
 
-    # Pull the changes
-    pull_result = await _run_git_async(["pull", REMOTE_NAME, DEFAULT_BRANCH])
-    if not pull_result.get("ok"):
-        return {"ok": False, "error": f"git pull failed: {pull_result.get('stderr')}"}
-
-    # Update state
-    state["last_commit"] = latest_sha
+    plan = _apply_archive(data, dry_run=False)
+    state = load_state()
+    state["last_version"] = remote
     state["last_update"] = time.time()
     state["last_check"] = time.time()
     save_state(state)
 
+    message = f"Updated {len(plan['changed']) + len(plan['new'])} file(s) to version {remote}"
+    if plan["removed_upstream"]:
+        message += (f"; {len(plan['removed_upstream'])} file(s) no longer upstream, "
+                    "left on disk")
+    if plan["failed"]:
+        message += f"; {len(plan['failed'])} file(s) failed to write"
     return {
         "ok": True,
         "updated": True,
-        "updated_files": [f["path"] for f in all_files],
-        "failed_files": [],
-        "commit": latest_sha,
-        "message": f"Updated {len(all_files)} file(s) via git pull",
+        "updated_files": [e["path"] for e in plan["changed"] + plan["new"]],
+        "failed_files": plan["failed"],
+        "removed_upstream": plan["removed_upstream"],
+        "version": remote,
+        "message": message,
     }
 
 
@@ -306,7 +365,7 @@ def get_status() -> dict:
     return {
         "enabled": state.get("enabled", True),
         "last_check": state.get("last_check", 0),
-        "last_commit": state.get("last_commit", ""),
+        "last_version": state.get("last_version", ""),
         "last_update": state.get("last_update", 0),
         "auto_check_interval": state.get("auto_check_interval", 3600),
     }

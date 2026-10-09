@@ -73,7 +73,7 @@ class TestRegistry(Isolated):
                 self.assertTrue(row["reason"], f"{row['id']} is unavailable with no reason")
 
     def test_every_kind_has_a_usable_default(self):
-        for kind, chosen in (("sandbox", "none"), ("memory", "off"), ("learning", "propose")):
+        for kind, chosen in (("sandbox", "none"), ("memory", "off"), ("learning", "learn-off")):
             row = providers.get(chosen, kind)
             self.assertIsNotNone(row, chosen)
             self.assertTrue(row["available"], f"the default {kind} backend must always work")
@@ -85,11 +85,13 @@ class TestDefaults(Isolated):
         self.assertEqual(cfg["sandbox"]["backend"], "none")
         self.assertFalse(cfg["sandbox"]["network"])
         self.assertEqual(cfg["memory"]["mode"], "off")
-        self.assertEqual(cfg["learning"]["mode"], "propose")
+        self.assertEqual(cfg["learning"]["mode"], "learn-off")
         self.assertEqual(cfg["profile"], "default")
 
-    def test_learning_defaults_to_propose_not_auto(self):
-        self.assertEqual(providers.load()["learning"]["mode"], "propose")
+    def test_learning_defaults_to_off_not_auto(self):
+        """Stage 8: proposals are a choice, not a default. The analyzer reads
+        finished transcripts on a timer; that must be opted into."""
+        self.assertEqual(providers.load()["learning"]["mode"], "learn-off")
         self.assertNotEqual(providers.load()["learning"]["mode"], "auto")
 
     def test_saving_is_additive_and_ignores_unknown_keys(self):
@@ -470,9 +472,11 @@ class TestLearning(Isolated):
             setattr(config, key, config.HOME / sub)
         providers.save({"learning": {"mode": "propose"}})
 
-    def test_the_default_mode_is_propose(self):
+    def test_the_default_mode_is_learn_off(self):
+        """Stage 8: with nothing stored, learning is off. `propose` is what a
+        user opts into explicitly in Settings."""
         config.write_json(config.CAPABILITIES_FILE, {})
-        self.assertEqual(self.learning.mode(), "propose")
+        self.assertEqual(self.learning.mode(), "learn-off")
 
     def test_proposing_changes_nothing(self):
         from backend import memory_store as ms
@@ -986,7 +990,8 @@ class TestAnalyzer(Isolated):
         self.assertTrue(analyzer.enabled())
 
     def test_the_analyzer_can_be_switched_off_explicitly(self):
-        from backend import analyzer
+        from backend import analyzer, providers
+        providers.save({"learning": {"mode": "propose"}})
         analyzer.configure(enabled_flag=False)
         self.assertFalse(analyzer.enabled())
         analyzer.configure(enabled_flag=True)

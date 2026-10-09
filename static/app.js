@@ -641,6 +641,42 @@ function handle(m) {
       toast('Edit failed: ' + (m.error || 'unknown'), true);
       { const s = cur(); if (s) renderTranscript(s); }
       break;
+    case 'replay':
+      // Stage 3.6: a hello that landed mid-turn carried the turn's events so
+      // far. The model's last assistant message may already hold text that
+      // handleBackground accumulated from the other socket, so the bubble is
+      // rebuilt from the replay itself — the replay is authoritative, and the
+      // result is idempotent no matter what the background path had added.
+      {
+        const s = cur();
+        if (!s || !Array.isArray(m.events)) break;
+        endStreamQuiet();
+        if (s.messages.length && s.messages[s.messages.length - 1].role === 'assistant') {
+          s.messages.pop();
+        }
+        const mk = () => {
+          let last = s.messages[s.messages.length - 1];
+          if (!last || last.role !== 'assistant') {
+            last = { role: 'assistant', content: '', reason: '', tools: [] };
+            s.messages.push(last);
+          }
+          return last;
+        };
+        for (const ev of m.events) {
+          if (ev.type === 'text') mk().content += ev.delta || '';
+          else if (ev.type === 'reason') { const a = mk(); a.reason = (a.reason || '') + (ev.delta || ''); }
+          else if (ev.type === 'tool_start') mk().tools.push({ id: ev.id, name: ev.name, args: ev.args });
+          else if (ev.type === 'tool_end') {
+            const a = mk();
+            const t = (a.tools || []).find(t => t.id === ev.id);
+            if (t) { t.result = ev.result; t.is_error = ev.is_error; }
+          }
+        }
+        persist();
+        renderTranscript(s);
+        if (busy) resumeLiveStream();
+      }
+      break;
     case 'state_delta':
       {
         const s = cur();

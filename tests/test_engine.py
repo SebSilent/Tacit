@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -491,6 +492,31 @@ class ScriptedProvider:
                "model": {"ref": "p/m"}}
 
 
+class GatedProvider:
+    """ScriptedProvider with a hand-turned gate: the turn blocks mid-stream
+    until the test releases it, so a mid-turn window is deterministic instead
+    of a race the test happens to win."""
+
+    def __init__(self, gate):
+        self.gate = gate
+        self.step = 0
+
+    def __call__(self, messages, **kwargs):
+        self.step += 1
+        if kwargs.get("tools") and self.step == 1:
+            yield {"type": "tool_calls", "calls": [{
+                "id": "call_ws1", "name": "read_file",
+                "arguments": json.dumps({"path": "alpha.py"})}]}
+        else:
+            yield {"type": "text", "delta": "partial answer"}
+            self.gate.wait(10)
+            yield {"type": "text", "delta": " and the rest."}
+        yield {"type": "usage",
+               "usage": {"input": 1200, "output": 40, "total": 1240}}
+        yield {"type": "done", "finish": "stop",
+               "model": {"ref": "p/m"}}
+
+
 class WebSocketTurnTest(unittest.TestCase):
     """The interface's only path into a turn, driven end to end.
 
@@ -666,6 +692,211 @@ class WebSocketTurnTest(unittest.TestCase):
             events = self._drain(ws)
         self.assertNotIn("tool_start", [e["type"] for e in events])
         self.assertEqual(store.get(sid)["mode"], "chat")
+
+
+class TurnBusReplayTest(unittest.TestCase):
+    """Stage 3.6: the bus, not the starting socket, owns a running turn.
+
+    A viewer arriving mid-turn is replayed the buffer; each event is published
+    exactly once; a viewer dying mid-turn takes nothing with it; a bus
+    forgotten at finish can never replay onto the saved transcript.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        home = Path(self._tmp.name)
+        self._keys = state_paths(config)
+        self._orig = {k: getattr(config, k) for k in self._keys}
+        self._home = config.HOME
+        config.HOME = home
+        for k in self._keys:
+            target = home / Path(self._orig[k]).name
+            setattr(config, k, target)
+            if k.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
+        config.ensure_home()
+        config.save_registry({"default": "p/m", "providers": {
+            "p": {"baseUrl": "http://x", "apiKey": "k",
+                  "models": [{"id": "m", "contextWindow": 100000}]}}})
+        self.proj = tempfile.TemporaryDirectory()
+        (Path(self.proj.name) / "alpha.py").write_text("def a():\n    return 1\n",
+                                                       encoding="utf-8")
+        from backend.ai import engine as _engine
+        self._stream = _engine.stream_chat
+        _engine.stream_chat = ScriptedProvider()
+        self.addCleanup(setattr, _engine, "stream_chat", self._stream)
+
+    def tearDown(self):
+        config.HOME = self._home
+        for k, v in self._orig.items():
+            setattr(config, k, v)
+        self._tmp.cleanup()
+        self.proj.cleanup()
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        return TestClient(app)
+
+    def _drain(self, ws, until=("done",), limit=200):
+        out = []
+        for _ in range(limit):
+            ev = ws.receive_json()
+            out.append(ev)
+            if ev.get("type") in until:
+                break
+        return out
+
+    def _open(self, sid):
+        return self._client().websocket_connect(
+            f"/ws/{sid}?create=1&mode=agent&model=p/m&workdir="
+            + self.proj.name.replace("\\", "%5C"))
+
+    def _wait_text_on_bus(self, sid):
+        import time as _time
+        from backend import turn_bus
+        deadline = _time.time() + 10
+        while _time.time() < deadline:
+            bus = turn_bus.get(sid)
+            if bus and any(e.get("type") == "text" for e in bus.buffer):
+                return True
+            _time.sleep(0.05)
+        return False
+
+    def test_replay_is_ordered_and_never_carries_the_user_message(self):
+        import time as _time
+        from backend import store, turn_bus
+        from backend.ai import engine as _engine
+        gate = threading.Event()
+        _engine.stream_chat = GatedProvider(gate)
+        with self._open("ws-replay-1") as ws:
+            sid = self._drain(ws, until=("session_ready",))[0]["sid"]
+            ws.send_json({"type": "prompt", "message": "read alpha.py and tell me"})
+            self.assertTrue(self._wait_text_on_bus(sid),
+                            "the turn never reached its text step")
+            with self._client().websocket_connect(f"/ws/{sid}") as ws2:
+                out = self._drain(ws2, until=("session_ready",))
+            hello, rep = out[0], out[1]
+            self.assertEqual(rep["type"], "replay")
+            self.assertTrue(hello["busy"])
+            kinds = [e["type"] for e in rep["events"]]
+            self.assertLess(kinds.index("tool_start"), kinds.index("tool_end"))
+            self.assertLess(kinds.index("tool_end"), kinds.index("text"))
+            self.assertNotIn("done", kinds)
+            # The user's message went to the store, never through the bus: a
+            # replay must not be able to double it into the transcript.
+            self.assertNotIn("user", kinds)
+            for e in rep["events"]:
+                self.assertNotIn("read alpha.py and tell me", str(e.get("delta", "")))
+            gate.set()
+            # The starting socket is the viewer under test: it stays open
+            # until the turn is over — closing it early cancels its pump.
+            self._drain(ws)
+        # The worker's finally saves the transcript before it releases the
+        # bus, so a dead bus means the store already holds the turn.
+        deadline = _time.time() + 10
+        while turn_bus.alive(sid) and _time.time() < deadline:
+            _time.sleep(0.05)
+        texts = [m["content"] for m in store.get(sid)["messages"]
+                 if m["role"] == "assistant"]
+        self.assertEqual(
+            sum(t.count("partial answer and the rest.") for t in texts), 1,
+            "the replay is transport-only: the store holds the turn exactly once")
+        self.assertFalse(turn_bus.alive(sid))
+
+    def test_the_starting_socket_receives_each_event_exactly_once(self):
+        """The double-publish regression: the starting socket is a subscriber
+        like any other, fed by the same single publish."""
+        with self._open("ws-replay-2") as ws:
+            sid = self._drain(ws, until=("session_ready",))[0]["sid"]
+            ws.send_json({"type": "prompt", "message": "read alpha.py"})
+            events = self._drain(ws)
+        kinds = [e["type"] for e in events]
+        self.assertEqual(kinds.count("tool_start"), 1)
+        self.assertEqual(kinds.count("tool_end"), 1)
+        text = "".join(e.get("delta", "") for e in events if e["type"] == "text")
+        self.assertEqual(text.count("alpha.py defines a() returning 1."), 1)
+
+    def test_a_viewer_dying_mid_turn_leaves_the_transcript_complete(self):
+        import time as _time
+        from backend import session_state, store
+        from backend.ai import engine as _engine
+        gate = threading.Event()
+        _engine.stream_chat = GatedProvider(gate)
+        with self._open("ws-replay-3") as ws:
+            sid = self._drain(ws, until=("session_ready",))[0]["sid"]
+            ws.send_json({"type": "prompt", "message": "read alpha.py"})
+            self.assertTrue(self._wait_text_on_bus(sid))
+        # leaving the with-block closes the socket while the turn is gated open
+        gate.set()
+        deadline = _time.time() + 10
+        while session_state.busy(sid) and _time.time() < deadline:
+            _time.sleep(0.05)
+        self.assertFalse(session_state.busy(sid),
+                         "the turn must finish without its viewer")
+        texts = [m["content"] for m in store.get(sid)["messages"]
+                 if m["role"] == "assistant"]
+        self.assertTrue(any("partial answer and the rest." in t for t in texts),
+                        "the epilogue belongs to the turn, not the socket")
+
+    def test_a_late_subscriber_gets_replay_then_live_without_duplicates(self):
+        import asyncio
+        import time as _time
+        from backend import session_state, turn_bus
+        from backend.ai import engine as _engine
+        gate = threading.Event()
+        _engine.stream_chat = GatedProvider(gate)
+        with self._open("ws-replay-4") as ws:
+            sid = self._drain(ws, until=("session_ready",))[0]["sid"]
+            ws.send_json({"type": "prompt", "message": "read alpha.py"})
+            self.assertTrue(self._wait_text_on_bus(sid))
+            sub = turn_bus.subscribe(sid)
+            self.assertIsNotNone(sub, "a running turn must accept a subscriber")
+            replay, q = sub
+            self.assertTrue(any(e.get("type") == "text" for e in replay))
+            gate.set()
+            live, deadline = [], _time.time() + 10
+            while _time.time() < deadline:
+                try:
+                    ev = q.get_nowait()
+                except asyncio.QueueEmpty:
+                    if not session_state.busy(sid):
+                        break
+                    _time.sleep(0.05)
+                    continue
+                if ev is None:
+                    break
+                live.append(ev)
+            # The replayed text must not come round again on the live queue:
+            # that is exactly the double-publish the lock discipline prevents.
+            live_text = "".join(e.get("delta", "") for e in live
+                                if e.get("type") == "text")
+            self.assertEqual(live_text, " and the rest.")
+            self.assertTrue(any(e.get("type") == "done" for e in live))
+            self._drain(ws)
+
+    def test_finish_forgets_the_bus_so_history_never_doubles(self):
+        import time as _time
+        from backend import store, turn_bus
+        with self._open("ws-replay-5") as ws:
+            sid = self._drain(ws, until=("session_ready",))[0]["sid"]
+            ws.send_json({"type": "prompt", "message": "read alpha.py"})
+            self._drain(ws)
+        # done is published before the epilogue releases the bus; wait for the
+        # release instead of racing it.
+        deadline = _time.time() + 10
+        while turn_bus.alive(sid) and _time.time() < deadline:
+            _time.sleep(0.05)
+        self.assertFalse(turn_bus.alive(sid),
+                         "a finished turn's bus must be forgotten")
+        with self._client().websocket_connect(f"/ws/{sid}") as ws2:
+            hello = self._drain(ws2, until=("session_ready",))[0]
+        self.assertNotIn("replay", hello)
+        self.assertFalse(hello["busy"])
+        texts = [m["content"] for m in store.get(sid)["messages"]
+                 if m["role"] == "assistant"]
+        self.assertEqual(
+            sum(t.count("alpha.py defines a() returning 1.") for t in texts), 1)
 
 
 # ── Anthropic transport and prompt caching ────────────────────────────────

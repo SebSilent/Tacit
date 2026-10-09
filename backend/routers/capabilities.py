@@ -95,6 +95,10 @@ async def set_learning(request: Request):
     if isinstance(found, JSONResponse) or not found.get("ok", True):
         return found
     providers.save({"learning": {"mode": mode}})
+    # Stage 8: the worker follows the mode — started when learning is on,
+    # stopped (not merely idle) when it is off.
+    from .. import analyzer
+    analyzer.sync_worker()
     audit.record("learning_mode_changed", backend=mode, mode=mode, status="ok")
     return _ok(learning=providers.resolve("learning"))
 

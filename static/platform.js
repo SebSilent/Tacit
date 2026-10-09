@@ -170,7 +170,7 @@
     const auOn = !!(au || {}).enabled;
     const lastCheck = (au || {}).last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
     const lastUpdate = (au || {}).last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
-    const commit = (au || {}).last_commit ? String(au.last_commit).slice(0, 7) : '';
+    const version = (au || {}).last_version ? String(au.last_version) : '';
 
     panel.innerHTML = `
       <div class="ho-section">Profile <span class="ho-sub sm">a named bundle of cost and containment</span></div>
@@ -330,15 +330,15 @@
       btn.textContent = 'Check now';
       if (!r.ok) { note(r.error || 'Check failed', true); return; }
       if (r.update_available) {
-        note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.commit_message}`);
+        note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.note}`);
         pullRow.hidden = false;
         statusRow.hidden = false;
-        statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — commit ${r.latest_commit.slice(0, 7)}`;
+        statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — version ${r.latest_version}`;
       } else {
         note('Already up to date');
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Up to date — commit ${r.latest_commit.slice(0, 7)}`;
+        statusText.textContent = `Up to date — version ${r.latest_version}`;
       }
     });
 
@@ -359,12 +359,12 @@
         note(r.message + ' — restart the server to apply');
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Updated to ${r.commit.slice(0, 7)} — restart to apply`;
+        statusText.textContent = `Updated to ${r.version} — restart to apply`;
       } else {
         note(r.message);
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Up to date — commit ${r.commit.slice(0, 7)}`;
+        statusText.textContent = `Up to date — version ${r.version}`;
       }
     });
 
@@ -372,9 +372,9 @@
     // last-check/last-update line is still worth showing on open.
     const statusRow = panel.querySelector('#auStatusRow');
     const statusText = panel.querySelector('#auStatusText');
-    if ((au || {}).last_commit) {
+    if ((au || {}).last_version) {
       statusRow.hidden = false;
-      statusText.textContent = `Last check: ${lastCheck} · Last update: ${lastUpdate} · Commit: ${commit}`;
+      statusText.textContent = `Last check: ${lastCheck} · Last update: ${lastUpdate} · Version: ${version}`;
     }
   }
 

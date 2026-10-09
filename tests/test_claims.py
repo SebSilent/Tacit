@@ -20,9 +20,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import (agent, assistant, audit, config, deps, extras, guidance,  # noqa: E402
-                     mcp_registry, metrics, model_settings, plugin_manager,
-                     proctools, project_context, tokens, turn_worker)
+from backend import (agent, assistant, audit, autoupdater, config, deps, extras,  # noqa: E402
+                     guidance, mcp_registry, metrics, model_settings,
+                     plugin_manager, proctools, project_context, tokens,
+                     turn_worker)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
 from backend.routers import chat  # noqa: E402
@@ -1935,6 +1936,131 @@ class TestProcessIdentity(Isolated):
         while proctools._pid_alive(marked.pid) and time.time() < deadline:
             time.sleep(0.2)
         self.assertFalse(proctools._pid_alive(marked.pid))
+
+
+# ── 23. the bus owns the running turn's stream ────────────────────────────
+class TestTurnBusClaims(Isolated):
+    """Stage 3.6: the worker publishes, the bus fans out, the store is written
+    once — by the turn's epilogue and by nobody else."""
+
+    def test_the_worker_never_touches_the_transcript_store(self):
+        """Replay is transport-only. The worker's imports name no store, and
+        the only store writes in the socket handler sit in the worker's own
+        epilogue — a viewer's arrival or death cannot write the transcript."""
+        src = Path(turn_worker.__file__).read_text(encoding="utf-8")
+        imports = "\n".join(l for l in src.splitlines()
+                            if l.startswith("import ") or l.startswith("from "))
+        self.assertNotIn("store", imports,
+                         "the turn worker must not import the transcript store")
+        src = Path(chat.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def worker():"):src.index("t = threading.Thread")]
+        self.assertIn("store.save(turn_rec)", body)
+        self.assertIn("store.append(turn_rec,", body)
+
+    def test_the_turn_owns_its_bus_from_before_busy_to_the_epilogue(self):
+        """The bus opens before the session is marked busy (any viewer that can
+        observe busy can subscribe behind it) and is forgotten in the worker's
+        finally — its lifetime is exactly the turn's. The two pre-worker
+        failure windows clean up their own bus, since the epilogue does not
+        exist yet."""
+        src = Path(chat.__file__).read_text(encoding="utf-8")
+        start_at = src.index("bus = turn_bus.start(")
+        begin_at = src.index("session_state.begin(", start_at)
+        self.assertLess(start_at, begin_at,
+                        "the bus opens before the session is marked busy")
+        worker_at = src.index("def worker():")
+        end_at = src.index("session_state.end(sid)", worker_at)
+        finally_at = src.index("turn_bus.finish(sid)", end_at)
+        self.assertLess(end_at, finally_at,
+                        "the bus is released last in the epilogue")
+        spawn_at = src.index("worker_proc = turn_worker.spawn(")
+        self.assertIn("turn_bus.finish(sid)",
+                      src[spawn_at:src.index('running["worker"] = worker_proc')],
+                      "a failed spawn must finish the bus it opened")
+        sub_at = src.index("bus.subscribe()")
+        self.assertIn("turn_bus.finish(sid)",
+                      src[sub_at:src.index("if use_process:", sub_at)],
+                      "a viewer lost in the replay handoff must finish the bus")
+
+
+# ── 24. the updater's transport is plain HTTPS, never git ─────────────────
+class TestAutoupdaterClaims(Isolated):
+    """Stage 7: the archive copy is the only mechanism. The module imports no
+    subprocess and no vcs, and the protected paths still guard user state."""
+
+    def test_the_updater_never_shells_out(self):
+        """No git, no tokens, no API: the transport is two plain GETs through
+        one seam, and the module imports neither subprocess nor vcs."""
+        src = Path(autoupdater.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("import subprocess", src)
+        self.assertNotIn("import vcs", src)
+        self.assertNotIn("run_argv", src)
+        # Every fetched byte comes through the one seam the tests stub.
+        self.assertIn("def _http_get(", src)
+        self.assertEqual(src.count("httpx.Client("), 1)
+
+    def test_user_state_is_never_an_update_target(self):
+        """The protected list still names the user's state files, and the
+        repo's own code dirs are not caught by the state-dir entries."""
+        for name in ("models.json", "prefs.json", "mcp.json", "audit.jsonl",
+                     "memory.db", ".env"):
+            self.assertTrue(autoupdater._is_protected(Path(name)), name)
+        self.assertTrue(autoupdater._is_protected(Path("sessions/x.json")))
+        # backend/plugins is code, not the state dir's plugins/
+        self.assertFalse(autoupdater._is_protected(Path("backend/plugins/task_list.py")))
+        self.assertFalse(autoupdater._is_protected(Path("backend/agent.py")))
+
+
+# ── 25. learning proposals are a choice, not a default ────────────────────
+class TestLearningDefaultClaims(Isolated):
+    """Stage 8: the analyzer reads finished transcripts on a timer. That is a
+    subsystem that must be opted into, so the default is learn-off, the
+    startup check is authoritative, and a mode change moves the worker."""
+
+    def test_a_fresh_install_resolves_learning_to_off(self):
+        from backend import analyzer, learning, providers
+        self.assertEqual(providers.load()["learning"]["mode"], "learn-off")
+        self.assertEqual(learning.mode(), "learn-off")
+        self.assertFalse(analyzer.enabled(),
+                         "the analyzer is off while learning is off")
+        # The startup gate: the worker is not even started.
+        analyzer.sync_worker()
+        self.assertFalse(analyzer.worker._thread and analyzer.worker._thread.is_alive(),
+                         "no analyzer thread may exist on a fresh install")
+
+    def test_a_mode_change_moves_the_worker_both_ways(self):
+        from backend import analyzer, providers
+        self.addCleanup(analyzer.worker.stop)
+        providers.save({"learning": {"mode": "propose"}})
+        analyzer.sync_worker()
+        self.assertTrue(analyzer.worker._thread and analyzer.worker._thread.is_alive(),
+                        "opting into propose starts the worker")
+        providers.save({"learning": {"mode": "learn-off"}})
+        analyzer.sync_worker()
+        deadline = time.time() + 5
+        while analyzer.worker._thread and analyzer.worker._thread.is_alive() \
+                and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(analyzer.worker._thread and analyzer.worker._thread.is_alive(),
+                         "turning learning off stops the worker, not merely idles it")
+
+    def test_no_builtin_profile_turns_learning_on(self):
+        """Every built-in profile now selects learn-off; the descriptions no
+        longer promise proposing. `propose` is an explicit Settings choice."""
+        from backend import profiles
+        for name, cfg in profiles.BUILTIN.items():
+            self.assertEqual((cfg.get("capabilities") or {}).get("learning"),
+                             "learn-off", f"profile {name}")
+        self.assertNotIn("propose", cfg.get("description", ""))
+
+    def test_the_startup_gate_is_in_the_lifespan(self):
+        """The worker is started through sync_worker() — the authoritative
+        check — never unconditionally."""
+        from backend import main
+        src = Path(main.__file__).read_text(encoding="utf-8")
+        self.assertIn("analyzer.sync_worker()", src)
+        self.assertNotIn("analyzer.worker.start()", src,
+                         "the lifespan must not start the worker unconditionally")
 
 
 if __name__ == "__main__":

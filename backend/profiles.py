@@ -26,7 +26,7 @@ BUILTIN = {
         "memory_budget": 0,
         "mcp_direct": False,
         "tools": list(CORE_TOOLS),
-        "capabilities": {"sandbox": "none", "memory": "off", "learning": "propose"},
+        "capabilities": {"sandbox": "none", "memory": "off", "learning": "learn-off"},
     },
     "default": {
         "label": "Default",
@@ -35,18 +35,17 @@ BUILTIN = {
         "memory_budget": 0,
         "mcp_direct": False,
         "tools": None,
-        "capabilities": {"sandbox": "none", "memory": "off", "learning": "propose"},
+        "capabilities": {"sandbox": "none", "memory": "off", "learning": "learn-off"},
     },
     "safe": {
         "label": "Safe",
-        "description": "Micro sandbox, memory limited to what you wrote or approved, "
-                       "learning proposes only.",
+        "description": "Micro sandbox, memory limited to what you wrote or approved.",
         "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
         "capabilities": {"sandbox": "tacit-micro", "memory": "explicit",
-                         "learning": "propose"},
+                         "learning": "learn-off"},
     },
     "power-isolation": {
         "label": "Power isolation",
@@ -57,7 +56,7 @@ BUILTIN = {
         "mcp_direct": False,
         "tools": None,
         "capabilities": {"sandbox": "tacit-micro", "memory": "explicit",
-                         "learning": "propose"},
+                         "learning": "learn-off"},
     },
     "power-memory": {
         "label": "Power memory",
@@ -67,17 +66,17 @@ BUILTIN = {
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
-        "capabilities": {"sandbox": "none", "memory": "full", "learning": "propose"},
+        "capabilities": {"sandbox": "none", "memory": "full", "learning": "learn-off"},
     },
     "full": {
         "label": "Full",
-        "description": "Isolation, every memory feature, learning proposing only. "
-                       "All of it implemented inside Tacit.",
+        "description": "Isolation, every memory feature. All of it implemented "
+                       "inside Tacit.",
         "plugins": ["memory_vault"],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
-        "capabilities": {"sandbox": "tacit-micro", "memory": "full", "learning": "propose"},
+        "capabilities": {"sandbox": "tacit-micro", "memory": "full", "learning": "learn-off"},
     },
 }
 
@@ -250,6 +249,10 @@ def apply(name: str) -> dict:
                                         "budget": int(cfg.get("memory_budget") or 0)}})
         else:
             providers.save({"learning": {"mode": wanted}})
+            # Stage 8: the analyzer worker follows the learning mode a
+            # profile selects, the same way the learning route does.
+            from . import analyzer
+            analyzer.sync_worker()
         applied[kind] = wanted
 
     # the memory plugin follows the memory mode, so turning memory on gives the

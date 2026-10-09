@@ -389,6 +389,21 @@ def interval() -> int:
         return 120
 
 
+def sync_worker() -> dict:
+    """Align the background worker with the learning mode.
+
+    The startup check is authoritative: learning off means the worker is not
+    even started, and a mode change to off stops a running one. A change back
+    to on starts it again — start() is idempotent while the thread is alive.
+    Every path that changes the learning mode calls this.
+    """
+    if enabled():
+        worker.start()
+    else:
+        worker.stop()
+    return status()
+
+
 def configure(enabled_flag: bool | None = None, interval_s: int | None = None) -> dict:
     patch = {}
     if enabled_flag is not None:
@@ -425,9 +440,14 @@ class Worker:
         if self._stop.wait(20):
             return
         while not self._stop.is_set():
+            if not enabled():
+                # Learning is off (or the analyzer is switched off): the
+                # worker is not needed, so it ends itself instead of waking
+                # every interval to do nothing. A later mode change starts it
+                # again — sync_worker() is the one hook for that.
+                return
             try:
-                if enabled():
-                    self._last = run_once()
+                self._last = run_once()
             except Exception:  # noqa: BLE001
                 pass
             if self._stop.wait(interval()):
