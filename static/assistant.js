@@ -22,6 +22,12 @@
   let sessionThinking = 'medium';
   let streaming = null;      // { el, text, raf }
   let busy = false;
+  // The run state is the server's, never typed here: it survives a reload, a
+  // second tab and a browser that closed mid-run. A budget shown from a local
+  // guess would be a lie the moment the harness spent a cycle elsewhere.
+  let goal = '';
+  let autonomy = { enabled: false, cycles: 0, max_cycles: 20,
+                   work_seconds: 0, max_hours: 5, reason: '' };
 
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
@@ -79,13 +85,46 @@
     // Your own prompts stay plain text; the assistant's answers render as
     // markdown. The `md` class switches pre-wrap off, which plain text needs
     // and rendered HTML must not have.
-    box.innerHTML = messages.map((m) => `
-      <div class="as-msg ${m.role === 'user' ? 'me' : 'them'}">
-        <div class="as-body${m.role === 'user' ? '' : ' md'}">${
-          m.role === 'user' ? esc(m.content || '') : renderMd(m.content || '')}</div>
-      </div>`).join('');
+    box.innerHTML = messages.map((m, i) => {
+      const mine = m.role === 'user';
+      const text = m.content || '';
+      // Only an answer that actually offers a prompt can be handed over. A
+      // button that sends prose the agent will misread as an instruction is
+      // worse than no button, so it appears on fenced blocks and nowhere else.
+      const offers = /```[\s\S]*?\S[\s\S]*?```/.test(text);
+      const acts = mine ? '' : `
+        <div class="as-acts">
+          ${offers ? `<button class="ho-btn small" data-send="${i}" title="Hand this prompt to the agent now">Send to agent</button>` : ''}
+          <button class="ho-btn small" data-del="${i}" title="Remove this message from the assistant's memory">delete</button>
+        </div>`;
+      return `
+      <div class="as-msg ${mine ? 'me' : 'them'}">
+        <div class="as-body${mine ? '' : ' md'}">${
+          mine ? esc(text) : renderMd(text)}</div>${acts}
+      </div>`;
+    }).join('');
     bindCopy(box);
+    bindActions(box);
     box.scrollTop = box.scrollHeight;
+  }
+
+  // One delegated handler, like the copy buttons: the thread re-renders on
+  // every save and a listener per row would either leak or have to be
+  // re-attached each time.
+  function bindActions(box) {
+    if (!box || box._actsBound) return;
+    box._actsBound = true;
+    box.addEventListener('click', (e) => {
+      const del = e.target.closest('[data-del]');
+      if (del) { send({ type: 'assistant_delete', index: +del.dataset.del }); return; }
+      const sendBtn = e.target.closest('[data-send]');
+      if (sendBtn) {
+        // The index travels, not the text: the server pulls the fenced block
+        // out of the stored message, so what the agent gets is exactly what is
+        // on disk rather than what this render happened to show.
+        send({ type: 'assistant_send', index: +sendBtn.dataset.send });
+      }
+    });
   }
 
   function renderContext() {
@@ -166,9 +205,43 @@
     });
   }
 
+  // ── the run: Goal, switch, budget ────────────────────────────────────────
+  function renderRun() {
+    const box = $('#asGoal');
+    // Never overwrite what the person is typing: the server echoes the Goal back
+    // after the write, and clobbering a focused textarea mid-sentence is how a
+    // control stops feeling like yours.
+    if (box && document.activeElement !== box) box.value = goal || '';
+    const sw = $('#asAuto');
+    if (sw) {
+      sw.checked = !!autonomy.enabled;
+      // A switch that can be thrown but does nothing is worse than one that is
+      // missing: with no Goal the server refuses the enable, so say so on the
+      // control rather than letting the click fail.
+      sw.disabled = !autonomy.enabled && !(goal || '').trim();
+      sw.title = sw.disabled
+        ? 'set a Goal first — the run needs something to work toward'
+        : 'let the assistant drive this session until the budget runs out';
+    }
+    const el = $('#asBudget');
+    if (!el) return;
+    const cyc = `${autonomy.cycles || 0}/${autonomy.max_cycles || 0} turns`;
+    const mins = Math.round((autonomy.work_seconds || 0) / 60);
+    const cap = Math.round((autonomy.max_hours || 0) * 60);
+    const time = `${mins}/${cap} min`;
+    // Enabling zeroes the reason, so a live run with one set is not "running"
+    // — it is a chain that tried to continue and could not, which is the single
+    // most important thing this line can say.
+    el.textContent = autonomy.enabled
+      ? (autonomy.reason ? `waiting · ${cyc} · ${time}` : `running · ${cyc} · ${time}`)
+      : (autonomy.reason ? `stopped — ${autonomy.reason}` : `ready · ${cyc} · ${time}`);
+    el.classList.toggle('on', !!autonomy.enabled);
+  }
+
   function renderAll() {
     renderControls();
     renderContext();
+    renderRun();
     renderMessages();
   }
 
@@ -187,6 +260,8 @@
     messages = d.messages || [];
     settings = d.settings || settings;
     preview = d.preview || preview;
+    if (d.autonomy) autonomy = d.autonomy;
+    if (d.goal !== undefined) goal = d.goal || '';
     models = d.models || [];
     thinkingLevels = d.thinking_levels || [];
     sessionModel = d.session_model || '';
@@ -300,6 +375,27 @@
         finishStream();
         streaming = null;
         break;
+      case 'assistant_goal':
+        goal = m.goal || '';
+        if (m.autonomy) autonomy = m.autonomy;
+        renderRun();
+        break;
+      case 'assistant_autonomy':
+        autonomy = m.autonomy || autonomy;
+        renderRun();
+        // The enable can be refused — no Goal, a session that vanished — and
+        // the switch has already snapped back to what the server says. Say why,
+        // or the click looks like it was ignored.
+        if (autonomy.ok === false) toast(autonomy.error || 'could not start the run', true);
+        break;
+      case 'assistant_state':
+        messages = m.messages || [];
+        settings = m.settings || settings;
+        preview = m.preview || preview;
+        if (m.autonomy) autonomy = m.autonomy;
+        if (m.goal !== undefined) goal = m.goal || '';
+        renderAll();
+        break;
       default:
         break;
     }
@@ -342,6 +438,32 @@
       const box = $('#asSettingsWrap');
       if (box) box.hidden = !box.hidden;
     });
+
+    // The Goal saves on blur, not on every keystroke: it is a standing
+    // instruction, and a write per character would hit the session record all
+    // day while someone is still phrasing it.
+    const gb = $('#asGoal');
+    if (gb) {
+      gb.addEventListener('change', () => {
+        const text = gb.value.trim();
+        if (text === (goal || '').trim()) return;
+        goal = text;
+        send({ type: 'assistant_goal', goal: text });
+      });
+      gb.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); gb.blur(); }
+      });
+    }
+    const sw = $('#asAuto');
+    if (sw) sw.addEventListener('change', () => {
+      // No local optimistic flip. The run is the server's state and it can
+      // refuse; rendering the refusal as a successful toggle is how a control
+      // starts lying, and a lying switch on an autonomous harness is the worst
+      // possible place for one.
+      send({ type: 'assistant_autonomy', enabled: sw.checked });
+    });
+    const rb = $('#asReset');
+    if (rb) rb.addEventListener('click', () => send({ type: 'assistant_reset' }));
   }
 
   function togglePanel() {
@@ -373,5 +495,14 @@
     }
   } catch (e) { /* ignore */ }
 
-  window.TacitAssistant = { handle, sessionChanged, load, togglePanel };
+  // The server's truth about this session's assistant, arriving on hello: a
+  // reply that survived a reload (it is owned by the session runtime, not by
+  // the socket) re-arms the pane's busy state instead of letting a second
+  // prompt be refused the hard way.
+  function setExternalBusy(on) {
+    busy = !!on;
+    setBusy(!!on);
+  }
+
+  window.TacitAssistant = { handle, sessionChanged, load, togglePanel, setExternalBusy };
 })();

@@ -269,14 +269,31 @@ def wire_body(body: dict) -> dict:
 
 # ── response translation ──────────────────────────────────────────────────
 def usage_of(raw) -> dict:
-    """Anthropic reports input at message_start and output at message_delta."""
+    """Anthropic reports input at message_start and output at message_delta.
+
+    ``input`` is normalized to Tacit's single basis: every prompt token that
+    occupied the window, whether or not the provider served it from cache — the
+    basis OpenAI's ``prompt_tokens`` already uses, since its ``cached_tokens`` is
+    a subset of that number. Anthropic's own ``input_tokens`` counts only the
+    *uncached* remainder and reports the cached part in two separate fields, so
+    passing it through unchanged made a session with a warm cache look nearly
+    empty. That is the whole context meter's failure: the prompt grows every
+    step, the number barely moves, and ``should_compact`` — which reads that
+    number — never fires. The cache figures are re-pricings of a subset of the
+    prompt, so they are folded into the count and never reported as extra tokens.
+    """
     raw = raw or {}
+    uncached = int(raw.get("input_tokens") or 0)
+    cache_read = int(raw.get("cache_read_input_tokens") or 0)
+    cache_write = int(raw.get("cache_creation_input_tokens") or 0)
+    output = int(raw.get("output_tokens") or 0)
+    prompt = uncached + cache_read + cache_write
     return {
-        "input": int(raw.get("input_tokens") or 0),
-        "output": int(raw.get("output_tokens") or 0),
-        "total": int(raw.get("input_tokens") or 0) + int(raw.get("output_tokens") or 0),
-        "cache_read": int(raw.get("cache_read_input_tokens") or 0),
-        "cache_write": int(raw.get("cache_creation_input_tokens") or 0),
+        "input": prompt,
+        "output": output,
+        "total": prompt + output,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
     }
 
 

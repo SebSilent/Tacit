@@ -48,6 +48,61 @@ So put everything that matters in that final message, and keep it tight: a dense
 report with file paths and line numbers where useful. Prefer a handful of targeted searches
 over reading whole trees. Say what you found, and say plainly if you could not find it."""
 
+PROPOSAL_SYSTEM = """You read a finished coding session and extract standing rules: things the user
+wants to be true in future sessions, not things that happened in this one.
+
+You propose. You never decide. Every finding you return is a candidate that a
+person reviews, and one invented rule costs them a trip to a queue they are
+already behind on. When unsure, return nothing.
+
+Rules:
+- A finding must be something the user SAID or clearly asked for, in their own
+  words or close to them. Never infer a preference from what they did.
+- Quote the user message it came from by its number. If you cannot point at one,
+  it is not a finding.
+- Never propose: a summary of the task, a fact about the codebase, an outcome of
+  the work, a tool that worked or failed, or anything the assistant already
+  stated and the user did not contradict.
+- One rule per finding. Copy the user's phrasing; do not polish it into a
+  general principle.
+- Reply with a JSON array only, and no prose around it. Return [] rather than
+  padding the list to reach a number."""
+
+PROPOSAL_PASS = """Read the session below. Each line is numbered by its turn.
+
+Return up to {n} findings, each as:
+  {"content": "<the standing rule, in the user's words>",
+   "kind": "correction|preference|rule|project",
+   "turn": <turn number of the user message it came from>,
+   "confidence": <0.0-1.0>}
+
+Worked examples — the first of each pair is a finding, the second is not:
+
+  [4] user: no, dont use regex there, always use the tokenizer instead
+      -> {"content": "dont use regex there, always use the tokenizer instead",
+          "kind": "correction", "turn": 4, "confidence": 0.85}
+  [4] user: no, dont use regex there, always use the tokenizer instead
+  [5] assistant: switched to the tokenizer, regex is gone
+  [6] user: thanks, that fixes it
+      -> nothing. Turn 6 is a thank-you; turn 4 was already extracted.
+
+  [2] user: the auth module uses a session table keyed by token
+      -> nothing. That is a fact about the code, not a rule to follow.
+  [2] user: from now on keep the session table keyed by token, do not move it
+      -> {"content": "keep the session table keyed by token, do not move it",
+          "kind": "preference", "turn": 2, "confidence": 0.8}
+
+  [7] user: run the tests before you say it works
+      -> {"content": "run the tests before you say it works",
+          "kind": "correction", "turn": 7, "confidence": 0.8}
+  [7] user: did the tests pass?
+      -> nothing. A question is not an instruction.
+
+If the session contains no standing rule, return [].
+
+Session:
+{transcript}"""
+
 COMPACT = """Compress the work so far into a dense handover note for later reference.
 
 Use these headings exactly, and keep every file path verbatim — a path that is

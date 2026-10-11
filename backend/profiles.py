@@ -40,7 +40,7 @@ BUILTIN = {
     "safe": {
         "label": "Safe",
         "description": "Micro sandbox, memory limited to what you wrote or approved.",
-        "plugins": ["memory_vault"],
+        "plugins": [],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
@@ -51,7 +51,7 @@ BUILTIN = {
         "label": "Power isolation",
         "description": "The strongest isolation Tacit can provide on this OS, plus "
                        "explicit memory. Nothing external is required.",
-        "plugins": ["memory_vault"],
+        "plugins": [],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
@@ -62,7 +62,7 @@ BUILTIN = {
         "label": "Power memory",
         "description": "Every memory feature Tacit implements: explicit notes plus "
                        "just-in-time retrieval. Sandbox left to you.",
-        "plugins": ["memory_vault"],
+        "plugins": [],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
@@ -72,7 +72,7 @@ BUILTIN = {
         "label": "Full",
         "description": "Isolation, every memory feature. All of it implemented "
                        "inside Tacit.",
-        "plugins": ["memory_vault"],
+        "plugins": [],
         "memory_budget": memory_store.DEFAULT_BUDGET,
         "mcp_direct": False,
         "tools": None,
@@ -127,9 +127,13 @@ def _tool_set(cfg: dict) -> list[dict]:
 
     by_name = {t["function"]["name"]: t for t in agent.TOOLS}
     wanted = cfg.get("tools")
-    if wanted is None:
-        return list(by_name.values())
-    return [by_name[n] for n in wanted if n in by_name]
+    names = list(by_name) if wanted is None else [n for n in wanted if n in by_name]
+    # The memory schemas are not part of the base set: cost_of prices them in
+    # the memory bucket, from the mode that offers them. Counting them here as
+    # well billed them twice and made a memory-off profile look like it carried
+    # the memory tools it does not actually offer.
+    from . import agent as _agent
+    return [by_name[n] for n in names if n not in _agent.MEMORY_TOOL_NAMES]
 
 
 def _tool_names() -> set[str]:
@@ -157,12 +161,30 @@ def cost_of(cfg: dict) -> dict:
     enabled = list(cfg.get("plugins") or [])
     plugin_tokens = sum(_plugin_tool_tokens(pid) for pid in enabled)
 
+    # Memory is priced from the mode the profile selects, not from a plugin:
+    # one switch decides both what is injected and what the agent may call, so
+    # one switch decides the cost too.
+    from . import agent as _agent
+    from . import memory_modes as _mm
     budget = int(cfg.get("memory_budget") or 0)
+    mode = str((cfg.get("capabilities") or {}).get("memory") or "off")
     memory_tokens = 0
-    if "memory_vault" in enabled and budget > 0:
-        available = sum(int(r.get("token_estimate") or 0)
-                        for r in memory_store.list_memories(enabled=True, limit=2000))
-        memory_tokens = min(budget, available)
+    memory_tools: list[dict] = []
+    if mode != "off":
+        # The memory schemas ride with the mode, measured from the real tool
+        # definitions rather than a constant that would drift. `memory_recall`
+        # is counted only for a mode that would actually offer it. They are
+        # billed here and not in the base set, so the mode is the only place
+        # their price appears.
+        memory_tools = [t for t in _agent.TOOLS
+                        if t["function"]["name"] in _agent.MEMORY_TOOL_NAMES
+                        and (t["function"]["name"] != _agent.MEMORY_RECALL
+                             or mode in _mm.RETRIEVAL_MODES)]
+        memory_tokens = tokens.estimate_tools_tokens(memory_tools)
+        if budget > 0:
+            available = sum(int(r.get("token_estimate") or 0)
+                            for r in memory_store.list_memories(enabled=True, limit=2000))
+            memory_tokens += min(budget, available)
 
     mcp_tokens = 0
     try:
@@ -171,7 +193,11 @@ def cost_of(cfg: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
-    return {"prompt": prompt_tokens, "tools": tool_tokens, "tool_count": len(chosen),
+    # `tool_count` is what the profile actually puts in front of the model: the
+    # base set plus the memory schemas its mode offers. That is the number the
+    # README's profile table publishes (20 default, 21 explicit, 22 full).
+    return {"prompt": prompt_tokens, "tools": tool_tokens,
+            "tool_count": len(chosen) + len(memory_tools),
             "plugins": plugin_tokens, "memory": memory_tokens, "mcp": mcp_tokens,
             "total": prompt_tokens + tool_tokens + plugin_tokens + memory_tokens + mcp_tokens,
             "exact": tokens.exact()}
@@ -255,11 +281,10 @@ def apply(name: str) -> dict:
             analyzer.sync_worker()
         applied[kind] = wanted
 
-    # the memory plugin follows the memory mode, so turning memory on gives the
-    # agent its recall tools and turning it off takes them away
+    # Memory needs no plugin: the mode applied above is what gives the agent
+    # its memory tools and takes them away (see agent.tools_for). The plugin
+    # bundles are only the optional extras that genuinely are plugins.
     wanted_plugins = list(cfg.get("plugins") or [])
-    if applied.get("memory", "off") == "off" and "memory_vault" in wanted_plugins:
-        wanted_plugins.remove("memory_vault")
     known = {p["id"] for p in plugin_manager.list_plugins()}
     for pid in known:
         if pid in wanted_plugins:

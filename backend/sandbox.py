@@ -220,8 +220,10 @@ def _spawn(command: str, cwd: str, timeout: int, limits: dict, network: bool,
             env[key] = "http://127.0.0.1:0"
         env["NO_PROXY"] = ""
 
-    kwargs = {"cwd": cwd, "capture_output": True, "text": True, "timeout": timeout,
-              "env": env}
+    # stdin: DEVNULL for the same reason as _run_captured — nothing a turn spawns
+    # may inherit the worker's control pipe.
+    kwargs = {"cwd": cwd, "stdin": subprocess.DEVNULL, "capture_output": True,
+              "text": True, "timeout": timeout, "env": env}
     applier = _limits_applier(limits)
     if applier is not None:
         kwargs["preexec_fn"] = applier
@@ -316,7 +318,16 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     timeout real: after the tree is killed, draining is given a short grace period
     and then abandoned rather than waited on indefinitely.
     """
-    kwargs: dict = {"cwd": cwd, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
+    # stdin is DEVNULL, never inherited. A turn runs in the worker process, whose
+    # stdin is the parent's control pipe carrying {"cancel": true} and steer lines.
+    # Inheriting it did two things: a command that read stdin blocked forever on a
+    # pipe nobody writes to (this is what hung `python -c`, which reads stdin at
+    # startup), and the child held a read handle on the control pipe, so a control
+    # line could be consumed by a stray shell command instead of the worker that
+    # owns it. DEVNULL gives an immediate EOF: a non-interactive command that asks
+    # for input gets none and moves on, which is the honest answer here.
+    kwargs: dict = {"cwd": cwd, "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
                     "text": True, "env": env}
     if shell:
         kwargs["shell"] = True

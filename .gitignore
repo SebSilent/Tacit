@@ -3,7 +3,10 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-.venv/
+# `.venv*/`, not `.venv/`: the swap to a standalone interpreter leaves `.venv.old`
+# behind, and a rebuilt one may be `.venv-312`. Neither belongs in the repo, and a
+# committed venv is a machine's absolute paths written into everyone's checkout.
+.venv*/
 venv/
 *.egg-info/
 build/
@@ -15,6 +18,10 @@ node_modules/
 .env
 *.log
 sandbox/
+
+# working notes, not for upload
+PLAN.md
+PLAN2.md
 
 .DS_Store
 Thumbs.db

@@ -25,7 +25,7 @@ DEFAULTS = {
     "include_assistant": True,  # what the agent answered
     "include_meta": True,       # session name, project, model, mode
     "include_tools": False,     # a digest of the tool calls behind each answer
-    "turns": 20,                # how many recent turns to include
+    "turns": 10,                # how many recent turns to include
     "tools": False,             # read-only tool access, off by default
     "model": "",                # empty means: same as the session
     "thinking": "",            # empty means: same as the session
@@ -41,11 +41,18 @@ the agent just did.
 The agent cannot see you. Nothing you say reaches it unless the person copies it across, so write
 for the person, not for the agent.
 
-Be direct and brief. Format answers in Markdown — headings, lists and tables where they help — and
-put every command, snippet or prompt-to-paste inside a fenced code block with a language tag,
-because the interface gives fenced blocks a one-click copy button. If they ask for something to
-paste into the main chat, that block is the whole answer: no preamble before it, no commentary
-after."""
+Be direct and very brief: your pane is a narrow column, and a long answer is a lost answer.
+Answer in a few lines, not sections — no headings unless asked, no restating the problem, no
+summary of what you just said. Format in Markdown, and put every command, snippet or
+prompt-to-paste inside a fenced code block with a language tag, because the interface gives
+fenced blocks a one-click copy button. If they ask for something to paste into the main chat,
+that block is the whole answer: no preamble before it, no commentary after.
+
+Your most useful output is the person's next prompt to the agent, so offer one when you can see
+the next step — but do not invent work. If the obvious next move is simply to let the agent carry
+on, answer with the single word `Continue` in a fenced block and nothing else. One word is a
+complete answer. If something specific is wrong or missing, say that instead, in the shortest
+form that works."""
 
 # No preset list here. What the Assistant may be told to think with comes from the
 # model it is using, discovered and cached on that model: see backend/thinking.py.
@@ -197,6 +204,14 @@ def system_prompt(rec: dict, cfg: dict | None = None) -> str:
     cfg = cfg or settings_of(rec)
     body = digest(rec, cfg)
     parts = [PERSONA]
+    # The contract changes when nobody is watching: in autonomous mode the
+    # reply IS the control signal, so the fenced block stops being a nicety.
+    if autonomy_of(rec).get("enabled"):
+        parts.append(AUTONOMY_PERSONA)
+    goal = goal_of(rec)
+    if goal:
+        parts.append("The Goal the person set for this session, which you are "
+                     "working the agent toward:\n\n" + goal)
     if body:
         parts.append("What has happened in the session you are helping with:\n\n" + body)
     else:
@@ -214,6 +229,232 @@ def messages_for(rec: dict, cfg: dict | None = None) -> list[dict]:
                                          reasoning=agent.model_reasons(
                                              resolve_model(rec, cfg))))
     return out
+
+
+def delete_message(rec: dict, index: int) -> bool:
+    """Remove one assistant message by index. True if something was removed.
+
+    Indexes are positions in the stored list, which is what the pane renders,
+    so the client counts the same rows it can see. Out of range is a no, not an
+    exception: a stale pane may well be pointing at a row that is gone.
+    """
+    rows = rec.get("assistant") or []
+    try:
+        i = int(index)
+    except (TypeError, ValueError):
+        return False
+    if not (0 <= i < len(rows)):
+        return False
+    del rows[i]
+    rec["assistant"] = rows
+    return True
+
+
+# ── autonomous mode ────────────────────────────────────────────────────────
+# The Goal and the mode's counters live as fields on the session record, not as
+# messages in the transcript, for the same reason the task list does: a
+# compaction rewrites the transcript and would otherwise eat the thing the
+# whole run is judged against. A field cannot be compacted away.
+GOAL_FIELD = "assistantGoal"
+AUTONOMY_FIELD = "assistantAutonomy"
+
+AUTONOMY_DEFAULTS = {
+    "enabled": False,
+    "cycles": 0,          # agent turns the harness has launched this run
+    "work_seconds": 0.0,  # measured agent working time, not wall clock
+    "max_cycles": 20,
+    "max_hours": 5.0,
+    "reason": "",         # why it last stopped, for the pane to show
+    "failures": 0,        # consecutive launches that failed; two ends the run
+}
+
+# How many launches in a row may fail before the harness gives up. One is a
+# provider that hiccuped; a third is a person watching a loop that cannot do
+# anything and paying for it in budget.
+MAX_LAUNCH_FAILURES = 2
+
+# The block the harness sends the Assistant at the end of every autonomous
+# turn. A fixed string, so the pane shows the same prompt it really sent.
+CYCLE_PROMPT = ("The agent's turn just ended. Read what happened and say, in a "
+                "line or two, whether it moves the Goal along. Put a fenced "
+                "block with a prompt for the agent only if it needs direction "
+                "it would not otherwise have — if the run is on course, leave "
+                "the block out and it carries on. When the Goal is fully met, "
+                "put exactly DONE in the block.")
+
+# What the harness sends when the Assistant answered with no prompt at all:
+# no block means it saw nothing wrong with carrying on.
+CONTINUE_PROMPT = "Continue."
+
+DONE = "DONE"
+
+# The autonomous contract, and what it deliberately does NOT say. The reply used
+# to be required to end in a fenced block every single time, which made the
+# Assistant a prompt generator that never answered anything: a person asking it
+# a question got a code block back. It is still the Assistant — brief, talking
+# to the person — and the block is now an offer, not a tax. The one block that
+# must never be left out is DONE, because it is the only thing the harness reads
+# as a stop; prose saying "the goal is met" means nothing to the loop.
+AUTONOMY_PERSONA = """You are running autonomously: the person is not watching live, and the
+agent acts on exactly what you hand it. You are still the Assistant, still answering the person in
+your own pane, so stay brief and do not turn every reply into a prompt.
+
+Add a fenced code block only when the agent needs direction it would not otherwise have: the next
+step, a correction, something to stop doing. If the work is on course and the agent should simply
+carry on, say so in a line and leave the block out — the harness lets the run continue, and a run
+that needs no steering does not need steering from you.
+
+One exception, and it is not optional: when the Goal is fully met, end with a fenced block holding
+exactly `DONE`. That block is the only thing that stops the run. Saying it in prose does nothing."""
+
+
+def goal_of(rec: dict) -> str:
+    return str(rec.get(GOAL_FIELD) or "")
+
+
+def autonomy_of(rec: dict) -> dict:
+    """The mode's state, with defaults filled in for anything older on disk."""
+    stored = rec.get(AUTONOMY_FIELD) or {}
+    out = dict(AUTONOMY_DEFAULTS)
+    for key in AUTONOMY_DEFAULTS:
+        if key in stored and stored[key] is not None:
+            out[key] = stored[key]
+    out["enabled"] = bool(out["enabled"])
+    out["cycles"] = int(out["cycles"] or 0)
+    out["work_seconds"] = float(out["work_seconds"] or 0.0)
+    out["max_cycles"] = max(1, int(out["max_cycles"] or 0))
+    out["max_hours"] = max(0.1, float(out["max_hours"] or 0.0))
+    out["failures"] = max(0, int(out["failures"] or 0))
+    return out
+
+
+def save_autonomy(rec: dict, changes: dict) -> dict:
+    """Validate a change to the mode's state and return the whole new state.
+
+    Counters are not settable from outside: a panel that posts its last-seen
+    cycle count after the harness has run three more turns would silently
+    rewind the budget. Only the switches and the limits are.
+    """
+    state = autonomy_of(rec)
+    for key, value in (changes or {}).items():
+        if key not in ("enabled", "max_cycles", "max_hours", "reason"):
+            continue
+        if key == "enabled":
+            state["enabled"] = bool(value)
+        elif key == "max_cycles":
+            try:
+                state["max_cycles"] = min(500, max(1, int(value)))
+            except (TypeError, ValueError):
+                pass
+        elif key == "max_hours":
+            try:
+                state["max_hours"] = min(48.0, max(0.1, float(value)))
+            except (TypeError, ValueError):
+                pass
+        else:
+            state["reason"] = str(value or "")[:200]
+    rec[AUTONOMY_FIELD] = state
+    return dict(state)
+
+
+def bump_counters(rec: dict, *, cycles: int = 0, work_seconds: float = 0.0) -> dict:
+    """Add to the counters, the only way they move.
+
+    Deliberately additive: the harness is the only writer, and a run that
+    restarted mid-flight continues the same tally rather than resetting it.
+    """
+    state = autonomy_of(rec)
+    state["cycles"] = int(state["cycles"]) + max(0, int(cycles))
+    state["work_seconds"] = round(float(state["work_seconds"]) + max(0.0, float(work_seconds)), 2)
+    rec[AUTONOMY_FIELD] = state
+    return dict(state)
+
+
+def reset_counters(rec: dict) -> dict:
+    """Zero the tally, keeping the limits and the Goal. Called on enable, so
+    pressing the switch is the start of a run rather than a continuation of
+    the last one."""
+    state = autonomy_of(rec)
+    state["cycles"] = 0
+    state["work_seconds"] = 0.0
+    state["reason"] = ""
+    state["failures"] = 0
+    rec[AUTONOMY_FIELD] = state
+    return dict(state)
+
+
+def note_launch(rec: dict, *, ok: bool) -> dict:
+    """Record whether the harness managed to launch the agent this cycle.
+
+    The counter is the harness's, never the panel's: a run that launches fine
+    clears it, a run that cannot increments it, and two in a row is what the
+    caller uses to end the loop. Kept on disk so a server restart mid-run does
+    not hand a broken session a fresh allowance of failures.
+    """
+    state = autonomy_of(rec)
+    state["failures"] = 0 if ok else int(state["failures"]) + 1
+    rec[AUTONOMY_FIELD] = state
+    return dict(state)
+
+
+def budget_left(state: dict) -> tuple[bool, str]:
+    """Whether the run may launch another agent turn, and why not if it may not."""
+    if int(state.get("cycles") or 0) >= int(state.get("max_cycles") or 1):
+        return False, f"reached the limit of {state.get('max_cycles')} turns"
+    hours = float(state.get("max_hours") or 0)
+    if float(state.get("work_seconds") or 0) >= hours * 3600:
+        return False, f"reached the limit of {hours:g} hours of work"
+    return True, ""
+
+
+def goal_block(rec: dict) -> dict:
+    """What pinning the Goal would cost, as a report. {} when there is no Goal.
+
+    This is NOT injected into the agent, and nothing on the agent's side calls
+    it. The Goal belongs to the Assistant alone: the agent is told only whatever
+    prompt the Assistant chose to write for it, so wiring this into a turn would
+    be the leak, not a fix. It is kept because the Goal rides on the record
+    rather than in the transcript — a field survives compaction, a message does
+    not — and the cost of that standing block is worth being able to state.
+    """
+    goal = goal_of(rec)
+    if not goal:
+        return {}
+    text = ("Goal for this session — the objective the work is judged against. "
+            "It stays in front of you for every turn and outranks any instruction "
+            "to wrap up early.\n\n" + goal)
+    return {"text": text, "tokens": tokens.estimate_tokens(text), "chars": len(goal)}
+
+
+def extract_prompt(text: str) -> str:
+    """The last fenced block in an Assistant reply: the prompt to hand the agent.
+
+    Empty string when the reply has no block, which the caller reads as
+    "nothing to say, carry on". The *last* block, because the persona puts the
+    handoff at the end and a reply may well quote something else earlier.
+    """
+    body = str(text or "")
+    blocks: list[str] = []
+    fence = None
+    current: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if fence is None:
+            if stripped.startswith("```"):
+                fence = stripped[3:]
+                current = []
+            continue
+        if stripped.startswith("```"):
+            blocks.append("\n".join(current).strip())
+            fence = None
+            current = []
+            continue
+        current.append(line)
+    if fence is not None and current:
+        # An unterminated block is still what the model meant to hand over:
+        # a reply cut off mid-stream should not cost the whole turn's work.
+        blocks.append("\n".join(current).strip())
+    return blocks[-1] if blocks else ""
 
 
 def append(rec: dict, role: str, content: str, extra: dict | None = None) -> dict:

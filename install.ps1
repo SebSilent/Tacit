@@ -59,15 +59,25 @@ if (-not $IsWindows -and $PSVersionTable.PSVersion.Major -ge 6) {
 }
 
 # ── Python ────────────────────────────────────────────────────────────────
+# The interpreter must be a real base Python, not another project's virtualenv.
+# `python` on PATH is whichever venv was activated last, and a venv created by it
+# records that interpreter in pyvenv.cfg and inherits its layout — so Tacit ends
+# up entangled with a tool the user did not choose and may later uninstall. The
+# probe rejects any candidate whose prefix differs from its base_prefix.
 $Python = $null
+$Skipped = @()
 foreach ($cand in @('py', 'python', 'python3')) {
     $exe = Get-Command $cand -ErrorAction SilentlyContinue
     if (-not $exe) { continue }
     $probeArgs = if ($cand -eq 'py') { @('-3', '-c') } else { @('-c') }
     try {
-        & $exe.Source @probeArgs 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>$null
+        & $exe.Source @probeArgs 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) and sys.prefix == sys.base_prefix else 1)' 2>$null
         if ($LASTEXITCODE -eq 0) { $Python = @($exe.Source) + $probeArgs[0..($probeArgs.Length-2)]; break }
+        $Skipped += $exe.Source
     } catch { }
+}
+foreach ($s in $Skipped) {
+    Warn "skipping $s - it is a virtualenv, not a base Python; using one would tie Tacit to that project"
 }
 if (-not $Python) {
     Die 'Python 3.10 or newer is required. Install it from https://python.org and re-run.'

@@ -394,17 +394,29 @@ def stats(project: str = "") -> dict:
     rows = list_memories(project=project, limit=2000)
     enabled = [r for r in rows if r["enabled"]]
     pinned = [r for r in rows if r["pinned"]]
-    selection = startup_selection(project)
+    # The injected figures come from the mode, because the mode is what decides
+    # injection. `startup_selection` selects on the store's budget alone, so it
+    # reported a full startup block for a session whose memory mode is `off` —
+    # a number describing an injection the turn would never make.
+    # `memory_modes.startup` is the function the runtime calls, so this cannot
+    # disagree with what a turn actually pays. Imported inside the function
+    # rather than at module scope: memory_modes imports this module, so a
+    # top-level import would be a cycle.
+    from . import memory_modes
+    block = memory_modes.startup(project)
+    cap = int(block.get("budget") or 0)
+    injected = int(block.get("tokens") or 0)
     total_tokens = sum(int(r["token_estimate"] or 0) for r in enabled)
     return {
         "count": len(rows),
         "enabled": len(enabled),
         "pinned": len(pinned),
         "total_tokens": total_tokens,
-        "startup_tokens": selection["tokens"],
-        "budget": selection["budget"],
-        "budget_remaining": max(0, selection["budget"] - selection["tokens"]),
-        "excluded_by_budget": selection["skipped"],
+        "mode": block.get("mode") or "off",
+        "startup_tokens": injected,
+        "budget": cap,
+        "budget_remaining": max(0, cap - injected),
+        "excluded_by_budget": int(block.get("held_back") or 0),
         "fts": has_fts(),
         "exact": tokens.exact(),
         "types": {t: sum(1 for r in rows if r["type"] == t) for t in TYPES if

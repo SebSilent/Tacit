@@ -169,6 +169,20 @@
         <svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
     </header>
+    <!-- Autonomous run: the Goal is what the agent works toward while nobody is
+         typing. It is a standing instruction, not a chat message, so it lives
+         outside the thread and is never deleted by clear. -->
+    <div class="as-run" id="asRun">
+      <textarea id="asGoal" rows="2" spellcheck="false"
+        placeholder="Goal — what the agent should keep working toward…"></textarea>
+      <div class="as-run-row">
+        <label class="chk as-chk" title="After each turn the assistant writes the agent's next prompt and the run continues on its own">
+          <input type="checkbox" id="asAuto"> Autonomous
+        </label>
+        <span class="as-run-budget" id="asBudget"></span>
+        <button class="ho-btn small" id="asReset" title="Reset the spent counters without stopping">reset</button>
+      </div>
+    </div>
     <div class="as-context" id="asSettingsWrap" hidden>
       <div id="asContext"></div>
       <div class="as-controls" id="asControls"></div>

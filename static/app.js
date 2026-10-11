@@ -50,6 +50,8 @@ let sessionStarting = false;
 let pendingSend = null;
 let planModeOn = false;          // next send runs plan orchestration
 let planLive = false;            // an orchestration is currently running
+let planText = '';               // the draft the strip is showing, kept so the
+                                 // approval card can still display what was approved
 let attachments = [];            // {data(base64), mimeType, name}
 let autoCompactionOn = true;
 let stickToBottom = true;
@@ -482,17 +484,44 @@ function attachCurrent() {
 
 // background stream events for a non-active session, arriving on that
 // session's own socket: keep its transcript alive without touching the
-// active session's view. This is the 1b replacement for bgIngest — same
-// purpose, but the events were never routed across sessions to get here.
+// active session's view. The socket is a subscriber of the session's stream
+// for as long as it is open, so a turn started anywhere — this tab, another
+// tab, another device — streams here too.
 function handleBackground(m, s) {
-  if (m.type === 'text') {
+  if (m.type === 'state_delta') {
+    // The busy mark is the server's truth about this session; keeping it
+    // here is what stops the idle-socket reaper from closing the transport
+    // of a session that is working somewhere else.
+    if (m.busy != null) { s._busy = !!m.busy; renderSessionList(); }
+    return;
+  }
+  if (m.type === 'user_message') {
+    // The same row, for the same reason, in a session that is not on screen:
+    // without it mk() finds an assistant row last and appends the new turn to
+    // the old bubble. mk() starts a fresh one once the user row is there.
+    s.messages.push({ role: 'user', content: m.text || '', origin: m.origin });
+    persist();
+    return;
+  }
+  const mk = () => {
     let last = s.messages[s.messages.length - 1];
     if (!last || last.role !== 'assistant') {
       last = { role: 'assistant', content: '', reason: '', tools: [] };
       s.messages.push(last);
     }
-    last.content += m.delta;
+    return last;
+  };
+  if (m.type === 'text') {
+    mk().content += m.delta;
     persist();
+  } else if (m.type === 'reason') {
+    const a = mk(); a.reason = (a.reason || '') + (m.delta || '');
+  } else if (m.type === 'tool_start') {
+    mk().tools.push({ id: m.id, name: m.name, args: m.args });
+  } else if (m.type === 'tool_end') {
+    const a = mk();
+    const t = (a.tools || []).find(t => t.id === m.id);
+    if (t) { t.result = m.result; t.is_error = m.is_error; }
   } else if (m.type === 'done' || m.type === 'proc_exit') {
     s._busy = false;
     persist();
@@ -580,6 +609,12 @@ function handle(m) {
         if (s) { s.model = m.model; renderModelPickers(); renderModelChip(); }
       }
       if (m.workdir) { const s = cur(); if (s) s.workdir = m.workdir; }
+      // Plan mode's live state arrives on the same hello that carries busy,
+      // because it has the same problem: the strip is drawn from events, and a
+      // socket that was not open missed them. The server holds the plan by
+      // session id, so it can answer this question for any session, including
+      // one nobody is watching.
+      restorePlanStrip(m.plan || null);
       if (m.thinking) {
         const s = cur();
         if (s && s.thinking !== m.thinking) { s.thinking = m.thinking; persist(); }
@@ -605,6 +640,9 @@ function handle(m) {
         }
       }
       if (m.busy && !m.starting && !streaming) resumeLiveStream();
+      if (m.assistantBusy != null && window.TacitAssistant && window.TacitAssistant.setExternalBusy) {
+        window.TacitAssistant.setExternalBusy(m.assistantBusy);
+      }
       break;
     case 'session_ready':
       sessionStarting = false;
@@ -687,8 +725,37 @@ function handle(m) {
         if (m.allowed_tools != null) s.allowed_tools = m.allowed_tools;
         if (m.excluded_tools != null) s.excluded_tools = m.excluded_tools;
         if (m.permission_mode != null) s.permission_mode = m.permission_mode;
+        // The state verifier, viewer side: a turn started anywhere — this
+        // tab, another tab, another device — arms this view's streaming, and
+        // its end quiets it. The stream was always the session's; the view
+        // just follows it now.
+        if (m.busy != null) {
+          if (m.busy) { if (!streaming) resumeLiveStream(); }
+          else endStreamQuiet();
+        }
       }
       break;
+    case 'user_message': {
+      // A row the server appended to the transcript. This window draws the
+      // person's own prompt the instant they press Enter, so that one is
+      // matched against the local echo and dropped rather than drawn twice —
+      // and every other origin (the Send button, the autonomous loop) gets a
+      // real row here, which is what stops the turn's deltas being absorbed by
+      // the previous assistant bubble.
+      const s = cur();
+      if (!s) break;
+      const echoed = m.origin === 'you' && localEchoes.get(s.id) === (m.text || '');
+      localEchoes.delete(s.id);
+      if (echoed) break;
+      s.messages.push({ role: 'user', content: m.text || '', origin: m.origin });
+      persist();
+      appendMsg('user', m.text || '', m.origin);
+      // A fresh assistant bubble for the turn this prompt started. No-op when
+      // one is already open; the point is that the *previous* turn's bubble is
+      // not still the thing receiving text.
+      ensureStreamingBubble();
+      break;
+    }
     case 'text':
       if (streaming) { streaming.msg.content += m.delta; appendText(m.delta); }
       break;
@@ -734,29 +801,8 @@ function handle(m) {
       renderPlanReady(m.plan || '');
       break;
     case 'plan_approved':
-      if (m.saved) {
-        // plan persisted → offer the /implement equivalent
-        planStrip.hidden = false;
-        planStrip.innerHTML = `
-          <div class="ps-head"><span class="ps-icon" style="animation:none;background:#3fb950"></span>
-            <span class="ps-phase">Plan approved & saved</span>
-            <span class="ps-detail">${esc(m.plan_file || '')}</span></div>
-          <div class="pr-actions">
-            <button class="ho-btn primary" id="plImplement">Implement now</button>
-            <button class="ho-btn" id="plLater">Later (menu → Implement)</button>
-          </div>`;
-        $('#plImplement').addEventListener('click', () => {
-          // Stage 1b: the server creates the fresh session and returns its
-          // id; the rpc_response handler adopts it and opens its socket.
-          // No streaming bubble here — this session's turn is over.
-          if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_implement' }));
-          hidePlanStrip();
-        });
-        $('#plLater').addEventListener('click', hidePlanStrip);
-      } else {
-        hidePlanStrip();
-        toast(m.message || 'Plan not saved', true);
-      }
+      if (m.saved) renderPlanApproved(m);
+      else { hidePlanStrip(); toast(m.message || 'Plan not saved', true); }
       break;
     case 'agent_settled':
       // steer / follow_up queued in the agent
@@ -793,10 +839,18 @@ function handle(m) {
       // raw agent stderr — surface only when clearly an error
       if (/error|failed|refused|not found/i.test(m.line) && !streaming) toast(m.line, true);
       break;
+    case 'error':
+      // The turn's engine failed. Until now this event had no case: it fell
+      // through to the assistant-prefix default and the browser showed
+      // nothing while the agent said the turn could not go on.
+      turnFailed = true;
+      toast('Turn error: ' + (m.message || 'unknown'), true);
+      break;
     case 'proc_exit':
       if (busy) endStream();
       break;
     case 'fatal':
+      turnFailed = true;
       endStream();
       toast('Fatal: ' + m.error, true);
       break;
@@ -818,6 +872,12 @@ function handle(m) {
 }
 
 // ── sending ──────────────────────────────────────────────────────────
+// The prompt this window has already echoed into its own transcript. The
+// server publishes every row it appends — including the ones this window
+// typed — so the echo is matched and skipped instead of drawn twice. A Map
+// rather than a field on the session, because sessions go to localStorage.
+const localEchoes = new Map();   // sid -> text
+
 function send(text) {
   text = (text || '').trim();
   if (!text && !attachments.length) return;
@@ -841,6 +901,7 @@ function send(text) {
 
   emptyState.style.display = 'none';
   const imgs = drainAttachments();
+  localEchoes.set(s.id, text);   // the server will publish this row too
   s.messages.push({ role: 'user', content: text + (imgs.length ? ` · ${imgs.length} image(s)` : '') });
   s.messages.push({ role: 'assistant', content: '', reason: '', tools: [] });
   if (s.title === 'New session' && !s.namedByUser) s.title = autoTitle(text);
@@ -877,6 +938,7 @@ function drainAttachments() {
 
 function setBusy(b) {
   busy = b;
+  if (b) turnFailed = false;   // a fresh turn, a clean slate for the chime
   // the send button stays available while the agent runs — sending then
   // steers/interrupts the running turn instead of starting a new one.
   stopBtn.hidden = !b;
@@ -915,7 +977,55 @@ function ensureStreamingBubble() {
   setBusy(true);
 }
 
+// ── turn-end sound ─────────────────────────────────────────────────
+// Synthesised rather than an asset file: nothing to ship, nothing to
+// download, no codec, and it is quiet by construction. Two short notes say
+// "the work finished" without demanding to be looked at — the case the sound
+// exists for is the tab in the background. Gated on a server preference, so
+// every device pointed at this install agrees about whether it makes a noise.
+let turnSoundOn = true;
+let audioCtx = null;
+let turnFailed = false;   // set by an error/fatal event, read by the chime
+
+async function loadSoundPref() {
+  try {
+    const r = await fetch('/api/harness/sound');
+    const d = await r.json();
+    turnSoundOn = d.turn_sound !== false;
+  } catch (e) { /* offline: keep the default */ }
+}
+
+function chime(kind) {
+  if (!turnSoundOn) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = audioCtx || new AC();
+    // A context created before the first gesture starts suspended; a turn can
+    // end while nobody has clicked in this tab yet, so resume and let it fail
+    // quietly rather than throw inside a stream handler.
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t0 = audioCtx.currentTime + 0.02;
+    const notes = kind === 'error' ? [392, 262] : [523, 784];
+    notes.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const at = t0 + i * 0.11;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.05, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(at);
+      osc.stop(at + 0.25);
+    });
+  } catch (e) { /* audio is never worth an error banner */ }
+}
+
 function endStream() {
+  const ranHere = !!streaming;
   if (streaming) {
     // flush any unthrottled tail content (rAF may still be pending)
     const cc = streaming.el.querySelector('.msg-content');
@@ -939,6 +1049,11 @@ function endStream() {
   streaming = null;
   setBusy(false);
   markActiveSessionState('idle');
+  // The chime belongs to a turn that really ended in this view (ranHere), not
+  // to a quiet re-arm after a session switch. A turn that ended on an error
+  // gets the lower two-note; a finished one the rising pair.
+  if (ranHere) chime(turnFailed ? 'error' : 'done');
+  turnFailed = false;
   persist();
 }
 
@@ -948,14 +1063,22 @@ function stop() {
 }
 
 // ── rendering ────────────────────────────────────────────────────────
-function appendMsg(role, text) {
+// Who was actually at the keyboard. The agent sees a plain user row either
+// way — these tags exist so the person can tell their own words from one the
+// Assistant sent, and never mistake an autonomous prompt for something they
+// typed and forgot.
+const MSG_TAGS = { assistant: 'Assistant', autonomous: 'Autonomous-Mode' };
+
+function appendMsg(role, text, origin) {
   if (role === 'user') stickToBottom = true;
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}`;
+  const tag = (role === 'user' && MSG_TAGS[origin])
+    ? ` <span class="msg-tag ${origin}">${MSG_TAGS[origin]}</span>` : '';
   wrap.innerHTML = `
     <div class="avatar">${role === 'user' ? 'YOU' : 'TC'}</div>
     <div class="msg-body">
-      <div class="msg-role">${role === 'user' ? 'You' : 'Tacit'}</div>
+      <div class="msg-role">${role === 'user' ? 'You' : 'Tacit'}${tag}</div>
       <div class="msg-body-inner"></div>
     </div>`;
   const body = wrap.querySelector('.msg-body-inner');
@@ -1070,7 +1193,9 @@ function renderTranscript(s) {
   for (const g of groups) {
     const head = g.parts[0];
     const text = g.parts.map(p => p.content || '').join('\n\n');
-    const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''));
+    // head.origin: the sender tag survives a reload, because it rides on the
+    // stored row (and agent.transcript_messages strips it before the model).
+    const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''), head.origin);
     if (g.role !== 'assistant') continue;
     if (text) {
       const c = body.querySelector('.msg-content');
@@ -2056,6 +2181,10 @@ planToggle.addEventListener('click', () => setPlanMode(!planModeOn));
 
 function renderPlanStatus(m) {
   planStrip.hidden = false;
+  // A new plan starts at decomposing and nothing else does, so this is where the
+  // previous draft is dropped. Left in place, the approval card of a later plan
+  // would show the text of the one before it.
+  if (m.phase === 'decomposing') planText = '';
   const phaseLabel = {
     decomposing: '1 · Decomposing request',
     exploring: '2 · Exploring the codebase',
@@ -2144,11 +2273,28 @@ function renderPlanQuestions(questions) {
   });
 }
 
-function renderPlanReady(plan) {
+function planBody(text) {
+  // The draft is the thing being approved, so it is the thing the card has to
+  // show: plan_ready is the only event that carries the text, and a card with
+  // three buttons and no plan asks for approval of nothing. It comes back as
+  // markdown from the synthesise pass, so it goes through the same renderer the
+  // transcript uses. The strip is short and a real plan is not, so the body
+  // scrolls instead of pushing the composer off the bottom of the screen.
+  if (!text) return '';
+  // .msg-content is not decoration: every markdown rule in the stylesheet is
+  // scoped to it, so a plan drawn without that class gets browser defaults —
+  // full-size headings and unstyled code. The plan is the agent's own prose
+  // about the codebase, so it is rendered the way the agent's prose is rendered.
+  return `<div class="msg-content pr-body">${md(text)}</div>`;
+}
+
+function renderPlanReady(text) {
   planStrip.hidden = false;
+  planText = text || '';
   planStrip.innerHTML = `
     <div class="ps-head"><span class="ps-icon"></span><span class="ps-phase">Plan draft ready</span>
-      <span class="ps-detail">review it, then approve to save it under ~/.tacit/plans/</span></div>
+      <span class="ps-detail">approve to save it under ~/.tacit/plans/ and write it into the project</span></div>
+    ${planBody(planText)}
     <div class="pr-actions">
       <button class="ho-btn primary" id="prApprove">Approve plan</button>
       <button class="ho-btn" id="prReject">Reject</button>
@@ -2161,6 +2307,73 @@ function renderPlanReady(plan) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_approve', approved: false }));
   });
   $('#prHide').addEventListener('click', hidePlanStrip);
+}
+
+function renderPlanApproved(info) {
+  // Drawn from two sources that must look the same: the plan_approved event and
+  // the snapshot a reload gets from hello. Both carry plan_file (the record
+  // under ~/.tacit/plans) and context_file (the project's PLAN.md), because the
+  // approval writes both and they can fail independently — a PLAN.md the person
+  // wrote themselves is refused, not overwritten. So the line names each copy
+  // and says which one did not happen, and the server's own sentence, which is
+  // the only place the refusal reason exists, rides in the tooltip.
+  planStrip.hidden = false;
+  // The project copy is named by whatever write_context actually chose: PLAN.md
+  // when the project let it, PLAN-<session> when the project's own PLAN.md was
+  // in the way. Hard-coding "PLAN.md" here would advertise a file that does not
+  // exist, so the name comes off the path.
+  const ctx = info.context_file || '';
+  const ctxName = ctx.split(/[\\/]/).pop();
+  const proj = ctx
+    ? ` · <span class="ps-ok">${esc(ctxName)} written</span>`
+    : ' · <span class="ps-warn">no project file written</span>';
+  planStrip.innerHTML = `
+    <div class="ps-head"><span class="ps-icon" style="animation:none;background:#3fb950"></span>
+      <span class="ps-phase">Plan approved & saved</span>
+      <span class="ps-detail" title="${esc(info.message || '')}">${esc(info.plan_file || '')}${proj}</span></div>
+    ${planBody(planText || info.text || '')}
+    <div class="pr-actions">
+      <button class="ho-btn primary" id="plImplement">Implement now</button>
+      <button class="ho-btn" id="plLater">Later (menu → Implement)</button>
+    </div>`;
+  $('#plImplement').addEventListener('click', () => {
+    // Stage 1b: the server creates the fresh session and returns its
+    // id; the rpc_response handler adopts it and opens its socket.
+    // No streaming bubble here — this session's turn is over.
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_implement' }));
+    hidePlanStrip();
+  });
+  $('#plLater').addEventListener('click', hidePlanStrip);
+}
+
+function restorePlanStrip(p) {
+  // hello carries the plan the session is actually on. The strip is drawn from
+  // events, and events that streamed past are gone for good, so without this a
+  // reload or a switch-back showed an empty strip over a plan that was still
+  // running — or still waiting for answers — on the server. The snapshot is the
+  // same state those events drew, so each phase maps back onto its renderer.
+  // Null means no plan, which must clear a strip left from the session this
+  // socket replaced.
+  if (!p || p.cancelled) { planLive = false; hidePlanStrip(); return; }
+  // The phase is not the whole story, so the data decides. A finished plan is
+  // still phase 'synthesizing' — plan_ready carries the text and never moves the
+  // phase — and an approved one is indistinguishable from it by phase alone;
+  // saved and text say what actually exists. `running` is the server's answer to
+  // a question the client cannot ask: a snapshot whose thread died with the last
+  // server must not come back as a live strip holding the composer shut.
+  planLive = !!p.running;
+  planText = p.text || '';
+  if (p.saved) return renderPlanApproved(p);
+  if (p.text) return renderPlanReady(p.text);
+  if (p.phase === 'awaiting_answers' && (p.questions || []).length) {
+    return renderPlanQuestions(p.questions);
+  }
+  if (planLive) {
+    renderPlanStatus({ phase: p.phase || '', detail: p.detail || '',
+                       explorers: p.explorers || [] });
+    return;
+  }
+  hidePlanStrip();
 }
 
 function hidePlanStrip() { planStrip.hidden = true; planStrip.innerHTML = ''; }
@@ -2402,6 +2615,7 @@ updateSteerHint();
   await initSessions();
   connect();
   await loadInfo();
+  await loadSoundPref();
   renderModelPickers();
   renderThinkSelect();
   renderModelChip();
@@ -2416,6 +2630,7 @@ window.Tacit = Object.assign(window.Tacit || {}, {
   getSid: () => activeId,
   getWorkdir: () => { const s = cur(); return (s && s.workdir) || ''; },
   refreshInfo: () => loadInfo(),
+  refreshSoundPref: () => loadSoundPref(),
   pickDir: ({ key = 'workspace', ...opts } = {}) => openFsPicker(key, opts),
   // the assistant panel shares this one socket rather than opening its own
   sendMessage: (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); },

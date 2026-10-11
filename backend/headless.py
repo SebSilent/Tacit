@@ -1,13 +1,16 @@
 """Run one Tacit agent turn from a command line, with no web server.
 
-Tacit's only front door is the WebSocket session in ``routers/chat.py``. Benchmarks and
-scripts need a process that takes an instruction, does the work, and exits with a number
-they can read — which is the same agent loop with no browser, no uvicorn and no analyzer.
+Tacit's front door is a server-side session: ``session_runtime`` owns the turn and its
+stream, and the WebSocket in ``routers/chat.py`` is a viewer of it rather than the thing
+running it. Benchmarks and scripts need a process that takes an instruction, does the
+work, and exits with a number they can read — which is the same agent loop with no
+browser, no uvicorn, no event bus and no analyzer.
 
 This module reproduces the server's turn path rather than inventing a second one: the
 same system prompt, the same project-instructions block, the same ``agent.run_turn`` call
-with the same arguments, and the same usage accumulation. Two things are deliberately
-absent, because both would change what is being measured:
+with the same arguments, and the same usage arithmetic (``metrics.normalize_usage``, the
+one parser both paths share). Two things are deliberately absent, because both would
+change what is being measured:
 
 * the background session analyzer, which makes its own model calls after a turn and would
   inflate every token figure a benchmark reports;
@@ -105,18 +108,17 @@ def resolve_ref(wanted: str) -> str:
 
 
 def _accumulate(totals: dict, u: dict) -> None:
-    """Same fields and same arithmetic as routers/chat.py::_usage_event."""
-    inp = int(u.get("input") or 0)
-    out = int(u.get("output") or 0)
-    totals["input"] += inp
-    totals["output"] += out
-    totals["total"] += int(u.get("total") or 0) or (inp + out)
-    totals["cache_read"] += int(u.get("cache_read") or 0)
-    totals["cache_write"] += int(u.get("cache_write") or 0)
-    # The number a harness comparison turns on: what this run cost fresh, with cache
-    # reads excluded because they are re-reads of bytes already paid for. This matches
-    # OpenBench's stated token basis ("uncached input + output").
-    totals["fresh"] += max(0, inp - int(u.get("cache_read") or 0)) + out
+    """Add one call's usage to the run's totals.
+
+    Shared arithmetic, not a copy of it: both this and the server's live meter
+    (``session_runtime._usage_event``) read ``metrics.normalize_usage``, so a
+    benchmark row and the number on screen can never disagree about what a token
+    is. ``fresh`` is the figure a harness comparison turns on — cache reads are
+    re-reads of bytes already paid for, so it is uncached input plus output, which
+    is OpenBench's stated basis.
+    """
+    for key, value in metrics.normalize_usage(u).items():
+        totals[key] += value
 
 
 def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = None,

@@ -195,15 +195,29 @@ def _usage(raw) -> dict:
     details = raw.get("prompt_tokens_details") or {}
     if not isinstance(details, dict):
         details = {}
+    # ``input`` is the whole prompt, cache reads included — see
+    # ``anthropic.usage_of`` for the basis this normalizes to. ``prompt_tokens``
+    # already satisfies it: OpenAI's ``cached_tokens`` is a subset of that number,
+    # so adding it here would bill the same bytes twice and compact too early.
+    prompt = raw.get("prompt_tokens") or 0
+    cache_read = (details.get("cached_tokens")
+                  or raw.get("cache_read_input_tokens") or 0)
+    cache_write = raw.get("cache_creation_input_tokens") or 0
+    # A gateway that passes Anthropic's cache fields through an OpenAI-shaped body
+    # reports them *outside* prompt_tokens. The tell is arithmetic: a subset can
+    # never exceed the whole. Where it does, the cached bytes were left out of the
+    # prompt count, so they are added rather than dropped — otherwise the meter
+    # under-reads and the session never looks full enough to compact.
+    if int(cache_read or 0) > int(prompt or 0):
+        prompt = int(prompt or 0) + int(cache_read or 0) + int(cache_write or 0)
     return {
-        "input": raw.get("prompt_tokens") or 0,
+        "input": prompt,
         "output": raw.get("completion_tokens") or 0,
         "total": raw.get("total_tokens") or 0,
         # OpenAI-compatible providers report a cache read inside prompt details;
         # Anthropic-shaped ones report both directions at the top level.
-        "cache_read": (details.get("cached_tokens")
-                       or raw.get("cache_read_input_tokens") or 0),
-        "cache_write": raw.get("cache_creation_input_tokens") or 0,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
     }
 
 

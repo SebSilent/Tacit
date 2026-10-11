@@ -37,10 +37,11 @@ from . import config
 # like `python.exe tacit-turn-worker -m backend.turn_worker ...` is ours even
 # when every other field is identical to someone else's python.
 ROLE_WORKER = "tacit-turn-worker"
+ROLE_ASSISTANT = "tacit-assistant-worker"
 ROLE_WATCHER = "tacit-watcher"
 ROLE_SERVER = "tacit-server"
 
-MARKERS = (ROLE_WORKER, ROLE_WATCHER, ROLE_SERVER)
+MARKERS = (ROLE_WORKER, ROLE_ASSISTANT, ROLE_WATCHER, ROLE_SERVER)
 
 REGISTRY_FILE = "processes.json"
 

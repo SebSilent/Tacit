@@ -1,9 +1,14 @@
-"""HTTP surface for the Memory Vault."""
+"""HTTP surface for durable memory.
+
+One capability, one switch: the mode in `providers.memory` decides what is
+injected, what the agent may call, and what the preview shows. There is no
+Memory Vault plugin to enable on top of it.
+"""
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import config, memory_store, store, tokens
+from .. import config, memory_modes, memory_store, store, tokens
 from ..ai import engine
 
 router = APIRouter()
@@ -69,9 +74,20 @@ async def stats(project: str = ""):
 
 @router.get("/api/memory/startup")
 async def startup(project: str = ""):
-    selection = memory_store.startup_selection(project)
-    selection["display"] = tokens.label(selection["tokens"])
-    return _ok(**selection)
+    """What a turn would actually inject — with the mode applied.
+
+    This used to call ``memory_store.startup_selection``, which selects on the
+    budget alone: it returned a full block for a session whose memory mode is
+    ``off``, so the preview described an injection the turn would never make.
+    ``memory_modes.startup`` is the function the runtime calls, so preview and
+    turn cannot disagree. The legacy keys ride along for existing readers.
+    """
+    block = memory_modes.startup(project)
+    return _ok(mode=block["mode"], text=block["text"], tokens=block["tokens"],
+               display=tokens.label(block["tokens"]), budget=block["budget"],
+               count=block["count"], held_back=block["held_back"],
+               items=block["items"], retrieval_budget=block["retrieval_budget"],
+               used=[i["id"] for i in block["items"]], skipped=block["held_back"])
 
 
 @router.post("/api/memory/budget")

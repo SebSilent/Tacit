@@ -73,12 +73,68 @@ class TurnWorker:
         self._cancel_sent = False
         self._killed = False
         self._lock = threading.Lock()
+        self._trace: list = []
 
     # ── spawn ─────────────────────────────────────────────────────────────
+    def _spawn_proc(self, role: str, argv: list[str], session: str) -> bool:
+        """Spawn one marked, contained worker process. Shared by both kinds.
+
+        The proctools marker makes the process identifiable on a machine full
+        of python.exe, the job object takes it down if this parent dies hard,
+        and the registry row is what /api/processes shows and the startup
+        sweep sweeps. The tree-kill flags stay: the job contains orphans, the
+        group is what the cooperative kill reaches first.
+        """
+        try:
+            self.proc = proctools.spawn(
+                role, argv, session=session,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                cwd=str(PROJECT_ROOT),
+                env=os.environ.copy(),
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                               if os.name == "nt" else 0),
+                **({"start_new_session": True} if os.name != "nt" else {}))
+        except Exception:
+            self.proc = None
+            return False
+        self._pump_stderr()
+        return True
+
+    def _handshake(self, payload: dict) -> bool:
+        """Write the handshake, and never leave a spawned worker unread.
+
+        The handshake goes out HERE, not on the first events() read. The
+        worker's stdin watcher treats the first line as the handshake and
+        everything after it as control lines; a steer written before the
+        parent's driver thread first called events() would be consumed AS the
+        handshake and the turn would run without it — measured in
+        test_steer.py, which steers immediately after spawn. Writing it at
+        spawn closes that race: from this moment on, every line on stdin is a
+        control line.
+
+        A handshake that cannot be written means the pipe is already gone; the
+        process is killed here rather than returned as False with a live child
+        nobody will ever read — which is exactly how an orphan is made.
+        """
+        proc = self.proc
+        if proc is None:
+            return False
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+        except Exception:
+            self.kill()
+            proctools.reap(proc)
+            self.proc = None
+            return False
+        return True
+
     def start(self, *, project: str | None, ref: str | None, chat: bool,
               session: str, has_instructions: bool, reasoning: str | None,
               max_steps: int | None, messages: list[dict], trace: list) -> bool:
-        """Spawn the worker process. False when the mode is not process."""
+        """Spawn the agent turn's worker process. False when the mode is not
+        process, or the worker could not be started."""
         if worker_mode() != "process":
             return False
         cmd = _worker_command()
@@ -92,41 +148,29 @@ class TurnWorker:
             "--reasoning", reasoning or "",
             "--max-steps", str(max_steps or 0),
         ]
-        try:
-            # Spawned through proctools: the `tacit-turn-worker` argv marker
-            # makes the process identifiable on a machine full of python.exe,
-            # the job object takes it down if this parent dies hard, and the
-            # registry row is what /api/processes shows and the startup sweep
-            # sweeps. The tree-kill flags stay: the job contains orphans, the
-            # group is what the cooperative kill reaches first.
-            self.proc = proctools.spawn(
-                proctools.ROLE_WORKER, argv, session=session,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", bufsize=1,
-                cwd=str(PROJECT_ROOT),
-                env=os.environ.copy(),
-                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
-                               if os.name == "nt" else 0),
-                **({"start_new_session": True} if os.name != "nt" else {}))
-        except Exception:
+        if not self._spawn_proc(proctools.ROLE_WORKER, argv, session):
             return False
-        self._pump_stderr()
-        self._messages = messages
         self._trace = trace
-        # The transcript handshake goes out HERE, not on the first events()
-        # read. The worker's stdin watcher treats the first line as the
-        # handshake and everything after it as control lines; a steer written
-        # before the parent's worker thread first called events() would be
-        # consumed AS the handshake and the turn would run without it —
-        # measured in test_steer.py, which steers immediately after spawn.
-        # Writing it at spawn closes that race: from this moment on, every
-        # line on stdin is a control line.
-        try:
-            self.proc.stdin.write(json.dumps({"transcript": messages}) + "\n")
-            self.proc.stdin.flush()
-        except Exception:
+        return self._handshake({"transcript": messages})
+
+    def start_assistant(self, *, session: str, state: dict, trace: list) -> bool:
+        """Spawn the assistant's worker process — the session's second worker.
+
+        The handshake carries the assistant's own state (its history as it
+        stands, its settings, the prompt, and the session facts its persona
+        and read-only tools read), so the worker needs no access to the
+        session record while it runs and cannot write the transcript store.
+        """
+        if worker_mode() != "process":
             return False
-        return True
+        cmd = _worker_command()
+        if not cmd:
+            return False
+        argv = cmd + ["--kind", "assistant", "--session", session or ""]
+        if not self._spawn_proc(proctools.ROLE_ASSISTANT, argv, session):
+            return False
+        self._trace = trace
+        return self._handshake({"assistant": state})
 
     def _pump_stderr(self):
         """The worker's stderr to the server's, so a crash is visible somewhere."""
@@ -273,8 +317,7 @@ def spawn(sid: str) -> TurnWorker:
 
 
 # ── the worker process itself ─────────────────────────────────────────────
-def _run_worker(argv: list[str]) -> int:
-    """The subprocess entry: run one turn, stream events as JSON lines."""
+def _reconfigure_streams() -> None:
     # Windows pipes default to cp1252, not UTF-8. The worker writes model
     # output — reasoning full of em dashes and curly quotes — straight onto
     # this pipe, and the parent reads it as UTF-8, so every non-ASCII
@@ -287,11 +330,22 @@ def _run_worker(argv: list[str]) -> int:
     sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8",
                                  errors="replace", line_buffering=True)
 
+
+def _arg(argv: list[str], name: str, default: str = "") -> str:
+    return argv[argv.index(name) + 1] if name in argv else default
+
+
+def _run_worker(argv: list[str]) -> int:
+    """The subprocess entry: run one turn, stream events as JSON lines."""
+    _reconfigure_streams()
+    if _arg(argv, "--kind") == "assistant":
+        return _run_assistant_worker(argv)
+
     from . import agent, audit, config
     from .ai import prompts
 
     def arg(name: str, default: str = "") -> str:
-        return argv[argv.index(name) + 1] if name in argv else default
+        return _arg(argv, name, default)
 
     project = arg("--project") or None
     ref = arg("--ref") or None
@@ -390,8 +444,92 @@ def _run_worker(argv: list[str]) -> int:
     return 0
 
 
+def _run_assistant_worker(argv: list[str]) -> int:
+    """The assistant's subprocess entry: the session's second worker.
+
+    Same shape as the agent's: one process, events as JSON lines on stdout,
+    a cooperative cancel on stdin. It reads nothing from the session record
+    while it runs — the handshake carried everything — and it writes nothing
+    to the transcript store: the parent's driver owns both ends, so a worker
+    that dies mid-reply loses nothing the parent has not already got.
+    """
+    from . import assistant, audit, config
+
+    session = _arg(argv, "--session")
+    config.ensure_home()
+    config.load_env()
+
+    # The assistant's state arrives on stdin as one JSON line: the session
+    # record as it stood before this prompt, with `assistant` holding the
+    # history the reply continues.
+    try:
+        raw = sys.stdin.readline()
+        handshake = json.loads(raw or "{}")
+    except Exception:
+        handshake = {}
+    rec = dict(handshake.get("assistant") or {})
+    text = str(rec.pop("text", "") or "")
+    cfg = assistant.settings_of(rec)
+
+    stop = threading.Event()
+    cancelled = {"flag": False}
+
+    def watch_stdin():
+        # Cancel only. The assistant has no steer: it is a side conversation,
+        # not a turn to redirect.
+        try:
+            for line in sys.stdin:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if msg.get("cancel"):
+                    cancelled["flag"] = True
+                    stop.set()
+                    break
+        except Exception:
+            pass
+    threading.Thread(target=watch_stdin, daemon=True).start()
+
+    out = sys.stdout
+    started = time.time()
+    crashed = {"flag": False}
+    trace: list[dict] = []
+    try:
+        for ev in assistant.run_turn(rec, text, cfg, stop=stop, trace=trace):
+            out.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            out.flush()
+            if ev.get("type") in ("tool_end", "done", "error"):
+                out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
+                out.flush()
+            if cancelled["flag"]:
+                break
+    except BaseException as exc:  # noqa: BLE001
+        out.write(json.dumps(
+            {"type": "error", "message": f"assistant worker crashed: {exc}"[:400]}) + "\n")
+        out.flush()
+        crashed["flag"] = True
+    finally:
+        out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
+        out.flush()
+        audit.record("assistant_worker_exit", session=session, backend="turn_worker",
+                     status="error" if crashed["flag"] else "ok",
+                     wall_s=round(time.time() - started, 1))
+    return 0
+
+
 def main() -> int:
-    return _run_worker(sys.argv[1:])
+    code = _run_worker(sys.argv[1:])
+    # The stdin watcher is a daemon thread still blocked on the pipe; a normal
+    # interpreter shutdown trips over it and prints `Fatal Python error:
+    # _enter_buffered_busy ...  possibly due to daemon threads` on every
+    # cancelled turn. Everything that matters — events, trace, audit — was
+    # already flushed by the worker's own paths, so the process exits hard and
+    # skips the shutdown that a dead reader cannot survive.
+    os._exit(code)
 
 
 if __name__ == "__main__":

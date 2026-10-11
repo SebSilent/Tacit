@@ -13,10 +13,14 @@ if not exist "%VENVPY%" (
   echo.
   echo Tacit needs its own Python environment before it can start.
   echo.
-  echo   python -m venv .venv
-  echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
+  echo   run install.ps1 - it does both and writes a launcher.
   echo.
-  echo Or run install.ps1, which does both and writes a launcher.
+  echo Or do it by hand with a BASE Python, not another project's virtualenv:
+  echo a venv built by one records that interpreter in pyvenv.cfg and ties Tacit
+  echo to a tool you did not choose. install.ps1 checks this for you.
+  echo.
+  echo   ^<base-python^> -m venv .venv
+  echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
   echo.
   pause
   exit /b 1

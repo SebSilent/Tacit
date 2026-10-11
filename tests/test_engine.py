@@ -1154,9 +1154,15 @@ class TestAnthropicStream(unittest.TestCase):
             "cache_creation_input_tokens": 50}}}))
         list(state.feed({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
                          "usage": {"output_tokens": 80}}))
-        self.assertEqual(state.usage["input"], 1000)
+        # `input` is Tacit's single basis -- every prompt token that occupied
+        # the window, cached or not, the way OpenAI's prompt_tokens already
+        # counts -- so a warm cache cannot read as an almost-empty context and
+        # leave the meter and should_compact looking at a number that never
+        # moves. The cache figures are re-pricings of a subset of that prompt,
+        # reported separately and never added on top of it.
+        self.assertEqual(state.usage["input"], 1950)
         self.assertEqual(state.usage["output"], 80)
-        self.assertEqual(state.usage["total"], 1080)
+        self.assertEqual(state.usage["total"], 2030)
         self.assertEqual(state.usage["cache_read"], 900)
         self.assertEqual(state.usage["cache_write"], 50)
         self.assertEqual(state.stop_reason, "end_turn")

@@ -22,10 +22,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import (agent, assistant, audit, autoupdater, config, deps, extras,  # noqa: E402
                      guidance, mcp_registry, metrics, model_settings,
-                     plugin_manager, proctools, project_context, tokens,
-                     turn_worker)
+                     plugin_manager, proctools, project_context, session_runtime,
+                     tokens, turn_worker)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
+from backend import plan_runtime  # noqa: E402
 from backend.routers import chat  # noqa: E402
 from tests.helpers import state_paths  # noqa: E402
 
@@ -459,11 +460,11 @@ class TestDashboardCounters(Isolated):
         self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 100000}
         rec = {"id": "s1", "model": "p/m", "messages": [{"role": "user", "content": "hi"}]}
-        chat._usage_event(rec, {"input": 5000, "output": 100, "total": 5100})
+        session_runtime._usage_event(rec, {"input": 5000, "output": 100, "total": 5100})
         self.assertEqual(rec["usage"]["context"]["tokens"], 5100)
         # A later call that reports no usage used to overwrite this with None, so
         # the interface showed no percentage on a session that had billed plenty.
-        chat._usage_event(rec, {"input": 0, "output": 0, "total": 0})
+        session_runtime._usage_event(rec, {"input": 0, "output": 0, "total": 0})
         self.assertEqual(rec["usage"]["context"]["tokens"], 5100)
         self.assertIsNotNone(rec["usage"]["context"]["percent"])
 
@@ -472,8 +473,9 @@ class TestDashboardCounters(Isolated):
         self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 100000}
         rec = {"id": "s1", "model": "p/m", "messages": [{"role": "user", "content": "hi"}]}
-        chat._usage_event(rec, {"input": 5000, "output": 100, "total": 5100})
-        chat._usage_event(rec, {"input": 900, "output": 50, "total": 950}, subagent=True)
+        session_runtime._usage_event(rec, {"input": 5000, "output": 100, "total": 5100})
+        session_runtime._usage_event(rec, {"input": 900, "output": 50, "total": 950},
+                                     subagent=True)
         self.assertEqual(rec["usage"]["tokens"]["input"], 5900)
         self.assertEqual(rec["usage"]["context"]["tokens"], 5100)
 
@@ -519,22 +521,28 @@ class TestPublishedFigures(Isolated):
 
     def test_default_profile_tool_count_matches_the_schema(self):
         from backend import profiles
-        cost = profiles.cost_of(profiles.BUILTIN["default"])
-        self.assertEqual(cost["tool_count"], len(agent.TOOLS))
-        # 21 became 20 when the benchmark tool was deleted (stage 5, item 10);
-        # the README still says 21 and is frozen by instruction, so the drift
-        # lives here until the doc is next allowed to move.
-        self.assertEqual(len(agent.TOOLS), 20)
+        # The registry holds 22 schemas; the default profile offers 20, because
+        # the two memory schemas ride with the memory mode and are priced in
+        # that bucket instead. These are the counts README's profile table
+        # publishes: 20 default, 21 explicit, 22 full.
+        self.assertEqual(len(agent.TOOLS), 22)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["default"])["tool_count"], 20)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["safe"])["tool_count"], 21)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["full"])["tool_count"], 22)
 
-    def test_memory_profiles_report_their_plugin_tools(self):
-        # The README's profile table said ~2,100 for these; the memory vault adds
-        # five tool schemas, and a profile must not understate its own price.
+    def test_memory_profiles_report_their_memory_tools(self):
+        # Memory is a capability the profile selects, not a plugin it enables
+        # (README), so its price lands in the memory bucket: the schemas the
+        # mode offers, plus the injection budget it may draw on. The base set
+        # must not bill those schemas a second time, so `plugins` stays 0 for
+        # every builtin profile.
         from backend import profiles
         silent = profiles.cost_of(profiles.BUILTIN["default"])["total"]
         for name in ("safe", "power-isolation", "power-memory", "full"):
             cost = profiles.cost_of(profiles.BUILTIN[name])
             self.assertGreater(cost["total"], silent, name)
-            self.assertGreater(cost["plugins"], 0, name)
+            self.assertGreater(cost["memory"], 0, name)
+            self.assertEqual(cost["plugins"], 0, name)
 
     def test_token_estimator_is_labelled_when_inexact(self):
         if not tokens.exact():
@@ -989,6 +997,81 @@ class TestReserveTrigger(unittest.TestCase):
             self.assertLessEqual(reserve, window)
 
 
+class TestContextMeterFollowsTheWindow(Isolated):
+    """The bar the person reads and the trigger that compacts are one number.
+
+    Item 8's defect was a units mismatch: Anthropic reports `input_tokens` as
+    only the uncached remainder while an OpenAI-shaped provider reports the whole
+    prompt, and the meter was fed the raw Anthropic figure. A session sitting at
+    60% of its window displayed 6%, and `should_compact` — which reads that same
+    field — never fired. These pin what replaced it: the window comes from the
+    session's own model, and the percentage drawn is the percentage that triggers.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.write_json(config.MODELS_FILE, {
+            "default": "p/big",
+            "providers": {"p": {
+                "baseUrl": "https://example.invalid/v1", "apiKey": "k",
+                "models": [{"id": "big", "contextWindow": 1_000_000},
+                           {"id": "small", "contextWindow": 32_000}]}}})
+
+    def _rec(self, model="p/big", turns=8):
+        return {"id": "mtr", "model": model,
+                "messages": [{"role": "user" if i % 2 else "assistant",
+                              "content": "filler " * 60} for i in range(turns)]}
+
+    def test_the_window_is_the_sessions_own_model_not_a_global_guess(self):
+        big = session_runtime._context_window(self._rec("p/big"))
+        small = session_runtime._context_window(self._rec("p/small"))
+        self.assertEqual((big, small), (1_000_000, 32_000),
+                         "one flat window for every model is what made the bar lie")
+
+    def test_a_cached_call_still_occupies_the_whole_window(self):
+        """The exact shape that broke: 590k of a 600k prompt served from cache."""
+        rec = self._rec()
+        session_runtime._usage_event(rec, {"input": 600_000, "output": 2_000,
+                                           "cache_read": 590_000})
+        ctx = rec["usage"]["context"]
+        self.assertEqual(ctx["tokens"], 602_000,
+                         "the meter is the billed window, cache reads included")
+        self.assertEqual(ctx["percent"], 60.2)
+
+    def test_the_mark_the_bar_draws_is_the_mark_that_compacts(self):
+        for model, window in (("p/big", 1_000_000), ("p/small", 32_000)):
+            target = config.context_fill_target(window)
+            rec = self._rec(model)
+            session_runtime._set_context(rec, target)
+            ctx = rec["usage"]["context"]
+            # app.js puts the compaction mark at (1 - reserve / window) * 100.
+            drawn = (1 - ctx["reserve"] / ctx["window"]) * 100
+            self.assertAlmostEqual(drawn, target / window * 100, places=1,
+                                   msg=f"{model}: the bar's mark is not the trigger")
+            self.assertFalse(agent.should_compact(rec),
+                             f"{model}: compacts on the mark, not before it")
+            session_runtime._set_context(rec, target + 1)
+            self.assertTrue(agent.should_compact(rec),
+                            f"{model}: passes the mark without firing")
+
+    def test_an_unknown_window_shows_nothing_rather_than_a_fake_zero(self):
+        rec = self._rec("p/not-in-the-registry")
+        session_runtime._set_context(rec, 12_000)
+        ctx = rec["usage"]["context"]
+        self.assertEqual(ctx["window"], 0)
+        self.assertIsNone(ctx["percent"],
+                          "0% claims an empty context; None admits we do not know")
+        self.assertEqual(ctx["reserve"], 0)
+
+    def test_a_call_that_reported_no_usage_leaves_the_meter_where_it_was(self):
+        rec = self._rec()
+        session_runtime._usage_event(rec, {"input": 250_000, "output": 1_000})
+        before = rec["usage"]["context"]["tokens"]
+        session_runtime._usage_event(rec, {})
+        self.assertEqual(rec["usage"]["context"]["tokens"], before,
+                         "a silent report must not erase the reading")
+
+
 class TestCompactionMechanics(Isolated):
     """The cheap pre-pass, and what happens when the summariser fails."""
 
@@ -1138,10 +1221,10 @@ class TestCacheAccounting(Isolated):
         self.addCleanup(setattr, chat.config, "resolve_model", orig)
         chat.config.resolve_model = lambda ref=None: {"contextWindow": 100000}
         rec = {"id": "s1", "model": "p/m", "messages": [{"role": "user", "content": "hi"}]}
-        chat._usage_event(rec, {"input": 5000, "output": 100, "total": 5100,
-                                "cache_read": 4600, "cache_write": 300})
-        chat._usage_event(rec, {"input": 6000, "output": 100, "total": 6100,
-                                "cache_read": 5500, "cache_write": 0})
+        session_runtime._usage_event(rec, {"input": 5000, "output": 100, "total": 5100,
+                                           "cache_read": 4600, "cache_write": 300})
+        session_runtime._usage_event(rec, {"input": 6000, "output": 100, "total": 6100,
+                                           "cache_read": 5500, "cache_write": 0})
         tok = rec["usage"]["tokens"]
         self.assertEqual(tok["cacheRead"], 10100)
         self.assertEqual(tok["cacheWrite"], 300)
@@ -1299,21 +1382,99 @@ class TestTaskList(Isolated):
         self.assertLess(cost, 200)
 
 
+# ── 19b. the list is injected live, on every step ─────────────────────────
+class TestTaskListInjection(ProjectFixture):
+    """The task list has to be re-read per step, because it changes mid-turn.
+
+    What this replaces: the block was appended to the prompt once, before the
+    turn began. The model then worked through a list it could no longer read
+    correctly — finished items stayed, items it added during the same turn never
+    appeared, and the work still owing vanished exactly when compaction
+    summarised the transcript. Injection now happens at the point of use, like
+    the project block and the wall clock, so the model always sees the list as it
+    stands on the step that is about to act on it.
+    """
+
+    SID = "TASK-SID"
+
+    def _drive(self, script):
+        plugin_manager.enable("task_list")
+        fake = ScriptedEngine(script)
+        orig = agent.engine.stream_chat
+        agent.engine.stream_chat = fake
+        self.addCleanup(setattr, agent.engine, "stream_chat", orig)
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "work the list"}]
+        list(agent.run_turn(msgs, project=self.proj(), ref="p/m", session=self.SID))
+        return fake.prompts
+
+    def _task_lines(self, prompt):
+        return [m for m in prompt if m.get("role") == "system"
+                and str(m.get("content", "")).startswith("Task list for this session")]
+
+    def _all_text(self, prompt):
+        return "\n".join(str(m.get("content", "")) for m in prompt)
+
+    def test_the_list_is_present_on_every_step_of_the_turn(self):
+        task_list.add(self.SID, "read the README")
+        task_list.add(self.SID, "fix calc.py")
+        prompts = self._drive([_tool_step(("c1", "read_file", {"path": "alpha.py"})),
+                               _text_step("done")])
+        self.assertGreaterEqual(len(prompts), 2)
+        for prompt in prompts:
+            self.assertEqual(len(self._task_lines(prompt)), 1,
+                             "the list must be injected once per step, never twice")
+        self.assertIn("fix calc.py", self._all_text(prompts[-1]))
+
+    def test_a_task_added_mid_turn_is_visible_on_the_next_step(self):
+        # The whole point of the rework. A snapshot taken before the turn can
+        # never show what the model wrote during it.
+        prompts = self._drive([
+            _tool_step(("c1", "tasks", {"action": "add", "text": "write the tests"})),
+            _text_step("done")])
+        self.assertIn("write the tests", self._all_text(prompts[-1]))
+
+    def test_a_finished_task_stops_being_shown_while_it_is_still_the_open_items(self):
+        task_list.add(self.SID, "one open item")
+        task_list.add(self.SID, "another open item")
+        prompts = self._drive([
+            _tool_step(("c1", "tasks", {"action": "done", "index": 1})),
+            _text_step("done")])
+        last = self._all_text(prompts[-1])
+        self.assertIn("1 open of 2", last)
+        self.assertIn("[x] one open item", last)
+
+    def test_a_turn_that_never_uses_the_list_pays_nothing_for_it(self):
+        prompts = self._drive([_tool_step(("c1", "read_file", {"path": "alpha.py"})),
+                               _text_step("done")])
+        for prompt in prompts:
+            self.assertEqual(self._task_lines(prompt), [])
+
+    def test_the_runtime_no_longer_snapshots_the_list_into_the_prompt(self):
+        # Two injections would double the cost and show two contradictory lists.
+        src = Path(session_runtime.__file__).read_text(encoding="utf-8")
+        self.assertNotIn('task_block["text"]', src)
+        self.assertIn("_live_task_block", Path(agent.__file__).read_text(encoding="utf-8"))
+
+
 # ── 20. plugin pricing is measured, not declared ──────────────────────────
 class TestPluginPricing(Isolated):
     def test_a_disabled_plugin_still_shows_what_it_would_cost(self):
         rows = {r["id"]: r for r in plugin_manager.token_impact()["rows"]}
-        self.assertIn("memory_vault", rows)
-        self.assertFalse(rows["memory_vault"]["enabled"])
-        self.assertEqual(rows["memory_vault"]["tokens"], 0)
-        self.assertGreater(rows["memory_vault"]["tokens_if_enabled"], 0)
+        self.assertIn("task_list", rows)
+        # Memory is not a plugin, so it has no row to price: its cost comes from
+        # the mode (Settings > Memory) and is measured by profiles.cost_at.
+        self.assertNotIn("memory_vault", rows)
+        self.assertFalse(rows["task_list"]["enabled"])
+        self.assertEqual(rows["task_list"]["tokens"], 0)
+        self.assertGreater(rows["task_list"]["tokens_if_enabled"], 0)
 
     def test_an_enabled_plugin_reports_its_real_schema_cost(self):
         # It declared a budget of zero, and the panel believed it.
-        plugin_manager.enable("memory_vault")
+        plugin_manager.enable("task_list")
         rows = {r["id"]: r for r in plugin_manager.token_impact()["rows"]}
-        measured = tokens.estimate_tools_tokens(plugin_manager.tool_schemas("memory_vault"))
-        self.assertEqual(rows["memory_vault"]["tokens"], measured)
+        measured = tokens.estimate_tools_tokens(plugin_manager.tool_schemas("task_list"))
+        self.assertEqual(rows["task_list"]["tokens"], measured)
         self.assertGreater(measured, 0)
         self.assertEqual(plugin_manager.token_impact()["total"], measured)
 
@@ -1729,10 +1890,14 @@ class TestSessionIsolationClaims(Isolated):
         self.assertIn("no longer supported", body)
         self.assertNotIn("rec = nxt", body,
                          "switch must not rebind the connection's session record")
-        # The turn worker reads the record it was started against.
-        self.assertIn("turn_rec = rec", src)
-        self.assertIn("store.append(turn_rec,", src)
-        self.assertIn("store.save(turn_rec)", src)
+        # Stronger than the old captured record: the runtime re-reads the
+        # session's own record from disk by sid, so no surface can persist a
+        # stale in-memory copy over a setting another surface just saved —
+        # which is exactly how assistant settings used to reset themselves.
+        rsrc = Path(session_runtime.__file__).read_text(encoding="utf-8")
+        self.assertIn("rec = store.get(sid) or {}", rsrc)
+        self.assertNotIn("turn_rec = rec", rsrc)
+        self.assertNotIn("turn_rec = rec", src)
 
     def test_the_server_never_rebinds_a_connection(self):
         """new_session / client_new_session / plan_implement return the sid.
@@ -1747,12 +1912,20 @@ class TestSessionIsolationClaims(Isolated):
                        'elif kind == "plan_implement":'):
             at = src.index(anchor)
             body = src[at:src.index("elif kind ==", at + 10)]
-            self.assertIn('"data": {"sid"', body,
-                          "the handler must return the new session's id")
+            self.assertIn('"sid"', body,
+                          "the handler must answer to this socket's session")
             self.assertNotIn("rec = fresh", body,
                              "the handler must not rebind this connection")
             self.assertNotIn("session_ready", body,
                              "no hello/session_ready: the socket is not moving")
+        # The new session's id still reaches the client — inline for
+        # new_session, built by the plan runtime for plan_implement, whose
+        # response the handler forwards whole.
+        self.assertIn('"data": {"sid": fresh["id"]', src)
+        self.assertIn('"data": res["data"]', src)
+        psrc = Path(plan_runtime.__file__).read_text(encoding="utf-8")
+        self.assertIn('"data": {"sid": fresh["id"]', psrc,
+                      "plan_implement must carry the new session's id")
 
     def test_the_frontend_holds_one_socket_per_session(self):
         """The interface's isolation guarantee, read from its source.
@@ -1787,12 +1960,24 @@ class TestSessionIsolationClaims(Isolated):
         self.assertIn("CANCEL_GRACE_S", src)
         # The escape hatch is real, not decorative.
         self.assertIn("TACIT_TURN_WORKER", Path(config.__file__).read_text(encoding="utf-8"))
-        # The abort handler runs the two-stage stop, off the event loop.
+        # The abort handler runs the two-stage stop, off the event loop. The
+        # socket no longer holds the worker: it hands the sid to the runtime,
+        # which owns the registry and reaches the process.
         csrc = Path(chat.__file__).read_text(encoding="utf-8")
         at = csrc.index('elif kind == "abort":')
         body = csrc[at:csrc.index("elif kind ==", at + 10)]
-        self.assertIn("w.cancel()", body, "abort must reach the worker process")
-        self.assertIn("stop_session_jobs", body,
+        self.assertIn("session_runtime.cancel", body,
+                      "abort must reach the runtime that owns the turn")
+        self.assertIn("run_in_executor", body,
+                      "the grace wait must not block the event loop")
+        # The two-stage stop and the background-job kill both live with the
+        # runtime now, because the runtime owns the worker and the jobs.
+        rsrc = Path(session_runtime.__file__).read_text(encoding="utf-8")
+        at = rsrc.index("def cancel(sid: str) -> dict:")
+        scope = rsrc[at:at + 1600]
+        self.assertIn("w.cancel()", scope,
+                      "the runtime must reach the worker process")
+        self.assertIn("stop_session_jobs", scope,
                       "the turn's background jobs die with it")
 
     def test_the_worker_owns_no_accounting(self):
@@ -1938,49 +2123,64 @@ class TestProcessIdentity(Isolated):
         self.assertFalse(proctools._pid_alive(marked.pid))
 
 
-# ── 23. the bus owns the running turn's stream ────────────────────────────
+# ── 23. the runtime owns the running turn's stream ────────────────────────
 class TestTurnBusClaims(Isolated):
-    """Stage 3.6: the worker publishes, the bus fans out, the store is written
-    once — by the turn's epilogue and by nobody else."""
+    """The worker publishes, the bus fans out, the store is written once — by
+    the turn's epilogue and by nobody else. The socket owns nothing."""
 
     def test_the_worker_never_touches_the_transcript_store(self):
         """Replay is transport-only. The worker's imports name no store, and
-        the only store writes in the socket handler sit in the worker's own
+        the only store writes in the runtime sit in the driver's own
         epilogue — a viewer's arrival or death cannot write the transcript."""
         src = Path(turn_worker.__file__).read_text(encoding="utf-8")
         imports = "\n".join(l for l in src.splitlines()
                             if l.startswith("import ") or l.startswith("from "))
         self.assertNotIn("store", imports,
                          "the turn worker must not import the transcript store")
+        src = Path(session_runtime.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def _drive_turn("):src.index("def _drive_assistant(")]
+        self.assertIn("store.save(rec)", body)
+        self.assertIn("store.append(rec,", body)
+
+    def test_the_socket_never_owns_a_turn(self):
+        """The socket is a viewer and a control channel. It spawns no worker
+        and runs no turn: starting, stopping and steering go through the
+        runtime, keyed by sid, so a browser dying cannot take a turn with it."""
         src = Path(chat.__file__).read_text(encoding="utf-8")
-        body = src[src.index("def worker():"):src.index("t = threading.Thread")]
-        self.assertIn("store.save(turn_rec)", body)
-        self.assertIn("store.append(turn_rec,", body)
+        self.assertNotIn("turn_worker.spawn", src)
+        self.assertNotIn("agent.run_turn", src)
+        self.assertIn("session_runtime.start_turn", src)
+        self.assertIn("session_runtime.start_assistant", src)
+        self.assertIn("session_runtime.cancel", src)
+        self.assertIn("session_runtime.steer", src)
 
     def test_the_turn_owns_its_bus_from_before_busy_to_the_epilogue(self):
         """The bus opens before the session is marked busy (any viewer that can
-        observe busy can subscribe behind it) and is forgotten in the worker's
-        finally — its lifetime is exactly the turn's. The two pre-worker
-        failure windows clean up their own bus, since the epilogue does not
+        observe busy can subscribe behind it) and is emptied in the driver's
+        finally — the buffer's lifetime is exactly the turn's. The pre-driver
+        failure window cleans up its own bus, since the epilogue does not
         exist yet."""
-        src = Path(chat.__file__).read_text(encoding="utf-8")
+        src = Path(session_runtime.__file__).read_text(encoding="utf-8")
         start_at = src.index("bus = turn_bus.start(")
         begin_at = src.index("session_state.begin(", start_at)
         self.assertLess(start_at, begin_at,
                         "the bus opens before the session is marked busy")
-        worker_at = src.index("def worker():")
-        end_at = src.index("session_state.end(sid)", worker_at)
-        finally_at = src.index("turn_bus.finish(sid)", end_at)
-        self.assertLess(end_at, finally_at,
+        driver_at = src.index("def _drive_turn(")
+        end_at = src.index("session_state.end(sid)", driver_at)
+        finish_at = src.index("turn_bus.finish(sid)", end_at)
+        self.assertLess(end_at, finish_at,
                         "the bus is released last in the epilogue")
-        spawn_at = src.index("worker_proc = turn_worker.spawn(")
-        self.assertIn("turn_bus.finish(sid)",
-                      src[spawn_at:src.index('running["worker"] = worker_proc')],
+        spawn_at = src.index("turn_worker.spawn(")
+        thread_at = src.index("t = threading.Thread(", spawn_at)
+        self.assertIn("turn_bus.finish(sid)", src[spawn_at:thread_at],
                       "a failed spawn must finish the bus it opened")
-        sub_at = src.index("bus.subscribe()")
-        self.assertIn("turn_bus.finish(sid)",
-                      src[sub_at:src.index("if use_process:", sub_at)],
-                      "a viewer lost in the replay handoff must finish the bus")
+        # The anti-orphan invariant: the driver thread is started before
+        # start_turn returns, so no browser event can come between the worker
+        # and its reader.
+        started_at = src.index("t.start()", thread_at)
+        return_at = src.index('return {"ok": True, "sid": sid}', started_at)
+        self.assertLess(started_at, return_at,
+                        "the driver thread starts before start_turn returns")
 
 
 # ── 24. the updater's transport is plain HTTPS, never git ─────────────────

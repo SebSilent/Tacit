@@ -8,7 +8,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyzer, autoupdater, config, mcp_registry, proctools, store
+from . import (analyzer, autoupdater, config, mcp_registry, plan_runtime,
+                proctools, session_runtime, store)
 from .routers import api, capabilities, chat, hosting, mcp, memory, plugins, profiles, vcs
 
 
@@ -49,6 +50,23 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     yield
+    # Every worker this server spawned — turn workers, assistant workers —
+    # gets the two-stage stop, and its driver's epilogue (the transcript
+    # save) is given a moment to land. A restart that saves the partial
+    # transcript instead of orphaning the children.
+    try:
+        session_runtime.shutdown()
+    except Exception:
+        pass
+    # A plan is an in-process thread, so it dies with the server whether this
+    # goes well or badly. Flagging each one as aborted is what keeps the
+    # snapshot the transcript saved from claiming, after a restart, that a plan
+    # is still exploring — a plan nobody is running would otherwise come back on
+    # reload and hold the composer shut.
+    try:
+        plan_runtime.shutdown()
+    except Exception:
+        pass
     # Stop autoupdater background task
     if autoupdater_task:
         autoupdater_task.cancel()

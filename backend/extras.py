@@ -59,6 +59,9 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
         proc = proctools.spawn(
             "tacit-bg", cmd, session=str(session or ""), cwd=work,
             contain=True, mark=False, shell=True, text=True,
+            # DEVNULL, not inherited: a background job must never sit on the
+            # worker's control pipe, nor hold a handle on it after the turn ends.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
     except Exception as e:
         return f"ERROR: {e}"

@@ -9,7 +9,9 @@ dashboard can read them straight back.
 from __future__ import annotations
 
 FIELDS = (
-    "prompt_tokens",        # input tokens billed
+    "prompt_tokens",        # input tokens billed, cached reads included: what
+                            # occupied the window, which is what the cache rate
+                            # is a fraction *of*
     "completion_tokens",    # output tokens billed
     "cached_tokens",        # input tokens the provider served from its own cache
     "instruction_tokens",   # the project's own instruction files, injected at startup
@@ -27,6 +29,44 @@ FIELDS = (
 
 def blank() -> dict:
     return {k: 0 for k in FIELDS}
+
+
+def _int(value) -> int:
+    """A token count from a provider, which sometimes sends a string or nothing."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_usage(usage: dict | None) -> dict:
+    """One model call's usage, reduced to the six numbers every consumer agrees on.
+
+    Two paths accumulate usage and they must never disagree about what a token is:
+    the server's live meter (``session_runtime._usage_event``), which drives the
+    context percentage and the compaction trigger, and the headless benchmark
+    runner (``headless._accumulate``), which writes the number a harness comparison
+    is judged on. Providers are inconsistent — ``total`` is often absent, cache
+    figures arrive only on some backends, and a count can be a string — so the
+    parsing is done once, here.
+
+    ``fresh`` is the one that matters for cost: cached reads are re-reads of bytes
+    already paid for, so what a call actually *costed* is its uncached input plus
+    its output. That is OpenBench's stated token basis, and the reason it is
+    computed here rather than at either call site.
+    """
+    u = usage or {}
+    inp = _int(u.get("input"))
+    out = _int(u.get("output"))
+    cache_read = _int(u.get("cache_read"))
+    return {
+        "input": inp,
+        "output": out,
+        "total": _int(u.get("total")) or (inp + out),
+        "cache_read": cache_read,
+        "cache_write": _int(u.get("cache_write")),
+        "fresh": max(0, inp - cache_read) + out,
+    }
 
 
 def get(rec: dict) -> dict:

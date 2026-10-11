@@ -404,20 +404,26 @@ and switching learning off stops a running worker rather than leaving it waking 
 Persistent memory records things such as a preferred convention, a decision already made, or how a
 project is structured. It can also consume a large part of a context window if it is not limited.
 
-The Memory Vault limits it:
+Memory is built in — not a plugin, and not a second system to enable on top of this one. One
+switch, **Settings > Memory**, decides what is injected at the start of a turn, whether the agent
+gets its memory tools, and what the preview shows. It limits itself:
 
-- **Disabled by default.** Nothing is stored until you enable it.
-- **A fixed budget.** Memory may use at most 120 tokens of your prompt by default, with a ceiling of
-  500 unless you change it. The limit is enforced, and setting it to zero injects nothing.
+- **Off by default.** Nothing is injected and the agent is offered no memory tools until you pick
+  a mode.
+- **A fixed budget.** Memory may use at most 120 tokens of your prompt by default. The limit is
+  enforced on the rendered block, not on the sum of the entries, so the header and separators are
+  counted too and the block never silently expands. Setting it to zero injects nothing.
 - **Nothing is stored without approval.** Tacit can read a conversation and propose memories, but
   each proposal is shown with its type, its confidence and its token cost before anything is saved.
 - **Every entry carries provenance.** You can see where a memory came from: your own note, something
   you approved, or a session summary, and which session.
 - **Every entry is editable.** Edit, disable, unpin or delete any memory at any time, and the prompt
   cost updates immediately.
-- **Memories are retrieved, not carried.** The store searches on demand rather than injecting the
-  whole set. Retrieval is keyword based, using SQLite full-text search when the build provides it
-  and plain matching when it does not. There is no vector database and no embedding model.
+- **Retrieval is a mode, not a default.** `Explicit` injects what you wrote or approved and fetches
+  nothing else, so the agent is not offered a search tool that could only answer "not enabled".
+  `Just in time` and `Everything` let it search on demand instead of carrying the whole set.
+  Retrieval is keyword based, using SQLite full-text search when the build provides it and plain
+  matching when it does not. There is no vector database and no embedding model.
 - **Sessions can be summarised.** A finished session can be distilled into one durable note, with
   its source session recorded, so the work is recallable without the transcript.
 
@@ -434,16 +440,20 @@ several things each time you change how you are working. Switching applies immed
 |---|---|---|---|---|---|
 | **minimal** | 7 | none | off | off | ~768 tokens |
 | **default** | 20 | none | off | off | ~1,889 tokens |
-| **safe** | 20 | tacit-micro | explicit | off | ~2,308 tokens |
-| **power-isolation** | 20 | tacit-micro | explicit | off | ~2,308 tokens |
-| **power-memory** | 20 | none | full, budgeted | off | ~2,308 tokens + budget |
-| **full** | 20 | tacit-micro | full, budgeted | off | ~2,308 tokens + budget |
+| **safe** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
+| **power-isolation** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
+| **power-memory** | 22 | none | full, budgeted | off | `default` + the memory tools + budget |
+| **full** | 22 | tacit-micro | full, budgeted | off | `default` + the memory tools + budget |
 
-The four profiles that turn the Memory Vault on cost about 419 tokens more than `default`, because
-the vault contributes five tool schemas of its own. That is the whole difference between the rows:
-they are identical in prompt cost and differ only in what is switched on. Every figure here is
-recomputed from the live configuration by **Settings > Profile**, so the table cannot drift without
-the interface disagreeing with it.
+The four profiles that turn memory on are the same twenty tools plus the memory schemas, because
+memory is a capability the profile selects, not a plugin it enables. The tool count moves with the
+mode: `explicit` injects what you approved and retrieves nothing, so it is offered the propose tool
+only (21); `jit` and `full` retrieve mid-turn as well, so they get the search tool too (22). A tool
+that could only ever answer "not enabled" is not put in front of the model.
+
+The extra cost is those schemas plus whatever the budget lets through, and it is recomputed from
+the live configuration by **Settings > Profile** — the same estimator the dashboard uses — so the
+table cannot drift without the interface disagreeing with it.
 
 No profile turns learning on — not even proposing. That is a deliberate choice: a profile sets cost
 and containment, and does not decide what Tacit is allowed to remember on its own. Proposing is a
@@ -547,8 +557,8 @@ existing installation, set `TACIT_PLAYWRIGHT_PATH` to point at it.
   comparison, and one-click restore.
 - **Connect outside tools.** Tacit speaks MCP, the open standard for connecting assistants to
   tools. Descriptions stay out of your prompt until a tool is actually used.
-- **Remember what matters.** A memory vault stores preferences, decisions and project facts within a
-  token budget you set. It is off until you turn it on.
+- **Remember what matters.** Built-in memory stores preferences, decisions and project facts within
+  a token budget you set. It is off until you turn it on.
 - **Learn from your own corrections.** A background analyzer proposes rules, and you decide.
 - **Plan first.** Plan mode researches your project, asks clarifying questions, and drafts an
   approach for you to approve before any files are changed.
@@ -586,9 +596,12 @@ Three things make it useful rather than annoying:
   to paste context into it. A further switch adds a one-line digest of the tools behind each answer,
   which is what makes "explain what the agent just did" answerable; it is off by default because tool
   results are the expensive part of a transcript.
-- **The agent cannot see it.** The Assistant is invisible to the main agent. Nothing it says reaches
-  the agent unless you copy it across yourself, so your notes, hesitations and half-formed ideas
-  stay between you and it.
+- **The agent cannot see it.** The Assistant is invisible to the main agent, and the agent is not
+  even told an Assistant exists. Your notes, hesitations and half-formed ideas stay between you and
+  it. The **Goal is the Assistant's alone**: it is never put in front of the agent, which learns of
+  it only if the Assistant writes it into a prompt. Autonomous mode is the one exception, and you
+  switch it on deliberately: the Assistant's last fenced block becomes the agent's next prompt, and
+  that block is the only thing that crosses.
 - **It is confined to the session.** Every conversation has its own Assistant. Switch sessions and
   you switch assistants; delete a session and its assistant goes with it.
 - **It answers in Markdown.** The same renderer the main chat uses, so a drafted prompt arrives as
@@ -690,7 +703,7 @@ its check still names the command that would fix it.
 | Advanced isolation | bubblewrap on Linux | your distribution |
 | Container isolation | Docker or Podman, any platform | a separate install |
 | Browser automation | the `browser` tool | about 130 MB |
-| Rich memory | the memory vault | built in, SQLite |
+| Rich memory | full-text memory search | built in, SQLite |
 | Autonomous learning | the session analyzer | built in |
 | Migration importers | reading your own export | built in |
 
@@ -702,17 +715,23 @@ Plugins add tools, connections or panels. They are disabled by default, and each
 tokens it would add to your prompt before you enable it. A plugin's code is loaded only after you
 enable it.
 
-Manage them in **Settings > Plugins**. Tacit ships with two:
+Manage them in **Settings > Plugins**. Tacit ships with one:
 
 | Plugin | Purpose | Cost when enabled | Default |
 |---|---|---|---|
-| **Memory Vault** | Persistent memory with a token budget | 419 tokens | Off |
 | **Task List** | The turn's remaining work, kept outside the context window | 132 tokens | Off |
 
-Both figures are measured from the schemas the plugin actually contributes, not from a budget it
+The figure is measured from the schemas the plugin actually contributes, not from a budget it
 declares about itself: a plugin that declared zero used to show zero in the panel while really
 adding its tools to every request. Disabled plugins are priced too, since that is the number you need
 in order to decide.
+
+**Memory is not a plugin.** It used to be one, and that was a mistake: the plugin's switch decided
+what the agent could call while the memory *mode* decided what was injected, so the two could
+disagree and the dashboard could report a cost for a setting nobody had just changed. Memory is now
+a built-in capability with one switch (**Settings > Memory**), and its tools ride with that switch.
+A retired plugin id is refused by the manager, so it cannot come back as a row, a schema or a line
+in a cost estimate.
 
 Anything else is a plugin you write or install yourself. There is no bundled plugin that reaches
 outside your machine.
@@ -818,7 +837,7 @@ and nothing is written into another tool's directory.
 ├─ prefs.json         preferences, defaults
 ├─ skills/            your skills      ─┐ listed by name, loaded on demand
 ├─ knowledge/         reference cards  ─┘
-├─ memory.db          memory vault          (Settings > Memory, off by default)
+├─ memory.db          built-in memory       (Settings > Memory, off by default)
 ├─ learning.json      learning proposals    (Settings > Learning)
 ├─ capabilities.json  capability selections
 ├─ audit.jsonl        append-only ledger of what happened
@@ -898,7 +917,7 @@ directory, and no assumption about where your projects are stored.
 | `skill`, `research`, `fetch`, `browser` | knowledge on demand |
 | `mcp_search_tools` `mcp_activate_tools` `mcp_call` `mcp_list_servers` | external tools without the prompt cost; offered only when an MCP server is configured |
 | `evidence` | citable facts |
-| `memory_recall` `memory_add` `memory_update` `memory_delete` `memory_list_summary` | memory, only when the vault is enabled |
+| `memory_recall` `memory_add` `memory_update` `memory_delete` `memory_list_summary` | memory, only with the Memory switch on |
 
 Version control is off for the agent by default. A model left to itself commits and pushes far more
 than anyone asked for, and cleaning that up by hand is nobody's idea of a good afternoon. The panel
@@ -1116,7 +1135,7 @@ per-session turn state with session isolation (one running turn per session, sid
 `GET /api/sessions/state`), the killable turn worker with its two-stage stop, the turn's event bus
 with mid-turn replay (a viewer that arrives while a turn runs is caught up from the buffer, and a
 socket that dies mid-turn takes nothing with it), MCP servers over stdio and HTTP with lazy tool
-activation, the plugin system, the capability registry, standalone isolation, the memory vault with
+activation, the plugin system, the capability registry, standalone isolation, built-in memory with
 enforced budgeting, the background session analyzer with approval-first proposals, one-time
 migration from your own export, the self-update transport (a `VERSION` check and an archive copy,
 no git required), and the per-session Assistant with its own model, thinking level and budgeted
@@ -1132,7 +1151,7 @@ python -m unittest discover -s tests -t .
 
 | File | What it holds down |
 |---|---|
-| `test_platform.py` | tokens, plugins, MCP over a real subprocess, the memory vault, thinking levels |
+| `test_platform.py` | tokens, plugins, MCP over a real subprocess, built-in memory, thinking levels |
 | `test_capabilities.py` | the capability registry, isolation, profiles, learning, migration |
 | `test_contracts.py` | the wire shapes the browser reads, and the shell guardrails |
 | `test_claims.py` | each behaviour this README claims, including the agent loop end to end |

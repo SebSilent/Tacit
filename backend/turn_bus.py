@@ -1,18 +1,22 @@
-"""The turn's event bus: one buffer per running turn, many viewers.
+"""The session's event stream: one buffer per session and channel, many viewers.
 
-Stage 3.6. The turn's events used to flow through one asyncio.Queue owned by
-the one socket that started the turn, so a viewer that arrived after the turn
-began — a reload, a second window, a switch-back — could not see what had
-already streamed past, and a socket that died took the turn's epilogue with it
-(the transcript save ran in the socket's context). The queue is replaced by a
-bus: the turn publishes into a bounded buffer, every viewer subscribes, and a
-subscriber that arrives late is replayed the buffer before it goes live. The
-socket that started the turn is no longer special; it is just the first
-subscriber.
+The stream belongs to the session, not to a turn and not to a viewer. A turn's
+driver publishes into the buffer; every open socket of that session is a
+subscriber and stays one across turns; a viewer that arrives late is replayed
+the buffer before it goes live. Nothing here depends on a socket: the driver
+publishes whether or not anyone is watching, which is what makes the stream
+survive a browser closing, a reload, or a second device opening the same
+session mid-turn.
 
-The bus is also what makes replay honest: the buffer holds each event exactly
-once, so a replayed stream is the turn as it happened, not a copy of what a
-particular viewer happened to have seen.
+Two channels per session: ``turn`` (the agent) and ``assistant`` (the side
+conversation). Each has its own buffer and its own lifecycle, so an assistant
+reply streaming beside a running turn never mixes with it.
+
+The buffer is emptied when the turn that produced it ends: from then on the
+transcript is in the session record, so a viewer arriving later is served by
+history, not by a replay that would double it. Subscribers are kept — they are
+the session's open windows, not the turn's property. A bus nobody is watching
+is dropped entirely, so an idle session costs nothing.
 """
 
 import asyncio
@@ -31,113 +35,173 @@ BUFFER_MAX = 2000
 # replays them.
 SUBQUEUE_MAX = 600
 
+# The streams a session owns. A channel is per session, not per run: a viewer
+# that connects mid-plan replays the plan's own events, and a second turn on the
+# same session continues the same stream rather than starting a private one.
+# "plan" is the third because plan mode is now session-owned work like the other
+# two — it runs in a thread that outlives the socket that started it, so it needs
+# a buffer to be handed to whoever is watching next.
+CHANNELS = ("turn", "assistant", "plan")
+
 _lock = threading.Lock()
-_buses: dict[str, "TurnBus"] = {}
+_buses: dict[tuple[str, str], "TurnBus"] = {}
+
+
+def _key(sid: str, channel: str) -> tuple[str, str]:
+    return (str(sid or ""), channel if channel in CHANNELS else "turn")
 
 
 class TurnBus:
-    """One running turn's buffer and its live subscribers."""
+    """One session channel's buffer and its live subscribers."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop):
+    def __init__(self, loop: asyncio.AbstractEventLoop | None):
         self.loop = loop
         self.buffer: deque = deque(maxlen=BUFFER_MAX)
         self.subscribers: list[asyncio.Queue] = []
+        # True while the turn that owns this buffer is running. The bus
+        # outlives the turn; this flag is what "a turn is running here" reads.
+        self.live = False
 
     def publish(self, ev: dict) -> None:
         """One event into the buffer and out to every live subscriber.
 
-        Called from the turn's worker thread, so subscriber queues — asyncio
-        objects — are fed through ``call_soon_threadsafe``, exactly as the old
-        single-queue pump was. A dead loop drops the event for everyone rather
-        than raising into the turn.
+        Called from the turn's driver thread, so subscriber queues — asyncio
+        objects — are fed through ``call_soon_threadsafe``. A dead loop drops
+        the event for everyone rather than raising into the turn.
         """
         with _lock:
             self.buffer.append(dict(ev))
             subs = list(self.subscribers)
+        loop = self.loop
+        if loop is None:
+            return
         for q in subs:
             try:
-                self.loop.call_soon_threadsafe(q.put_nowait, dict(ev))
+                loop.call_soon_threadsafe(q.put_nowait, dict(ev))
             except Exception:  # noqa: BLE001 — a closed loop is a dead viewer
                 pass
 
     def subscribe(self) -> tuple[list[dict], asyncio.Queue]:
         """Join as a viewer: (replay, live queue).
 
-        Only ever called from :func:`subscribe`, which already holds the lock —
-        the replay and the subscription are decided under it, so a turn
+        The replay and the subscription are decided under the lock, so a turn
         finishing between "read the buffer" and "join the subscribers" is
-        impossible: either both happen, or the turn is already gone.
+        impossible: either both happen, or the buffer is already empty and the
+        viewer is served by history.
         """
         q: asyncio.Queue = asyncio.Queue(maxsize=SUBQUEUE_MAX)
-        replay = [dict(e) for e in self.buffer]
-        self.subscribers.append(q)
+        with _lock:
+            replay = [dict(e) for e in self.buffer]
+            self.subscribers.append(q)
         return replay, q
 
-    def _release(self) -> None:
-        """End every subscription. Called by :func:`finish` under the lock."""
-        subs = list(self.subscribers)
-        self.subscribers = []
-        for q in subs:
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        """One viewer left (its socket died, or the tab closed). The stream
+        itself is untouched: other viewers keep theirs."""
+        with _lock:
             try:
-                self.loop.call_soon_threadsafe(q.put_nowait, None)
-            except Exception:  # noqa: BLE001
+                self.subscribers.remove(q)
+            except ValueError:
                 pass
 
+    def clear(self) -> None:
+        with _lock:
+            self.buffer.clear()
 
-def start(sid: str, loop: asyncio.AbstractEventLoop) -> TurnBus:
-    """Open the turn's bus. Called before the session is marked busy, so any
-    viewer that can observe "busy" can also subscribe to the turn behind it."""
+
+def start(sid: str, loop: asyncio.AbstractEventLoop | None,
+          channel: str = "turn") -> TurnBus:
+    """Open the turn: take the session's bus, empty it, mark it live.
+
+    Called before the session is marked busy, so any viewer that can observe
+    busy can also subscribe to the turn behind it. Existing subscribers are
+    kept — they are the session's open windows, and they simply start
+    receiving the new turn's events.
+    """
+    key = _key(sid, channel)
     with _lock:
-        bus = TurnBus(loop)
-        _buses[sid] = bus
+        bus = _buses.get(key)
+        if bus is None:
+            bus = TurnBus(loop)
+            _buses[key] = bus
+        bus.loop = loop
+        bus.buffer.clear()
+        bus.live = True
         return bus
 
 
-def get(sid: str) -> TurnBus | None:
+def get(sid: str, channel: str = "turn") -> TurnBus | None:
     with _lock:
-        return _buses.get(sid)
+        return _buses.get(_key(sid, channel))
 
 
-def alive(sid: str) -> bool:
+def alive(sid: str, channel: str = "turn") -> bool:
+    """A turn is running on this channel right now."""
     with _lock:
-        return sid in _buses
+        bus = _buses.get(_key(sid, channel))
+    return bool(bus and bus.live)
 
 
-def replay(sid: str) -> list[dict]:
-    """The turn's buffered events so far, without joining as a subscriber.
+def replay(sid: str, channel: str = "turn") -> list[dict]:
+    """The channel's buffered events so far, without joining as a subscriber.
 
-    For a hello that lands mid-turn: that viewer wants the past, not the
-    future — its socket is not the turn's pump. The copy is taken under the
-    lock, so it is the buffer as of one instant, never a torn mix.
+    The copy is taken under the lock, so it is the buffer as of one instant,
+    never a torn mix.
     """
     with _lock:
-        bus = _buses.get(sid)
+        bus = _buses.get(_key(sid, channel))
         return [dict(e) for e in bus.buffer] if bus else []
 
 
-def subscribe(sid: str) -> tuple[list[dict], asyncio.Queue] | None:
-    """Subscribe to the sid's live turn, or None when there is none.
+def subscribe(sid: str, loop: asyncio.AbstractEventLoop | None = None,
+              channel: str = "turn") -> tuple[list[dict], asyncio.Queue]:
+    """Join the session's stream: (replay, live queue). Never None.
 
-    Lookup and join happen under one lock, so a turn cannot finish between
-    them: either the viewer is in before ``finish`` releases everyone, or the
-    turn is already gone and the viewer is served by history.
+    The stream exists whether or not a turn is running — an empty replay just
+    means the viewer is served by the transcript in the session record. This
+    is the property that makes the socket irrelevant: a window that opens at
+    any moment, on any device, is caught up exactly once, from the buffer.
     """
+    key = _key(sid, channel)
     with _lock:
-        bus = _buses.get(sid)
+        bus = _buses.get(key)
         if bus is None:
-            return None
-        return bus.subscribe()
+            bus = TurnBus(loop)
+            _buses[key] = bus
+    return bus.subscribe()
 
 
-def finish(sid: str) -> None:
-    """The turn is over: end every subscription and forget the bus.
-
-    Forgetting is the point — a finished turn's transcript is in the session
-    record, so a viewer arriving now is served by history, not by replay. The
-    buffer dying with the turn is what keeps a replay from ever doubling onto
-    what the viewer already has.
-    """
+def unsubscribe(sid: str, q: asyncio.Queue, channel: str = "turn") -> None:
     with _lock:
-        bus = _buses.pop(sid, None)
+        bus = _buses.get(_key(sid, channel))
     if bus is not None:
-        bus._release()
+        bus.unsubscribe(q)
+
+
+def publish(sid: str, ev: dict, channel: str = "turn") -> None:
+    """One event into the named channel. A no-op when the session has no bus —
+    which cannot happen while a turn is running, because start() made one."""
+    with _lock:
+        bus = _buses.get(_key(sid, channel))
+    if bus is not None:
+        bus.publish(ev)
+
+
+def finish(sid: str, channel: str = "turn") -> None:
+    """The turn is over: empty the buffer, mark the stream idle, keep the
+    subscribers.
+
+    A viewer arriving now is served by the transcript in the session record —
+    an empty replay is what keeps a replay from ever doubling onto it. A bus
+    nobody is watching is dropped entirely: the next turn or the next viewer
+    makes a fresh one, and an idle session is left holding nothing.
+    """
+    key = _key(sid, channel)
+    with _lock:
+        bus = _buses.get(key)
+        if bus is None:
+            return
+        bus.buffer.clear()
+        bus.live = False
+        if not bus.subscribers:
+            _buses.pop(key, None)

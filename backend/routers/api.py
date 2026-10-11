@@ -5,7 +5,9 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import agent, anthropic, config, folders, hosting, mcp_registry, memory_store, metrics, plugin_manager, project_context, session_state, skills, store, vcs
+from .. import (agent, anthropic, config, folders, hosting, mcp_registry, memory_modes,
+                memory_store, metrics, plugin_manager, project_context, session_runtime,
+                session_state, skills, store, vcs)
 from .. import tokens as token_mod
 from ..ai import engine, prompts
 
@@ -386,8 +388,14 @@ async def token_dashboard(sid: str = "", project: str = ""):
 
     mcp = mcp_registry.injection_report()
     mem_stats = memory_store.stats(project)
-    mem_block = memory_store.startup_selection(project)
-    mem_on = plugin_manager.is_enabled("memory_vault")
+    # Both figures come from the mode, because the mode is the one switch that
+    # decides memory. `memory_store.startup_selection` selects on budget alone
+    # — it would happily report a startup block for a session in `off` mode —
+    # while `memory_modes.startup` is what the turn actually injects. The
+    # dashboard used to gate on the retired Memory Vault plugin, which let it
+    # describe a setting nobody had just changed.
+    mem_block = memory_modes.startup(project)
+    mem_on = memory_modes.is_on()
 
     dash = metrics.dashboard(
         rec or {},
@@ -517,6 +525,11 @@ async def assistant_state(sid: str):
     cfg = assistant.settings_of(rec)
     return {"ok": True, "messages": rec.get("assistant") or [], "settings": cfg,
             "preview": assistant.preview(rec, cfg),
+            # The run state rides with the thread state: the panel needs both to
+            # render, and one fetch per open is one fewer thing that can be
+            # momentarily out of step with the other.
+            "goal": assistant.goal_of(rec),
+            "autonomy": session_runtime.autonomy_state(sid),
             "models": config.model_list(),
             "thinking_levels": _thinking_block(rec.get("model") or None)["thinking_levels"],
             "thinking_info": thinking_meta(rec.get("model") or None),
@@ -531,7 +544,9 @@ async def assistant_settings(sid: str, request: Request):
     if not rec:
         return _fail("session not found")
     cfg = assistant.save_settings(rec, await request.json())
-    store.save(rec)
+    # patch, not save: this endpoint owns assistantSettings and nothing else.
+    # A full save here would race the record a running turn is holding.
+    store.patch(sid, assistantSettings=cfg)
     return {"ok": True, "settings": cfg, "preview": assistant.preview(rec, cfg)}
 
 
@@ -544,6 +559,65 @@ async def assistant_clear(sid: str):
     assistant.clear(rec)
     store.save(rec)
     return {"ok": True, "preview": assistant.preview(rec)}
+
+
+@router.delete("/api/assistant/{sid}/message/{index}")
+async def assistant_message_delete(sid: str, index: int):
+    """Remove one Assistant message. Index is the row position the pane shows."""
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    if not assistant.delete_message(rec, index):
+        return _fail("no such message")
+    store.save(rec)
+    cfg = assistant.settings_of(rec)
+    return {"ok": True, "messages": rec.get("assistant") or [],
+            "preview": assistant.preview(rec, cfg)}
+
+
+# ── autonomous mode ────────────────────────────────────────────────────────
+# Both of these answer with the full state, not just what changed: the pane
+# shows a cycle count and an elapsed budget it must not have to assemble
+# itself, and a second tab that toggled the mode should not be looking at a
+# stale one.
+@router.get("/api/assistant/{sid}/autonomy")
+async def autonomy_get(sid: str):
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    return {"ok": True, "goal": assistant.goal_of(rec),
+            "autonomy": assistant.autonomy_of(rec)}
+
+
+@router.post("/api/assistant/{sid}/autonomy")
+async def autonomy_post(sid: str, request: Request):
+    from .. import assistant
+    if not store.get(sid):
+        return _fail("session not found")
+    body = await request.json()
+    if "goal" in body:
+        session_runtime.goal_set(sid, body.get("goal"))
+    state = session_runtime.autonomy_set(
+        sid, enabled=body.get("enabled"), max_cycles=body.get("max_cycles"),
+        max_hours=body.get("max_hours"))
+    if state.get("ok") is False:
+        return _fail(state.get("error") or "could not start the run")
+    return {"ok": True, "autonomy": state, "goal": assistant.goal_of(store.get(sid) or {})}
+
+
+@router.post("/api/assistant/{sid}/autonomy/reset")
+async def autonomy_reset(sid: str):
+    """Zero the tally without touching the switch — the person is about to
+    judge the run against a fresh budget, not start a new one."""
+    from .. import assistant
+    rec = store.get(sid)
+    if not rec:
+        return _fail("session not found")
+    state = assistant.reset_counters(rec)
+    store.patch(sid, assistantAutonomy=state)
+    return {"ok": True, "autonomy": state}
 
 
 @router.get("/api/folders")
@@ -756,6 +830,19 @@ async def set_deliver_guarantee(request: Request):
     body = await request.json()
     config.save_prefs({"deliverGuarantee": bool(body.get("deliver_guarantee"))})
     return _ok(deliver_guarantee=config.deliver_guarantee())
+
+
+@router.get("/api/harness/sound")
+async def get_sound():
+    """Whether the browser chimes when a turn ends. On by default."""
+    return _ok(turn_sound=config.turn_sound())
+
+
+@router.post("/api/harness/sound")
+async def set_sound(request: Request):
+    body = await request.json()
+    config.save_prefs({"turnSound": bool(body.get("turn_sound"))})
+    return _ok(turn_sound=config.turn_sound())
 
 
 @router.get("/api/tools")

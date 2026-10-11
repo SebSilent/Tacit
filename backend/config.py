@@ -1,7 +1,10 @@
 import json
 import os
 import platform as _platform
+import threading
+import time
 import sys
+import time
 from pathlib import Path
 
 OS = os.environ.get("TACIT_OS") or _platform.system()
@@ -243,16 +246,91 @@ def ensure_home() -> None:
         }, indent=2), encoding="utf-8")
 
 
+# A state file is read constantly and rewritten by a driver thread while those
+# reads happen. Windows refuses either side of that for the length of an open
+# handle — and a handle on a small JSON file is open for milliseconds — so the
+# answer is to wait a moment, not to report the file as missing or drop the
+# write. Bounded, because a genuine lock (antivirus, an editor) should surface
+# as a warning rather than hang the turn.
+_SHARE_TRIES = 20
+_SHARE_WAIT = 0.005
+
+
+def _locked(exc: OSError) -> bool:
+    """Is this the "someone else is holding it" error rather than a real fault?"""
+    return isinstance(exc, PermissionError)
+
+
 def read_json(path: Path, fallback):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except Exception:
-        return fallback
+    """Read a JSON state file, or `fallback` if it is not there.
+
+    A missing file is the normal case and stays quiet. A file that is there but
+    will not read is not: it used to be swallowed into the same fallback, so a
+    session that was merely being rewritten looked identical to a session that
+    had never existed — and the caller then behaved as if the person's work had
+    been deleted. Say so on stderr rather than pretend it was never there.
+    """
+    path = Path(path)
+    last = None
+    for _ in range(_SHARE_TRIES):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return fallback
+        except Exception as exc:
+            if _locked(exc):
+                last = exc
+                time.sleep(_SHARE_WAIT)
+                continue
+            print(f"[config] {path} is unreadable ({exc.__class__.__name__}: {exc}); "
+                  f"using fallback", file=sys.stderr)
+            return fallback
+    print(f"[config] {path} stayed locked "
+          f"({last.__class__.__name__}: {last}); using fallback", file=sys.stderr)
+    return fallback
 
 
 def write_json(path: Path, value) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(value, indent=2), encoding="utf-8")
+    """Write a state file so a reader never sees half of it.
+
+    A plain write_text truncates first and fills after. The turn's driver thread
+    saves the session record while the interface reads the same file, and a read
+    that landed in that gap got an empty or partial document — which read_json
+    reported as "no such session". Tests papered over it by waiting for the bus
+    to die before reading; the real fix is the write.
+
+    So: write beside the target, then rename over it. os.replace is atomic on
+    Windows and POSIX alike, so a reader gets the whole old file or the whole
+    new one, never a mixture. The temp name carries the pid and thread id
+    because two threads may save different records from the same directory at
+    the same instant, and it leads with a dot with the real extension kept out
+    of the tail: a stray file left by a crash must not be read back as a
+    session, a plugin, or — audit.py globs ``audit.json.*`` — a retired ledger.
+
+    The rename is the part Windows objects to: it is refused with Access denied
+    while any reader holds the target open, so it waits for the handle to close
+    instead of losing the save.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.stem}.{os.getpid()}.{threading.get_ident()}.writing"
+    try:
+        tmp.write_text(json.dumps(value, indent=2), encoding="utf-8")
+        for _ in range(_SHARE_TRIES):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                time.sleep(_SHARE_WAIT)
+        else:
+            os.replace(tmp, path)          # one last try, then let it surface
+    except BaseException:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def prefs() -> dict:
@@ -289,6 +367,18 @@ def turn_worker_mode() -> str:
     """
     raw = os.environ.get("TACIT_TURN_WORKER", "process").strip().lower()
     return "thread" if raw in ("thread", "0", "off", "false", "no") else "process"
+
+
+def turn_sound() -> bool:
+    """Whether the browser chimes when a turn ends. On by default.
+
+    A server preference rather than localStorage, because it describes the
+    machine: a person who silenced it wants every device pointed at this
+    install to stay silent, and a turn that ends in a background tab should
+    announce itself the same way as one that ends in front of them.
+    """
+    v = prefs().get("turnSound")
+    return True if v is None else bool(v)
 
 
 def deliver_guarantee() -> bool:

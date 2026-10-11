@@ -10,8 +10,8 @@ import time
 import threading
 from pathlib import Path
 
-from . import (audit, config, extras, guidance, mcp_registry, metrics, model_settings,
-               plugin_manager, sandbox, skills)
+from . import (audit, config, extras, guidance, mcp_registry, memory_modes,
+               memory_store, metrics, model_settings, plugin_manager, sandbox, skills)
 from . import tokens as token_mod
 from .ai import engine, prompts
 
@@ -367,6 +367,64 @@ def t_evidence(action: str, source: str = "", note: str = "", snippet: str = "",
     return "ERROR: action must be add|get|list"
 
 
+def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
+                    session: str = "") -> str:
+    """Search durable memory on request — the retrieval half of jit and full.
+
+    ``memory_modes.recall_for`` is what the mode was designed to route this
+    through, and nothing called it: a session in jit mode promised per-turn
+    retrieval and had none, because retrieval needs the question, which only
+    the model has. So the tool is the missing caller, and it goes through the
+    mode rather than around it — which is what makes a hit count as used and
+    push its expiry out.
+    """
+    res = memory_modes.recall_for(query, project=project or "",
+                                  limit=max(1, min(int(limit or 5), 20)))
+    items = res.get("items") or []
+    if not items:
+        # explicit and off retrieve nothing by design; say which rule applied
+        # rather than reporting an empty search the model reads as "no memory".
+        if memory_modes.mode() in ("explicit", "off"):
+            return ("memory retrieval is not enabled for this mode — only the notes "
+                    "injected at startup are available")
+        return "No matching memories."
+    audit.record("memory_retrieval", session=session, backend="memory", status="ok",
+                 mode=res.get("mode"), count=len(items),
+                 tokens=int(res.get("tokens") or 0), query=str(query)[:120])
+    return "\n".join(f"[{i['id']}] ({i['type']}, {i['confidence']}) {i['content']}"
+                     for i in items)
+
+
+def t_memory_add(content: str, type: str = "other", scope: str = "global",
+                 confidence: str = "medium", project: str | None = None,
+                 session: str = "") -> str:
+    """Propose a durable memory. It lands pending review, never enabled.
+
+    This is the same rule the learning system applies to a rule worth keeping:
+    Tacit may notice something, it may not decide on its own what the person
+    will carry into every future session. An approved memory then goes through
+    the same startup budget as everything else — Settings > Memory is where it
+    is read, approved and measured.
+    """
+    res = memory_store.add(content, type=type, scope=scope, confidence=confidence,
+                           project=project or "", source="agent_suggestion",
+                           source_session=session or "", enabled=False)
+    if not res.get("ok"):
+        return f"ERROR: {res.get('error')}"
+    m = res["memory"]
+    audit.record("memory_proposed", session=session, backend="memory", status="ok",
+                 memory_id=m["id"], tokens=int(m.get("token_estimate") or 0),
+                 type=m.get("type"), scope=m.get("scope"))
+    return (f"proposed memory #{m['id']} (~{m['token_estimate']} tokens), pending review — "
+            f"it is not injected anywhere until you approve it in Settings > Memory.")
+
+
+MEMORY_TOOL_NAMES = ("memory_recall", "memory_add")
+# Named because two callers gate on it: tools_for hides it where retrieval is
+# refused, and profiles.cost_at prices it only where it is offered.
+MEMORY_RECALL = "memory_recall"
+
+
 def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     """The research tool, driven like a sub-agent: events stream, result lands.
 
@@ -488,6 +546,8 @@ EXECS = {
     "mcp_search_tools": t_mcp_search_tools,
     "mcp_activate_tools": t_mcp_activate_tools,
     "mcp_call": t_mcp_call,
+    "memory_recall": t_memory_recall,
+    "memory_add": t_memory_add,
 }
 
 READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop"}
@@ -498,7 +558,7 @@ READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop
 # unbounded nested delegation from a panel that is advertised as a cheap side
 # conversation. (Snapshots are not here because they are not agent tools at all:
 # the agent's undo is automatic, and restore belongs to the person.)
-READONLY_BLOCKED |= {"task", "mcp_call", "mcp_activate_tools"}
+READONLY_BLOCKED |= {"task", "mcp_call", "mcp_activate_tools", "memory_add"}
 
 # Tools that read in one action and write in another. The guard below refuses the
 # writing action rather than dropping the tool, so `evidence get` still works for
@@ -590,6 +650,20 @@ TOOLS = [
         {"server_id": _S, "tool_name": _S,
          "arguments": {"type": "object"}, "confirm": {"type": "boolean"}},
         ["server_id", "tool_name"]),
+    # Memory is one system, gated on its own mode (Settings > Memory). These two
+    # schemas appear only while that mode is on, so an install with memory off
+    # pays nothing for a feature it is not using — the same rule the MCP helpers
+    # follow. There is no Memory Vault plugin: the store, the budget and the
+    # review live in the backend.
+    _fn("memory_recall", "Search durable memory for things the user chose to keep. Use it "
+                         "before asking the user to repeat themselves.",
+        {"query": _S, "limit": _I}, ["query"]),
+    _fn("memory_add", "Propose a durable memory for later sessions. It lands pending review "
+                      "and is injected nowhere until the user approves it.",
+        {"content": _S, "type": {"type": "string", "enum": list(memory_store.TYPES)},
+         "scope": {"type": "string", "enum": list(memory_store.SCOPES)},
+         "confidence": {"type": "string", "enum": list(memory_store.CONFIDENCE)}},
+        ["content"]),
 ]
 
 SUBTASK = "task"
@@ -702,6 +776,24 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
         if not mcp_registry.load()["servers"]:
             rows = [t for t in rows
                     if t["function"]["name"] not in MCP_HELPER_NAMES]
+    except Exception:  # noqa: BLE001
+        pass
+
+    # The memory tools follow the memory mode, because they are the same
+    # feature: a store the agent can read is only offered when the store is
+    # allowed to speak. With the mode off the two schemas are not merely
+    # useless, they describe a capability that is switched off.
+    #
+    # `memory_recall` has a second gate. In `explicit` mode the startup block
+    # carries every approved note and retrieval is refused by design, so the
+    # tool could only ever answer "retrieval is not enabled" — a dead end with
+    # a schema attached, which is the thing the MCP helpers are hidden to
+    # avoid. Offer it only where retrieval works.
+    try:
+        if not memory_modes.is_on():
+            rows = [t for t in rows if t["function"]["name"] not in MEMORY_TOOL_NAMES]
+        elif not memory_modes.retrieval_on():
+            rows = [t for t in rows if t["function"]["name"] != MEMORY_RECALL]
     except Exception:  # noqa: BLE001
         pass
 
@@ -1427,6 +1519,26 @@ def transcript_messages(rows: list[dict], reasoning: bool = False) -> list[dict]
     return out
 
 
+def _live_task_block(session: str) -> str:
+    """The session's task list as it stands on this step, or '' when there is none.
+
+    Read here rather than passed in because the turn may be running in the worker
+    process, which cannot receive a callable from the parent — and both paths must
+    inject the same thing. The plugin's own budget bounds the block, so this is a
+    small, fixed cost per step, not a growing one.
+    """
+    if not session:
+        return ""
+    try:
+        from . import plugin_manager
+        if not plugin_manager.is_enabled("task_list"):
+            return ""
+        from .plugins import task_list
+        return (task_list.block(session) or {}).get("text") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def run_turn(messages: list[dict], *, project: str | None, readonly: bool = False,
              max_steps: int | None = None, ref: str | None = None, temperature=None,
              depth: int = 0, nested: bool = False, chat: bool = False,
@@ -1698,6 +1810,19 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 # paid for on the step that needs it.
                 ctx_msgs = ctx_msgs + [{"role": "system", "content": block}]
                 last_block = block
+            # The task list is the one standing block that changes *during* a turn.
+            # It lives outside the transcript on purpose, which means a snapshot
+            # taken at turn start is stale by step three: the model has already
+            # finished items it can no longer see, and the remaining work — the
+            # only part worth showing — vanishes exactly when compaction would
+            # summarise what is left into prose. So it is re-read per step and
+            # appended at the point of use, like the project block: the cached
+            # prefix stays intact, an empty list costs nothing, and a turn that
+            # never uses the plugin pays for nothing at all.
+            if not chat and session:
+                live_tasks = _live_task_block(session)
+                if live_tasks:
+                    ctx_msgs = ctx_msgs + [{"role": "system", "content": live_tasks}]
             # The wall clock is part of the task. Until now the loop could not see it: headless
             # checked the deadline between events and simply abandoned the turn, so a cell with
             # twelve turns of real work in it ended with nothing on disk and no credit at all.

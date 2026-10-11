@@ -1,4 +1,4 @@
-/* Tacit platform panels: MCP, Memory Vault, Plugins, Tokens.
+/* Tacit platform panels: MCP, durable memory, Plugins, Tokens.
  *
  * These extend the existing Settings overlay rather than adding another
  * framework: harness.js already toggles every `.ho-panel` by `data-tab`, so we
@@ -40,15 +40,24 @@
   // ── tabs + panels ──────────────────────────────────────────────────────
   // Core tabs come from index.html. These are the ones this file adds. Anything
   // that is not plain Tacit is marked advanced and stays hidden until asked for,
-  // so the settings panel opens with six tabs rather than ten.
+  // so the settings panel opens with four tabs rather than nine.
+  //
+  // `general` is deliberately NOT in this list. index.html already declares that
+  // button (and marks it active), so listing it here appended a *second* General
+  // after the core four — General / Providers / Skills & Tools / Appearance /
+  // General — plus a second element with id="panel-general", a hidden twin of
+  // the one the panel actually shows. It belongs in CORE instead: a tab whose
+  // button the markup owns and whose content this file renders.
   const TABS = [
-    { id: 'general', label: 'General' },
     { id: 'capabilities', label: 'Capabilities', advanced: true },
     { id: 'learning', label: 'Learning', advanced: true },
     { id: 'mcp', label: 'MCP', advanced: true },
     { id: 'memory', label: 'Memory', advanced: true },
     { id: 'plugins', label: 'Plugins', advanced: true },
   ];
+
+  // Tabs index.html owns the button for, whose panel this file still fills.
+  const CORE = ['general'];
 
   const ADV_KEY = 'tacit.settings.advanced';
 
@@ -94,8 +103,13 @@
     });
     tabs.addEventListener('click', (e) => {
       const btn = e.target.closest('.ho-tab');
-      if (!btn || !TABS.some((t) => t.id === btn.dataset.tab)) return;
-      render(btn.dataset.tab);
+      if (!btn) return;
+      // harness.js already shows and hides the panels by data-tab; this only
+      // renders the content, for the tabs this file knows how to draw — the
+      // ones it added, and the core ones it renders (general).
+      const id = btn.dataset.tab;
+      if (!TABS.some((t) => t.id === id) && !CORE.includes(id)) return;
+      render(id);
     });
 
     const adv = document.createElement('label');
@@ -146,10 +160,11 @@
     // Tools are managed on the Skills & Tools tab only (one home per setting);
     // General fetches the server status, which now also reports the MCP
     // helper gate so the automatic on/off is visible where it is configured.
-    const [pf, vcs, dg, au, srv, procs] = await Promise.all([
+    const [pf, vcs, dg, snd, au, srv, procs] = await Promise.all([
       api('/api/profiles'),
       api('/api/harness/version-control'),
       api('/api/harness/deliver-guarantee'),
+      api('/api/harness/sound'),
       api('/api/autoupdater/status'),
       api('/api/server/status').catch(() => null),
       api('/api/processes').catch(() => ({ processes: [] })),
@@ -167,6 +182,7 @@
 
     const vcsOn = !!(vcs || {}).allow_version_control;
     const dgOn = !!(dg || {}).deliver_guarantee;
+    const sndOn = (snd || {}).turn_sound !== false;
     const auOn = !!(au || {}).enabled;
     const lastCheck = (au || {}).last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
     const lastUpdate = (au || {}).last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
@@ -201,6 +217,19 @@
           <span class="tgl-knob"></span>
         </button>
       </div>
+
+      <div class="ho-section">Interface</div>
+      <div class="tool-row ${sndOn ? '' : 'off'}" data-perm="turn-sound">
+        <span class="tool-name">Turn-end sound</span>
+        <span class="tool-desc">On by default. A short two-note chime when a turn finishes — a
+          rising pair for a finished turn, a lower one for a turn that ended on an error. It
+          plays whether or not this tab is in front of you, which is the whole point. Stored
+          on the server, so every device pointed at this install agrees.</span>
+        <button class="tgl ${sndOn ? 'on' : ''}" data-act="toggle-sound" role="switch" aria-checked="${sndOn}" title="${sndOn ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>
+
       <div class="ho-section">Server</div>
       <div class="tool-row" data-perm="restart">
         <span class="tool-name">Restart</span>
@@ -295,6 +324,20 @@
       btn.closest('.tool-row').classList.toggle('off', !enable);
       note(enable ? 'the delivery guarantee is on: the turn lands the file it names'
                   : 'the delivery guarantee is off: the turn ends when the agent ends it');
+    });
+
+    panel.querySelector('[data-act="toggle-sound"]').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-act="toggle-sound"]');
+      const enable = !btn.classList.contains('on');
+      const r = await post('/api/harness/sound', { turn_sound: enable });
+      if (!r.ok) { note(r.error || 'Could not change that setting', true); return; }
+      btn.classList.toggle('on', enable);
+      btn.setAttribute('aria-checked', enable);
+      btn.closest('.tool-row').classList.toggle('off', !enable);
+      // Tell the running client immediately: the chat keeps its own copy of
+      // the preference, and a toggle should take effect without a reload.
+      if (window.Tacit && window.Tacit.refreshSoundPref) window.Tacit.refreshSoundPref();
+      note(enable ? 'the turn-end chime is on' : 'the turn-end chime is off');
     });
 
     panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
@@ -776,6 +819,28 @@
         `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' — ' + esc(why)}</option>`;
     };
 
+    // A proposal is only judgeable if the person can check it against the turns
+    // it claims to come from, so new artifacts carry that evidence and the queue
+    // shows it. Proposals written before this change carry only the older
+    // snippet/turn pair, which still renders — as one quote, labelled as less.
+    const propEvidence = (p) => {
+      const pr = p.provenance || {};
+      const ev = (pr.evidence || []).filter((e) => e && e.quote);
+      if (ev.length) {
+        return `<span class="ho-sub sm prop-ev">` +
+          ev.slice(0, 4).map((e) => `<b>[${esc(e.turn)}] ${esc(e.role || '')}</b> ` +
+            `“${esc(String(e.quote).slice(0, 140))}”`).join('<br>') +
+          (ev.length > 4 ? `<br>+${ev.length - 4} more turn${ev.length > 5 ? 's' : ''}` : '') +
+          `</span>`;
+      }
+      if (pr.snippet) {
+        return `<span class="ho-sub sm prop-ev">you said: “${esc(String(pr.snippet).slice(0, 100))}”` +
+          `${pr.turn === undefined ? '' : ` (turn ${esc(pr.turn)})`} — ` +
+          `no turn evidence stored for this one</span>`;
+      }
+      return '';
+    };
+
     panel.innerHTML = `
       <div class="ho-section">Learning <span class="ho-sub sm">whether Tacit may learn</span></div>
       <div class="mcp-add">
@@ -801,8 +866,8 @@
         `<span class="badge${p.state === 'approved' ? ' on' : ''}">${esc(p.state)}</span>` +
         `<span class="mem-text">${esc((p.title || p.body || '').slice(0, 110))}` +
         (p.provenance
-          ? `<span class="ho-sub sm">because ${esc(p.provenance.why || p.provenance.rule || 'it matched a pattern')}</span>` +
-            `<span class="ho-sub sm">you said: “${esc((p.provenance.snippet || '').slice(0, 100))}” (turn ${esc(p.provenance.turn)})</span>`
+          ? `<span class="ho-sub sm">because ${esc(p.provenance.why || p.provenance.rule || 'it matched a pattern')}` +
+            ` ${esc(p.provenance.engine === 'model' ? '(model pass)' : '(patterns)')}</span>` + propEvidence(p)
           : '') +
         `</span>` +
         `<span class="badge">${esc(p.display)}</span>` +
@@ -847,6 +912,10 @@
 
     panel.querySelectorAll('[data-art]').forEach((row) => {
       const id = row.dataset.art;
+      // The stored artifact, not the rendered row: the row's text now carries the
+      // provenance and citations under the rule, and editing must never prefill
+      // the body with any of that.
+      const art = (lg.artifacts || []).find((a) => a.id === id) || {};
       const act = async (what) => {
         const r = await post(`/api/learning/${encodeURIComponent(id)}/${what}`);
         if (!r.ok) { toast(r.error || 'could not do that', true); return; }
@@ -861,7 +930,10 @@
       on('pdisable', () => act('disable'));
       on('preject', () => act('reject'));
       on('pedit', async () => {
-        const next = prompt('Edit the proposal body', row.querySelector('.mem-text').textContent);
+        // Prefill from the stored artifact, never from the rendered row: the row's
+        // text carries the title plus the provenance and citations under it, and
+        // editing that would write the evidence into the rule.
+        const next = prompt('Edit the proposal body', art.body || art.title || '');
         if (next == null) return;
         const r = await api('/api/learning/' + encodeURIComponent(id),
           { method: 'PATCH', body: JSON.stringify({ body: next }) });
@@ -977,16 +1049,27 @@
     if (ov) ov.hidden = true;
   }
 
-  // ── Memory Vault ───────────────────────────────────────────────────────
+  // ── Durable memory ─────────────────────────────────────────────────────
   async function renderMemory() {
     const panel = $('#panel-memory');
     panel.innerHTML = '<div class="ho-loading">Loading memories…</div>';
-    const plugins = await api('/api/plugins');
-    const vault = (plugins.plugins || []).find((p) => p.id === 'memory_vault') || {};
+    // One switch for the whole feature: the mode in Settings > Capabilities
+    // decides what is injected, what the agent may call and what this preview
+    // shows. There is no vault plugin to enable on top of it, so this panel
+    // reads and writes that mode directly.
+    const c = await api('/api/capabilities');
     const d = await api('/api/memory');
     const st = d.stats || {};
     const startup = await api('/api/memory/startup');
     const rows = d.memories || [];
+    const rep = c.memory_report || {};
+    // resolve() returns the selection's id and the registry row under
+    // `provider` — the human name lives on the row, not on the selection.
+    const memId = (c.memory || {}).id || 'off';
+    const memName = ((c.memory || {}).provider || {}).name || memId;
+    const memOptions = (c.providers || []).filter((p) => p.kind === 'memory');
+    const memOpt = (r) => `<option value="${esc(r.id)}"${r.id === memId ? ' selected' : ''}>` +
+      `${esc(r.name)}</option>`;
 
     const memRow = (m) => `
       <div class="mem-row ${m.enabled ? '' : 'off'}" data-id="${m.id}">
@@ -1006,25 +1089,27 @@
 
     panel.innerHTML = `
       <div class="ho-toolbar">
-        <span class="ho-sub">Vault is <strong>${vault.enabled ? 'enabled' : 'disabled'}</strong>.</span>
-        <button class="ho-btn small" id="mvToggle">${vault.enabled ? 'Disable vault' : 'Enable vault'}</button>
+        <span class="ho-sub">Memory is <strong>${esc(memName)}</strong>.</span>
+        <select class="git-select" id="memMode">${memOptions.map(memOpt).join('')}</select>
+        <label class="chk">Budget <input id="memBudget" class="mcp-in sm" type="number" min="0" max="2000" value="${rep.budget || 0}"> tokens</label>
+        <button class="ho-btn small primary" id="memSave">Save</button>
         <button class="ho-btn small" id="mvExtract">Extract from session</button>
         <button class="ho-btn small" id="mvSummarise">Summarise session</button>
         <button class="ho-btn small" id="mvCompress">Compress startup set</button>
       </div>
+      <div class="ho-sub sm">One switch decides everything: the mode sets what is injected at the
+        start of a turn, whether the agent gets its recall and add tools, and what the preview
+        below shows. <em>Off</em> injects nothing and offers no tools; <em>Explicit</em> injects
+        only what you wrote or approved, with no mid-turn retrieval; <em>JIT</em> and
+        <em>Everything</em> also let the agent search the vault during a turn.</div>
       <div class="tok-table">
         <div class="tok-row"><span class="tok-label">Memories</span><span class="tok-value">${st.count || 0}</span><span class="tok-hint">${st.enabled || 0} enabled, ${st.pinned || 0} pinned</span></div>
-        <div class="tok-row"><span class="tok-label">Startup block</span><span class="tok-value">${esc(startup.display || fmt(startup.tokens))}</span><span class="tok-hint">of ${st.budget || 0}-token budget</span></div>
-        <div class="tok-row"><span class="tok-label">Held back by budget</span><span class="tok-value">${st.excluded_by_budget || 0}</span></div>
+        <div class="tok-row"><span class="tok-label">Injected at startup</span><span class="tok-value">${esc(startup.display || fmt(startup.tokens))}</span><span class="tok-hint">of ${rep.budget || 0}-token budget, ${startup.count || 0} note(s)</span></div>
+        <div class="tok-row"><span class="tok-label">Held back by budget</span><span class="tok-value">${startup.held_back || 0}</span></div>
         <div class="tok-row"><span class="tok-label">All memories if injected</span><span class="tok-value">${esc(fmt(st.total_tokens))}</span><span class="tok-hint">the cost the budget avoids</span></div>
       </div>
-      <div class="ho-toolbar">
-        <label class="chk">Budget <input id="mvBudget" class="mcp-in sm" type="number" min="0" value="${st.budget || 0}"> tokens</label>
-        <button class="ho-btn small" id="mvSaveBudget">Save</button>
-        <span class="ho-sub">default 120 · hard max 500</span>
-      </div>
       <div class="ho-section">Startup block preview</div>
-      <pre class="mem-preview">${esc(startup.text || '(nothing would be injected)')}</pre>
+      <pre class="mem-preview">${esc(startup.text || (startup.mode === 'off' ? 'Memory is off — nothing is injected.' : '(nothing fits the budget yet)'))}</pre>
       <div class="ho-section">Add a memory</div>
       <div class="mcp-add">
         <input class="mcp-in" id="memContent" placeholder="a durable fact, preference or decision" spellcheck="false">
@@ -1036,16 +1121,17 @@
       <div class="ho-section">Memories <span class="ho-count">${rows.length}</span></div>
       <div class="mem-list">${rows.map(memRow).join('') || '<div class="ho-empty sm">Nothing stored yet.</div>'}</div>`;
 
-    $('#mvToggle').addEventListener('click', async () => {
-      const p = vault.enabled ? 'disable' : 'enable';
-      const r = await post(`/api/plugins/memory_vault/${p}`);
-      note(r.ok ? `Memory Vault ${p}d` : (r.error || 'failed'), !r.ok);
-      renderMemory();
-    });
-
-    $('#mvSaveBudget').addEventListener('click', async () => {
-      const r = await post('/api/memory/budget', { budget: parseInt($('#mvBudget').value, 10) || 0 });
-      note(r.ok ? `budget set to ${r.budget} tokens` : (r.error || 'failed'), !r.ok);
+    $('#memSave').addEventListener('click', async () => {
+      // mode and budget travel together: they are one setting, and saving them
+      // separately is how the two came to disagree about what memory costs.
+      const r = await post('/api/capabilities/memory', {
+        mode: $('#memMode').value, budget: parseInt($('#memBudget').value, 10) || 0,
+      });
+      if (!r.ok) { note(r.error || 'could not save that', true); return; }
+      const savedBudget = parseInt($('#memBudget').value, 10) || 0;
+      note(`memory set to ${r.memory.id}` +
+           (r.memory.id === 'off' ? ' — nothing is injected and the agent gets no memory tools'
+            : ` · ${savedBudget}-token budget`));
       renderMemory();
     });
 

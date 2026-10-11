@@ -38,6 +38,14 @@ _LOG_LIMIT = 200
 
 REQUIRED_FIELDS = ("id", "name", "description")
 
+# Plugins that no longer exist as plugins. The module may still be on disk in
+# an existing install, and a user may have it listed as enabled in
+# plugins.json; discovery skips these ids entirely, so a retired feature cannot
+# come back as a row in Settings, a tool in the prompt, or a line in a cost
+# estimate. Memory moved into the backend (Settings > Memory, `memory_modes`),
+# where one switch decides both what is injected and what the agent may call.
+RETIRED = {"memory_vault"}
+
 
 # ── state ──────────────────────────────────────────────────────────────────
 def _state() -> dict:
@@ -69,7 +77,7 @@ def _candidates() -> list[tuple[str, Path, Path, dict]]:
     bundled = config.BUNDLED_PLUGINS_DIR
     if bundled.is_dir():
         for path in sorted(bundled.glob("*.py")):
-            if path.name.startswith("_"):
+            if path.name.startswith("_") or path.stem in RETIRED:
                 continue
             found.append((path.stem, bundled, path, {}))
 
@@ -80,9 +88,9 @@ def _candidates() -> list[tuple[str, Path, Path, dict]]:
                 continue
             manifest = config.read_json(entry / "manifest.json", {}) or {}
             code = entry / "plugin.py"
-            if code.exists():
+            if code.exists() and (manifest.get("id") or entry.name) not in RETIRED:
                 found.append((manifest.get("id") or entry.name, entry, code, manifest))
-    return found
+    return [row for row in found if row[0] not in RETIRED]
 
 
 def _load(plugin_id: str, entry: Path):

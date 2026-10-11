@@ -9,8 +9,10 @@ Modes:
   explicit   only what you wrote or approved. Nothing learned ever appears.
   jit        the smallest useful set: always-relevant items go in, everything
              else is fetched per turn by relevance rather than carried around
+  full       every approved note competes for the startup block, and mid-turn
+             retrieval stays on — the union of the two above, still budgeted
 
-The rule is the same in all three: an item that is injected can be pointed at,
+The rule is the same in all four: an item that is injected can be pointed at,
 and explained, and measured.
 """
 
@@ -18,9 +20,13 @@ from __future__ import annotations
 
 from . import memory_store, providers, tokens
 
-MODES = ("off", "explicit", "jit")
+MODES = ("off", "explicit", "jit", "full")
 HEADER = "Memory (durable notes you chose to keep):"
-JIT_SHARE = 0.5          # jit keeps half the budget for mid-turn retrieval
+JIT_SHARE = 0.5          # jit and full keep half the budget for mid-turn retrieval
+# The modes that retrieve mid-turn. `explicit` injects what you approved and
+# fetches nothing else by design, so a recall tool under it could only ever
+# answer "not enabled" — and a tool that cannot do its job is not offered.
+RETRIEVAL_MODES = ("jit", "full")
 
 
 def mode() -> str:
@@ -38,6 +44,16 @@ def budget() -> int:
 
 def is_on() -> bool:
     return mode() != "off" and budget() > 0
+
+
+def retrieval_on() -> bool:
+    """Whether mid-turn retrieval actually works right now.
+
+    The question the `memory_recall` tool has to be able to answer yes to
+    before it is offered: memory on, and a mode that retrieves. `explicit` is
+    on but does not retrieve, and off retrieves nothing whatever the budget.
+    """
+    return is_on() and mode() in RETRIEVAL_MODES
 
 
 def _entry(row: dict, why: str) -> dict:
@@ -68,7 +84,7 @@ def _render(items: list[dict]) -> str:
 def _candidates(project: str, cap_mode: str) -> list[tuple[dict, str]]:
     """(row, why it is a candidate) before the budget is applied."""
     pool = memory_store.list_memories(enabled=True, project=project, limit=2000)
-    if cap_mode == "explicit":
+    if cap_mode in ("explicit", "full"):
         # Everything here is enabled, and enabled means you approved it. A
         # proposal you have not accepted stays disabled and never appears.
         return [(r, "you wrote this" if r.get("source") == "user" else "you approved this")
@@ -91,7 +107,7 @@ def startup(project: str = "") -> dict:
     if current == "off" or cap <= 0:
         return empty
 
-    limit = int(cap * JIT_SHARE) if current == "jit" else cap
+    limit = int(cap * JIT_SHARE) if current in RETRIEVAL_MODES else cap
     rank = {"high": 0, "medium": 1, "low": 2}
     rows = _candidates(project, current)
     rows.sort(key=lambda pair: (0 if pair[0].get("pinned") else 1,
@@ -113,20 +129,23 @@ def startup(project: str = "") -> dict:
     return {"mode": current, "items": chosen, "text": text,
             "tokens": tokens.estimate_tokens(text), "budget": cap,
             "count": len(chosen), "held_back": held_back,
-            "retrieval_budget": max(0, cap - limit) if current == "jit" else 0}
+            "retrieval_budget": max(0, cap - limit) if current in RETRIEVAL_MODES else 0}
 
 
 def recall_for(query: str, project: str = "", limit: int = 5,
                session: str = "") -> dict:
-    """Mid-turn retrieval. Only jit uses this; explicit and off return nothing."""
-    if mode() != "jit" or not str(query or "").strip():
+    """Mid-turn retrieval. Only jit and full use it; explicit and off give nothing."""
+    if mode() not in RETRIEVAL_MODES or not str(query or "").strip():
         return {"mode": mode(), "items": [], "tokens": 0, "query": query}
     hits = memory_store.recall(query, limit=limit, project=project)
     items = [_entry(h, f"matched {query!r}") for h in hits]
     for item in items:
         if item["id"]:
             memory_store.reinforce(item["id"], ttl_days=0)
-    return {"mode": "jit", "items": items, "query": query,
+    # Report the mode that actually served the call. This used to hardcode
+    # "jit", so a retrieval answered under "full" was labelled as the other
+    # mode — and the label is what the provenance UI quotes back.
+    return {"mode": mode(), "items": items, "query": query,
             "tokens": sum(i["tokens"] for i in items)}
 
 

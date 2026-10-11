@@ -232,6 +232,14 @@ def stop(sid: str) -> dict:
         client.stop()
     row["client"] = None
     row["state"] = "stopped"
+    # An activation is a promise that something can answer the call. Once the
+    # server is stopped its activated schemas must leave the prompt with it, or
+    # the model keeps being offered a tool with nothing behind it. This also
+    # covers restart: the process is new, so re-activation is the honest state.
+    for key in [k for k in _ACTIVE if k.split(":", 1)[0] == sid]:
+        _ACTIVE.pop(key, None)
+        audit("tool_deactivated", server=sid, tool=key.split(":", 1)[1],
+              reason="server stopped")
     audit("server_stopped", server=sid)
     return {"ok": True, "state": "stopped"}
 

@@ -65,8 +65,31 @@ def get(sid: str) -> dict | None:
     return config.read_json(_path(sid), None)
 
 
-def save(rec: dict) -> dict:
+# Fields a long-lived in-memory copy must never overwrite. A turn's record is
+# held in memory for minutes while the person keeps using the interface, and
+# the settings panel writes the same file from a fresh read: without this, the
+# turn's next save silently reverted whatever they had just changed — which is
+# exactly how the assistant's "last 5 turns" came back as 20.
+# The Goal and the autonomous run's counters join them for the same reason, and
+# a sharper one: the harness writes them from a driver thread while the panel
+# writes them from REST, and the in-memory record a turn holds is minutes old.
+# Without preservation, the turn's next save would rewind the cycle count and
+# silently re-enable a run the person had just stopped.
+# planState joins them because plan mode writes it the same way — from a driver
+# thread, while the websocket handler holds a record loaded before the plan
+# existed. A stale save there would not just rewind progress; it would delete the
+# snapshot a reload reads back, which is the whole reason the plan survives a
+# dropped socket.
+PRESERVED = ("assistantSettings", "assistantGoal", "assistantAutonomy", "planState")
+
+
+def save(rec: dict, *, preserve=PRESERVED) -> dict:
     rec["updated"] = _now()
+    if preserve:
+        disk = config.read_json(_path(rec["id"]), None) or {}
+        for key in preserve:
+            if key in disk:
+                rec[key] = disk[key]
     config.write_json(_path(rec["id"]), rec)
     rows = index()
     for i, r in enumerate(rows):
@@ -82,11 +105,16 @@ def save(rec: dict) -> dict:
 
 
 def patch(sid: str, **fields) -> dict | None:
+    """Write exactly these fields onto the record as it is on disk.
+
+    ``preserve=()`` because the caller is the owner of the fields it names:
+    re-reading them from disk here would discard the very change being made.
+    """
     rec = get(sid)
     if not rec:
         return None
     rec.update({k: v for k, v in fields.items() if v is not None})
-    return save(rec)
+    return save(rec, preserve=())
 
 
 def append(rec: dict, role: str, content: str, extra: dict | None = None) -> dict:

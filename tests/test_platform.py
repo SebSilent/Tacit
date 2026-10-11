@@ -1,4 +1,4 @@
-"""Tests for the token accounting, plugin manager, MCP client and Memory Vault.
+"""Tests for the token accounting, plugin manager, MCP client and durable memory.
 
 Every test runs against a throwaway home directory, so nothing here touches the
 user's real ~/.tacit state. The MCP tests drive a real subprocess speaking the
@@ -16,8 +16,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import (agent, assistant, config, folders, gateways, hosting, mcp_registry,  # noqa: E402
-                     memory_store, metrics, plugin_manager, profiles, providers, store,
-                     tokens, vcs)
+                     memory_modes, memory_store, metrics, plugin_manager, profiles,
+                     providers, store, tokens, vcs)
+# session_runtime is deliberately NOT imported here: it touches the session store
+# at import time, and at module scope that happens before Isolated.setUp points
+# HOME at a temporary directory — so it would read, and lock against, the real
+# ~/.tacit. Every test below imports it locally, after redirection.
 from tests.helpers import state_paths  # noqa: E402
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
@@ -86,28 +90,36 @@ class TestTokenEstimator(unittest.TestCase):
 class TestPluginManager(Isolated):
     def test_listing_and_toggle(self):
         rows = {p["id"]: p for p in plugin_manager.list_plugins()}
-        self.assertIn("memory_vault", rows)
+        self.assertIn("task_list", rows)
         self.assertNotIn("dsh_bridge", rows,
                          "Tacit ships no bridge to another harness")
-        self.assertFalse(rows["memory_vault"]["enabled"])
-        self.assertFalse(rows["memory_vault"]["provides"])
+        # Memory is a built-in capability, not a plugin: the retired id must not
+        # come back as a row, an enable target or a line in a cost estimate.
+        self.assertNotIn("memory_vault", rows,
+                         "memory lives in Settings > Memory; it is not a plugin")
+        self.assertFalse(plugin_manager.enable("memory_vault")["ok"])
+        self.assertEqual(plugin_manager.tool_schemas("memory_vault"), [])
+        self.assertFalse(rows["task_list"]["enabled"])
+        self.assertFalse(rows["task_list"]["provides"])
 
-        self.assertTrue(plugin_manager.enable("memory_vault")["ok"])
-        self.assertTrue(plugin_manager.is_enabled("memory_vault"))
+        self.assertTrue(plugin_manager.enable("task_list")["ok"])
+        self.assertTrue(plugin_manager.is_enabled("task_list"))
         names = [t["function"]["name"] for t in plugin_manager.collect_tools()]
-        self.assertIn("memory_recall", names)
+        self.assertIn("tasks", names)
 
-        self.assertTrue(plugin_manager.disable("memory_vault")["ok"])
-        self.assertFalse(plugin_manager.is_enabled("memory_vault"))
+        self.assertTrue(plugin_manager.disable("task_list")["ok"])
+        self.assertFalse(plugin_manager.is_enabled("task_list"))
         self.assertEqual(plugin_manager.collect_tools(), [])
 
     def test_settings_roundtrip(self):
-        plugin_manager.enable("memory_vault")
-        res = plugin_manager.settings_of("memory_vault")
+        plugin_manager.enable("task_list")
+        res = plugin_manager.settings_of("task_list")
         self.assertTrue(res["ok"])
-        self.assertIn("auto_approve", res["values"])
-        plugin_manager.save_settings("memory_vault", {"auto_approve": True})
-        self.assertTrue(plugin_manager.settings_of("memory_vault")["values"]["auto_approve"])
+        # The declared schema is one int: the injected task-list budget.
+        self.assertIn("budget", res["values"])
+        self.assertEqual(res["values"]["budget"], 400)
+        plugin_manager.save_settings("task_list", {"budget": 120})
+        self.assertEqual(plugin_manager.settings_of("task_list")["values"]["budget"], 120)
 
     def test_unknown_plugin(self):
         self.assertFalse(plugin_manager.enable("nope")["ok"])
@@ -130,7 +142,10 @@ class TestMcp(Isolated):
 
     def test_start_discover_and_no_prompt_bloat(self):
         self.assertTrue(self._add()["ok"])
-        base_count = len(agent.TOOLS)
+        # The baseline is the OFFERED set, not the registry: the registry is a
+        # module global that activation appends to, so measuring it pinned a
+        # number that moved whenever the toolset changed.
+        base_count = len(agent.tools_for())
         # nothing injected before activation
         self.assertEqual(len(agent.tools_for()), base_count)
 
@@ -159,7 +174,7 @@ class TestMcp(Isolated):
     def test_call_and_activation(self):
         self._add()
         mcp_registry.start("fake")
-        base_count = len(agent.TOOLS)
+        base_count = len(agent.tools_for())
 
         out = mcp_registry.call("fake", "echo", {"text": "hi"})
         self.assertTrue(out["ok"], out)
@@ -213,8 +228,8 @@ class TestMcp(Isolated):
         mcp_registry.save_settings({"direct_mode": False})
 
 
-# ── 7-8. Memory Vault ──────────────────────────────────────────────────────
-class TestMemoryVault(Isolated):
+# ── 7-8. Durable memory ────────────────────────────────────────────────────
+class TestMemoryStore(Isolated):
     def test_crud_and_token_estimate(self):
         added = memory_store.add("The user prefers tabs over spaces.",
                                  type="preference", confidence="high", pinned=True)
@@ -243,13 +258,34 @@ class TestMemoryVault(Isolated):
         for i in range(40):
             memory_store.add(f"Fact {i}: " + ("detail " * 3), type="project_fact",
                              confidence="high", pinned=True)
+        # Two figures, two owners: the store selects on its own budget, and the
+        # mode decides what a turn actually injects. stats() reports the second,
+        # because a number about memory cost that ignores the mode is a number
+        # describing an injection that will not happen.
         memory_store.set_budget(60)
+        providers.save({"memory": {"mode": "explicit", "budget": 60}})
         selection = memory_store.startup_selection()
         self.assertLessEqual(selection["tokens"], 60)
         self.assertTrue(selection["used"], "some small memories should fit")
         stats = memory_store.stats()
+        self.assertEqual(stats["mode"], "explicit")
         self.assertEqual(stats["budget"], 60)
         self.assertGreater(stats["excluded_by_budget"], 0)
+        self.assertLessEqual(stats["startup_tokens"], 60)
+        self.assertEqual(stats["startup_tokens"], memory_modes.startup()["tokens"])
+
+    def test_stats_report_nothing_injected_while_memory_is_off(self):
+        """The bug this closes: a full startup block reported for mode `off`."""
+        memory_store.add("A note that would fit any budget.", type="preference",
+                         confidence="high", pinned=True)
+        memory_store.set_budget(120)
+        providers.save({"memory": {"mode": "off", "budget": 120}})
+        self.assertTrue(memory_store.startup_selection()["used"],
+                        "the store selects on budget alone")
+        stats = memory_store.stats()
+        self.assertEqual(stats["mode"], "off")
+        self.assertEqual(stats["startup_tokens"], 0)
+        self.assertEqual(stats["excluded_by_budget"], 0)
 
     def test_oversized_memory_is_excluded_not_injected(self):
         # A single memory larger than the whole budget must not be injected.
@@ -487,11 +523,25 @@ class TestProfiles(Isolated):
         self.assertTrue(res["ok"])
         self.assertEqual(res["skipped"], [], "a standalone profile must not skip anything")
 
-    def test_turning_memory_off_takes_the_recall_tools_away(self):
+    def test_turning_memory_off_takes_the_memory_tools_away(self):
+        """The mode, not a plugin, decides whether the agent has memory tools.
+
+        `explicit` injects what you approved and retrieves nothing, so it gets
+        the propose tool but not the recall tool — a tool that could only ever
+        answer "not enabled" is not offered.
+        """
         profiles.apply("safe")
-        self.assertTrue(plugin_manager.is_enabled("memory_vault"))
+        names = {t["function"]["name"] for t in agent.tools_for()}
+        self.assertIn("memory_add", names)
+        self.assertNotIn("memory_recall", names,
+                         "explicit mode refuses retrieval, so recall is not offered")
+        profiles.apply("power-memory")
+        names = {t["function"]["name"] for t in agent.tools_for()}
+        self.assertIn("memory_recall", names, "jit/full retrieve, so recall is offered")
         profiles.apply("default")
-        self.assertFalse(plugin_manager.is_enabled("memory_vault"))
+        names = {t["function"]["name"] for t in agent.tools_for()}
+        self.assertNotIn("memory_add", names)
+        self.assertNotIn("memory_recall", names)
         self.assertEqual(providers.load()["memory"]["mode"], "off")
 
     def test_applying_a_profile_is_recorded(self):
@@ -499,18 +549,29 @@ class TestProfiles(Isolated):
         profiles.apply("safe")
         self.assertIn("profile_applied", [e["event"] for e in audit.recent(5)])
 
-    def test_apply_changes_plugin_state(self):
+    def test_apply_changes_memory_mode_and_budget(self):
+        """Memory is a capability a profile sets, not a plugin it enables.
+
+        The mode and the budget travel together in one write, and no bundle
+        reaches for a plugin to get memory working — that coupling is what let
+        the cost and the setting disagree about what memory was doing.
+        """
         self.assertTrue(profiles.apply("safe")["ok"])
-        self.assertTrue(plugin_manager.is_enabled("memory_vault"))
+        mem = providers.load()["memory"]
+        self.assertEqual(mem["mode"], "explicit")
+        self.assertGreater(mem["budget"], 0)
+        self.assertEqual(plugin_manager.collect_tools(), [],
+                         "no profile enables a memory plugin: memory is built in")
         self.assertTrue(profiles.apply("default")["ok"])
-        self.assertFalse(plugin_manager.is_enabled("memory_vault"))
+        self.assertEqual(providers.load()["memory"]["mode"], "off")
+        self.assertEqual(providers.load()["memory"]["budget"], 0)
         self.assertEqual(memory_store.budget(), 0)
 
     def test_unknown_profile_refused(self):
         self.assertFalse(profiles.apply("nope")["ok"])
 
     def test_capture_and_delete(self):
-        plugin_manager.enable("memory_vault")
+        plugin_manager.enable("task_list")
         made = profiles.capture("my setup", "My setup")
         self.assertTrue(made["ok"])
         self.assertEqual(made["name"], "my-setup")
@@ -774,6 +835,81 @@ class TestDeliverGuaranteeSetting(Isolated):
         self.assertFalse(got["deliver_guarantee"])
 
 
+class TestTurnSoundSetting(Isolated):
+    """On by default, and silencing it is meant to last.
+
+    PLAN.md 6 asks for an end-of-turn chime and a Settings > General toggle that
+    is "persisted, default on", and defines done as the toggle silencing it
+    everywhere and surviving a reload. Two claims matter beyond the round-trip:
+    the preference lives on the *server*, so "survives a reload" has to be
+    demonstrated against the file on disk — and the browser must ask the server
+    before it makes a noise rather than chime on a stale default. What no test
+    can reach is the sound itself: that a finishing turn is audible, including
+    from a background tab, is a pair of ears' work.
+    """
+
+    def test_on_by_default(self):
+        self.assertTrue(config.turn_sound())
+        self.assertIsNone(config.prefs().get("turnSound"),
+                          "absent means on, and nothing had to be written to say so")
+
+    def test_the_setting_round_trips(self):
+        config.save_prefs({"turnSound": False})
+        self.assertFalse(config.turn_sound())
+        self.assertFalse(config.read_json(config.PREFS_FILE, {}).get("turnSound"))
+        config.save_prefs({"turnSound": True})
+        self.assertTrue(config.turn_sound())
+
+    def test_a_reload_reads_the_disk_not_a_memory_of_the_click(self):
+        """What "persists across reload" means on the server side.
+
+        prefs() keeps no memo, so the file is the only truth. Writing it behind
+        save_prefs' back is the test: a cached copy would answer with the old
+        value, and a page reloaded after silencing would still chime.
+        """
+        for want in (False, True):
+            config.write_json(config.PREFS_FILE, {**config.prefs(), "turnSound": want})
+            self.assertEqual(config.turn_sound(), want)
+
+    def test_the_router_round_trips(self):
+        import asyncio
+        from backend.routers import api as api_router
+
+        class FakeRequest:
+            payload = {"turn_sound": False}
+
+            @staticmethod
+            async def json():
+                return FakeRequest.payload
+
+        async def call():
+            self.assertTrue((await api_router.get_sound())["turn_sound"])
+            FakeRequest.payload = {"turn_sound": False}
+            await api_router.set_sound(FakeRequest())
+            off = await api_router.get_sound()
+            FakeRequest.payload = {"turn_sound": True}
+            await api_router.set_sound(FakeRequest())
+            return off, await api_router.get_sound()
+
+        off, on = asyncio.run(call())
+        self.assertFalse(off["turn_sound"], "the POST took effect without a restart")
+        self.assertTrue(on["turn_sound"])
+
+    def test_the_browser_asks_the_server_before_it_chimes(self):
+        """The gate is the server's answer; the switch posts to the same route."""
+        root = Path(__file__).resolve().parent.parent
+        app = (root / "static" / "app.js").read_text(encoding="utf-8")
+        plat = (root / "static" / "platform.js").read_text(encoding="utf-8")
+        self.assertIn("fetch('/api/harness/sound')", app)
+        self.assertIn("if (!turnSoundOn) return;", app,
+                      "chime() bails on the preference, so off really is silent")
+        self.assertIn("await loadSoundPref()", app,
+                      "fetched at boot, before any turn could end")
+        self.assertIn("refreshSoundPref: () => loadSoundPref()", app,
+                      "an open page re-reads the switch instead of keeping its old answer")
+        self.assertIn("post('/api/harness/sound', { turn_sound: enable })", plat)
+
+
 class TestSavedFolders(Isolated):
     """Folders that have been used are remembered, and can be forgotten."""
 
@@ -951,13 +1087,13 @@ class TestAssistant(Isolated):
         self.assertIn("read-only", out)
 
     def test_the_agent_never_sees_the_assistant(self):
-        from backend.routers import chat
+        from backend import session_runtime
 
         rec = self._rec()
         assistant.append(rec, "user", "SECRET ASSISTANT NOTE")
         assistant.append(rec, "assistant", "SECRET ASSISTANT REPLY")
 
-        history = chat._history(rec)
+        history = session_runtime._history(rec)
         blob = " ".join(m.get("content") or "" for m in history)
         self.assertNotIn("SECRET", blob)
         # ...while the assistant can still read the session itself
@@ -1196,7 +1332,7 @@ class TestTurnHistory(Isolated):
                              f"two steps landed in one message: {b!r}")
 
     def test_the_call_and_its_result_both_reach_the_transcript(self):
-        from backend.routers import chat as ch
+        from backend import session_runtime
         trace = self._trace()
         rec = store.create(title="hist")
         store.append(rec, "user", "go")
@@ -1208,7 +1344,7 @@ class TestTurnHistory(Isolated):
                 extra["tools"] = s["tools"]
             store.append(rec, "assistant", s["text"], extra or None)
         store.save(rec)
-        hist = ch._history(store.get(rec["id"]))
+        hist = session_runtime._history(store.get(rec["id"]))
         calls = [c for h in hist if h["role"] == "assistant"
                  for c in (h.get("tool_calls") or [])]
         results = [h for h in hist if h["role"] == "tool"]
@@ -1216,7 +1352,7 @@ class TestTurnHistory(Isolated):
         self.assertEqual([r["tool_call_id"] for r in results], [c["id"] for c in calls])
 
     def test_history_rebuilds_the_protocol_shape(self):
-        from backend.routers import chat as ch
+        from backend import session_runtime
         rec = store.create(title="rebuild")
         store.append(rec, "user", "explore this")
         store.append(rec, "assistant", "looking", {"tools": [
@@ -1225,7 +1361,7 @@ class TestTurnHistory(Isolated):
             {"id": "c2", "name": "grep_files", "args": {"pattern": "x"},
              "result": "a.py:1", "is_error": True}]})
         store.save(rec)
-        hist = ch._history(store.get(rec["id"]))
+        hist = session_runtime._history(store.get(rec["id"]))
         asst = next(h for h in hist if h["role"] == "assistant")
         self.assertEqual(len(asst["tool_calls"]), 2)
         self.assertEqual(json.loads(asst["tool_calls"][0]["function"]["arguments"]),
@@ -1236,24 +1372,24 @@ class TestTurnHistory(Isolated):
 
     def test_a_silent_step_that_ran_tools_is_not_dropped(self):
         """Silent work is still work, and the agent must be able to remember it."""
-        from backend.routers import chat as ch
+        from backend import session_runtime
         rec = store.create(title="silent")
         store.append(rec, "user", "go")
         store.append(rec, "assistant", "", {"tools": [
             {"id": "s1", "name": "list_files", "args": {}, "result": "FILE a",
              "is_error": False}]})
         store.save(rec)
-        hist = ch._history(store.get(rec["id"]))
+        hist = session_runtime._history(store.get(rec["id"]))
         self.assertEqual(len([h for h in hist if h["role"] == "tool"]), 1)
 
     def test_a_call_is_never_emitted_without_its_result(self):
         """An unanswered call makes the API reject the whole request."""
-        from backend.routers import chat as ch
+        from backend import session_runtime
         rec = store.create(title="pair")
         store.append(rec, "user", "go")
         store.append(rec, "assistant", "x", {"tools": [{"name": "list_files", "args": {}}]})
         store.save(rec)
-        hist = ch._history(store.get(rec["id"]))
+        hist = session_runtime._history(store.get(rec["id"]))
         ids = [c["id"] for h in hist if h["role"] == "assistant"
                for c in (h.get("tool_calls") or [])]
         answers = [t["tool_call_id"] for t in hist if t["role"] == "tool"]
@@ -1369,8 +1505,7 @@ class TestGuidance(Isolated):
         self.assertEqual(trace[1]["text"], "There are 32 modules.")
 
     def test_the_nudge_is_not_stored_as_something_the_user_said(self):
-        from backend import agent
-        from backend.routers import chat as ch
+        from backend import agent, session_runtime
         orig = agent.engine.stream_chat
         turns = iter([
             [{"type": "text", "delta": "I'll start by exploring."},
@@ -1387,7 +1522,7 @@ class TestGuidance(Isolated):
         finally:
             agent.engine.stream_chat = orig
         store.save(rec)
-        roles = [m["role"] for m in ch._history(store.get(rec["id"]))]
+        roles = [m["role"] for m in session_runtime._history(store.get(rec["id"]))]
         self.assertEqual(roles.count("user"), 1,
                          "the harness nudge leaked into the user's voice")
 
@@ -2325,6 +2460,349 @@ class TestStuckTurnExit(Isolated):
         msgs, _e, _o, _r = self._drive(agent, "Write attack.py that recovers the key.")
         self.assertTrue([m for m in msgs if m.get("role") == "tool"
                          and "wrote attack.py" in str(m.get("content"))])
+
+
+# ── 7. autonomous assistant: state, persistence, and the pane's wiring ──────
+class TestAutonomyState(unittest.TestCase):
+    """The autonomy contract in assistant.py. No run, no I/O, no clock.
+
+    Item 7 was wired before it was tested, and the wiring guards the one failure
+    mode an unattended harness must not have: a limit that stops clamping, or a
+    counter a stale panel can rewind, becomes a run that keeps spending budget
+    after the person stopped watching.
+    """
+
+    def _rec(self):
+        return {"id": "s1", "mode": "agent", "messages": []}
+
+    def test_off_until_a_person_turns_it_on(self):
+        st = assistant.autonomy_of(self._rec())
+        self.assertFalse(st["enabled"], "a fresh session must never be armed")
+        self.assertEqual((st["cycles"], st["failures"]), (0, 0))
+        self.assertEqual(st["work_seconds"], 0.0)
+        self.assertGreater(st["max_cycles"], 0)
+        self.assertGreater(st["max_hours"], 0.0)
+
+    def test_autonomy_of_repairs_a_half_written_record(self):
+        """An older or truncated record cannot leave the harness without limits."""
+        st = assistant.autonomy_of({"assistantAutonomy": {
+            "enabled": True, "max_cycles": 0, "max_hours": 0,
+            "work_seconds": None, "failures": -5, "cycles": "3"}})
+        self.assertTrue(st["enabled"])
+        self.assertEqual(st["max_cycles"], 1, "a zero cycle limit would make every "
+                                              "launch refuse and the run unreadable")
+        self.assertGreaterEqual(st["max_hours"], 0.1)
+        self.assertEqual(st["cycles"], 3, "coerced from the string")
+        self.assertEqual(st["failures"], 0, "a negative failure count is not a credit")
+
+    def test_counters_are_not_settable_from_outside(self):
+        """The harness owns the counters. A panel posting its last-seen numbers
+        after three more turns ran would rewind the budget and buy more rope."""
+        rec = self._rec()
+        assistant.bump_counters(rec, cycles=5, work_seconds=600)
+        st = assistant.save_autonomy(rec, {"cycles": 0, "work_seconds": 0,
+                                           "failures": 0, "enabled": True})
+        self.assertEqual(st["cycles"], 5)
+        self.assertEqual(st["work_seconds"], 600)
+        self.assertEqual(st["failures"], 0, "nothing had failed, so nothing to reset")
+        self.assertTrue(st["enabled"], "switches and limits are settable; counts are not")
+
+    def test_limits_are_clamped_both_ways(self):
+        rec = self._rec()
+        st = assistant.save_autonomy(rec, {"max_cycles": 9999, "max_hours": 999})
+        self.assertLessEqual(st["max_cycles"], 500)
+        self.assertLessEqual(st["max_hours"], 48.0)
+        st = assistant.save_autonomy(rec, {"max_cycles": 0, "max_hours": 0})
+        self.assertEqual(st["max_cycles"], 1)
+        self.assertEqual(st["max_hours"], 0.1)
+        st = assistant.save_autonomy(rec, {"max_cycles": "junk"})
+        self.assertEqual(st["max_cycles"], 1, "a bad value keeps the last good limit")
+
+    def test_reason_is_stored_but_truncated(self):
+        rec = self._rec()
+        st = assistant.save_autonomy(rec, {"reason": "x" * 5000})
+        self.assertLessEqual(len(st["reason"]), 200)
+
+    def test_unknown_fields_are_ignored(self):
+        rec = self._rec()
+        before = dict(assistant.autonomy_of(rec))
+        st = assistant.save_autonomy(rec, {"messages": [], "transcript": "wipe",
+                                           "model": "other"})
+        self.assertEqual({k: st[k] for k in before}, before)
+
+    def test_budget_left_is_whichever_comes_first(self):
+        full = assistant.AUTONOMY_DEFAULTS
+        # cycles exhausted, hours untouched
+        ok, why = assistant.budget_left(dict(full, cycles=20, max_cycles=20,
+                                             work_seconds=0))
+        self.assertFalse(ok)
+        self.assertIn("20", why)
+        # hours exhausted, cycles untouched
+        ok, why = assistant.budget_left(dict(full, cycles=1, max_cycles=20,
+                                             work_seconds=5 * 3600, max_hours=5.0))
+        self.assertFalse(ok)
+        self.assertIn("hour", why)
+        # neither
+        ok, why = assistant.budget_left(dict(full, cycles=19, max_cycles=20,
+                                             work_seconds=60, max_hours=5.0))
+        self.assertTrue(ok)
+        self.assertEqual(why, "")
+
+    def test_two_failures_in_a_row_is_the_stop_line(self):
+        rec = self._rec()
+        st = assistant.note_launch(rec, ok=False)
+        self.assertEqual(st["failures"], 1)
+        st = assistant.note_launch(rec, ok=False)
+        self.assertEqual(st["failures"], 2)
+        self.assertEqual(st["failures"], assistant.MAX_LAUNCH_FAILURES,
+                         "the harness stops on this count; the constant and the "
+                         "counter must agree")
+        st = assistant.note_launch(rec, ok=True)
+        self.assertEqual(st["failures"], 0, "one hiccup after a good run is not two")
+
+    def test_goal_block_is_pinned_outside_the_transcript(self):
+        self.assertEqual(assistant.goal_block(self._rec()), {},
+                         "no Goal costs nothing")
+        rec = self._rec()
+        rec[assistant.GOAL_FIELD] = "Ship the meter fix, then write the tests."
+        block = assistant.goal_block(rec)
+        self.assertIn("Ship the meter fix", block["text"])
+        self.assertGreater(block["tokens"], 0)
+        self.assertEqual(rec["messages"], [],
+                         "the Goal is a record field: compaction rewrites messages "
+                         "and would summarise the objective away")
+
+    def test_extract_prompt_takes_the_last_block(self):
+        answer = ("Looking at this: the earlier attempt said\n\n"
+                  "```\nrun the old tests\n```\n\n"
+                  "but that is stale. Here is the next step:\n\n"
+                  "```\nFix the clamp in save_autonomy and re-run.\n```\n")
+        self.assertEqual(assistant.extract_prompt(answer),
+                         "Fix the clamp in save_autonomy and re-run.",
+                         "the persona puts the handoff last; an earlier quoted "
+                         "block must not be the one the agent runs")
+
+    def test_extract_prompt_contract(self):
+        self.assertEqual(assistant.extract_prompt("prose with no block at all"), "",
+                         "no block is the 'carry on' signal, not an error")
+        self.assertEqual(assistant.extract_prompt(""), "")
+        self.assertEqual(assistant.extract_prompt("```\nDONE\n```"), assistant.DONE)
+        self.assertEqual(assistant.extract_prompt("```python\nContinue.\n```"),
+                         assistant.CONTINUE_PROMPT, "an info-string fence is still a block")
+        self.assertEqual(assistant.extract_prompt("```\nhanded over mid-stream"),
+                         "handed over mid-stream",
+                         "a reply cut off should still deliver its instruction")
+
+    def test_delete_message_bounds(self):
+        rec = {"assistant": [{"role": "user", "content": "a"},
+                             {"role": "assistant", "content": "b"},
+                             {"role": "assistant", "content": "c"}]}
+        self.assertFalse(assistant.delete_message(rec, None))
+        self.assertFalse(assistant.delete_message(rec, "not a number"))
+        self.assertFalse(assistant.delete_message(rec, 3), "past the end")
+        self.assertFalse(assistant.delete_message(rec, -1), "no python-style wrap")
+        self.assertEqual(len(rec["assistant"]), 3, "a refused delete changes nothing")
+        self.assertTrue(assistant.delete_message(rec, "1"), "indexes arrive as strings")
+        self.assertEqual([m["content"] for m in rec["assistant"]], ["a", "c"])
+        self.assertFalse(assistant.delete_message({"assistant": []}, 0))
+
+
+class TestAutonomyPersistence(Isolated):
+    """Goal and run state against the real store. Still no run is started."""
+
+    def _rec(self):
+        rec = store.create(title="autonomy", project=None, model="p/m", mode="agent")
+        return store.save(rec)
+
+    def test_store_get_is_a_fresh_read(self):
+        """The refused-enable guard depends on this: if get() ever returned a shared
+        cached dict, mutating a record before a refusal would arm the run anyway."""
+        rec = self._rec()
+        sid = rec["id"]
+        first = store.get(sid)
+        assistant.save_autonomy(first, {"enabled": True, "max_cycles": 42})
+        again = store.get(sid)
+        # Nothing was saved, so the field is not on disk at all — the mutation
+        # died with the dict it was made on.
+        self.assertNotIn(assistant.AUTONOMY_FIELD, again,
+                         "a mutation of a fetched record must not be visible to the "
+                         "next reader until it is saved")
+        self.assertIsNot(first, again)
+
+    def test_a_stale_save_cannot_rewind_the_run(self):
+        """The bug that made the assistant's 'last 5 turns' come back as 20, in
+        the field that matters most: a turn holds a record for minutes while the
+        harness drives the counters from another thread."""
+        sid = self._rec()["id"]
+        stale = store.get(sid)                      # loaded before the run started
+        store.patch(sid, assistantAutonomy=dict(assistant.AUTONOMY_DEFAULTS,
+                                                enabled=True, cycles=7,
+                                                work_seconds=300.0))
+        store.save(stale)                           # the turn finishing
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertEqual(st["cycles"], 7, "the turn's save rewound the cycle count")
+        self.assertEqual(st["work_seconds"], 300.0)
+        self.assertTrue(st["enabled"])
+
+    def test_a_refused_enable_never_reaches_disk(self):
+        from backend import session_runtime
+        sid = self._rec()["id"]                     # no Goal set
+        out = session_runtime.autonomy_set(sid, enabled=True)
+        self.assertFalse(out["ok"])
+        self.assertIn("Goal", out["error"])
+        self.assertFalse(out["enabled"])
+        self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"],
+                         "a refusal that armed the run on disk would start "
+                         "spending budget the moment a turn ended")
+
+    def test_goal_and_budget_survive_a_reload(self):
+        from backend import session_runtime
+        sid = self._rec()["id"]
+        session_runtime.goal_set(sid, "Make the context meter honest.")
+        st = session_runtime.autonomy_set(sid, max_cycles=3, max_hours=1.5)
+        self.assertTrue(st["ok"])
+        # autonomy_state() is the flat state; the Goal rides beside it on the
+        # record, not inside it.
+        reloaded = session_runtime.autonomy_state(sid)
+        self.assertEqual(assistant.goal_of(store.get(sid)),
+                         "Make the context meter honest.")
+        self.assertEqual(reloaded["max_cycles"], 3)
+        self.assertAlmostEqual(reloaded["max_hours"], 1.5)
+        self.assertFalse(reloaded["enabled"],
+                         "setting a budget is not arming a run")
+
+    def test_enabling_is_inert_until_a_turn_ends(self):
+        """The chain is driven by the turn epilogue, so flipping the switch cannot
+        launch anything by itself. Pinned here because 'do not start a run' is
+        otherwise only a habit, not a fact about the code. The switch goes back
+        off in cleanup, and no prompt is ever sent, so nothing can run."""
+        from backend import session_runtime
+        sid = self._rec()["id"]
+        session_runtime.goal_set(sid, "Finish PLAN.md item 7.")
+        st = session_runtime.autonomy_set(sid, enabled=True)
+        self.addCleanup(session_runtime.autonomy_set, sid,
+                        enabled=False, reason="test teardown")
+        self.assertTrue(st["ok"])
+        self.assertTrue(st["enabled"])
+        self.assertEqual(st["cycles"], 0)
+        self.assertFalse(session_runtime.turn_running(sid))
+        self.assertFalse(session_runtime.assistant_running(sid))
+        # instant off
+        off = session_runtime.autonomy_set(sid, enabled=False)
+        self.assertFalse(off["enabled"])
+        self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"])
+
+    def test_reset_clears_the_tally_and_nothing_else(self):
+        """The hour budget is accumulated work_seconds, not a wall-clock start —
+        so a reset that left the spend behind would end the next run at once. And
+        a reset that also took the limits, the Goal or the switch would be the
+        panel editing the harness's own state."""
+        from backend import session_runtime
+        sid = self._rec()["id"]
+        session_runtime.goal_set(sid, "Finish PLAN.md item 7.")
+        session_runtime.autonomy_set(sid, max_cycles=7, max_hours=2.5)
+        rec = store.get(sid)
+        assistant.bump_counters(rec, cycles=4, work_seconds=90)
+        assistant.note_launch(rec, ok=False)
+        assistant.save_autonomy(rec, {"reason": "hit the limit"})
+        store.patch(sid, assistantAutonomy=rec[assistant.AUTONOMY_FIELD])
+        before = assistant.autonomy_of(store.get(sid))
+        self.assertEqual(before["cycles"], 4, "the setup did not reach disk")
+        self.assertEqual(before["work_seconds"], 90.0)
+        self.assertEqual(before["failures"], 1)
+
+        st = session_runtime.autonomy_reset(sid)
+        self.assertEqual(st["cycles"], 0)
+        self.assertEqual(st["work_seconds"], 0.0)
+        self.assertEqual(st["failures"], 0)
+        self.assertEqual(st["reason"], "")
+        # what a reset must not touch
+        self.assertEqual(st["max_cycles"], 7)
+        self.assertAlmostEqual(st["max_hours"], 2.5)
+        self.assertFalse(st["enabled"],
+                         "reset is not the switch; zeroing the spend must not "
+                         "stop a run that is going")
+        self.assertEqual(assistant.goal_of(store.get(sid)), "Finish PLAN.md item 7.")
+        self.assertEqual(assistant.autonomy_of(store.get(sid))["cycles"], 0,
+                         "the reset has to be on disk, not just in the reply")
+
+    def test_the_owned_fields_are_the_harness_and_panel_writers(self):
+        """Every field two writers touch must be PRESERVED, or one silently
+        reverts the other. New autonomy fields have to join the list."""
+        for field in (assistant.GOAL_FIELD, assistant.AUTONOMY_FIELD):
+            self.assertIn(field, store.PRESERVED)
+
+
+class TestAssistantPaneWiring(unittest.TestCase):
+    """The pane and the socket speak the same words. A rename on one side is a
+    dead button on the other, and nothing but this test would notice."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def _read(self, rel):
+        return (self.ROOT / rel).read_text(encoding="utf-8")
+
+    def test_the_five_controls_are_in_the_markup(self):
+        html = self._read("static/index.html")
+        for element in ('id="asGoal"', 'id="asAuto"', 'id="asBudget"', 'id="asReset"',
+                        'id="asRun"'):
+            self.assertIn(element, html)
+        self.assertIn("static/assistant.js", self._read("static/index.html"))
+
+    def test_the_pane_sends_exactly_the_kinds_the_socket_handles(self):
+        js = self._read("static/assistant.js")
+        py = self._read("backend/routers/chat.py")
+        # the pane sends { type: ... }; the socket reads kind or type
+        self.assertIn('kind = msg.get("type")', py)
+        sent = set(__import__("re").findall(r"send\(\{\s*type:\s*'(assistant_\w+)'", js))
+        handled = set(__import__("re").findall(r'kind == "(assistant_\w+)"', py))
+        for kind in ("assistant_goal", "assistant_autonomy", "assistant_reset",
+                     "assistant_delete", "assistant_send"):
+            self.assertIn(kind, sent, f"the pane no longer sends {kind}")
+            self.assertIn(kind, handled, f"the socket no longer handles {kind}")
+        self.assertEqual(sent - handled, set(),
+                         f"the pane sends kinds nobody handles: {sorted(sent - handled)}")
+
+    def test_the_pane_listens_for_the_events_the_server_emits(self):
+        js = self._read("static/assistant.js")
+        py = self._read("backend/routers/chat.py")
+        listened = set(__import__("re").findall(r"case '(assistant_\w+)'", js))
+        emitted = set(__import__("re").findall(r'"type": "(assistant_\w+)"', py))
+        self.assertIn("assistant_autonomy", listened)
+        self.assertIn("assistant_goal", listened)
+        self.assertEqual(emitted - listened, set(),
+                         "every event the socket emits must reach the pane. The "
+                         "pane also listens for the streamed rows the runtime "
+                         "publishes directly, so listened is the wider set.")
+
+    def test_send_to_agent_sends_an_index_not_the_text(self):
+        """The server re-reads the message from the record, so a stale pane cannot
+        hand the agent text that has since been deleted."""
+        js = self._read("static/assistant.js")
+        self.assertIn("index: +sendBtn.dataset.send", js)
+        self.assertNotIn("send({ type: 'assistant_send', message:", js)
+
+    def test_the_run_row_refuses_loudly(self):
+        js = self._read("static/assistant.js")
+        self.assertIn("autonomy.ok === false", js, "a refused enable must say why")
+        self.assertIn("sw.disabled = !autonomy.enabled && !(goal || '').trim();", js,
+                      "no Goal, no switch")
+
+    def test_the_seam_into_the_main_pane_is_exported(self):
+        app = self._read("static/app.js")
+        js = self._read("static/assistant.js")
+        # app.js owns the socket and hands the pane a sender; the pane publishes
+        # itself as window.TacitAssistant for the main pane to route into.
+        self.assertIn("sendMessage: (obj) => { if (ws && ws.readyState === 1)"
+                      " ws.send(JSON.stringify(obj)); },", app)
+        self.assertIn("window.Tacit && window.Tacit.sendMessage &&"
+                      " window.Tacit.sendMessage(obj)", js)
+        self.assertIn("window.TacitAssistant = { handle, sessionChanged, load,"
+                      " togglePanel, setExternalBusy };", js)
+        # and the main pane routes every assistant event to it
+        self.assertIn("window.TacitAssistant.handle(m)", app)
+        self.assertIn("window.TacitAssistant.setExternalBusy(m.assistantBusy)", app)
+        self.assertIn("window.TacitAssistant.sessionChanged(activeId)", app)
 
 
 if __name__ == "__main__":

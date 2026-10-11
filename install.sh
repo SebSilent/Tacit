@@ -61,15 +61,24 @@ esac
 # ── prerequisites ─────────────────────────────────────────────────────────
 command -v curl >/dev/null 2>&1 || die "curl is required to download Tacit. Install it and re-run."
 
+# The interpreter must be a real base Python, not another project's virtualenv: a
+# venv built by one records that interpreter in pyvenv.cfg and inherits its
+# layout, which ties Tacit to a tool the user never chose and may uninstall. Any
+# candidate whose prefix differs from its base_prefix is skipped, not used.
 PY=""
+SKIPPED=""
 for candidate in python3 python; do
     if command -v "$candidate" >/dev/null 2>&1; then
-        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) and sys.prefix == sys.base_prefix else 1)' 2>/dev/null; then
             PY="$candidate"; break
         fi
+        SKIPPED="$SKIPPED $candidate"
     fi
 done
-[ -n "$PY" ] || die "Python 3.10 or newer is required. Install it and re-run."
+for s in $SKIPPED; do
+    warn "skipping $s - it is a virtualenv, not a base Python; using one would tie Tacit to that project"
+done
+[ -n "$PY" ] || die "Python 3.10 or newer is required (a base install, not another project's virtualenv). Install it and re-run."
 ok "prerequisites present ($($PY --version 2>&1))"
 
 # ── source checkout ───────────────────────────────────────────────────────
