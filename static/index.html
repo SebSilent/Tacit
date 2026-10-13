@@ -13,7 +13,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <svg viewBox="0 0 24 24" class="brand-icon"><path d="M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z"/></svg>
-      <div class="brand-text"><span class="brand-name">Tacit</span><span class="brand-sub">Default Harness</span></div>
+      <div class="brand-text"><span class="brand-name">Tacit</span><span class="brand-sub" id="brandVersion" title="version of this checkout"></span></div>
     </div>
 
     <button class="new-chat-btn" id="newChatBtn">
@@ -29,7 +29,7 @@
       <button data-mode="chat" class="active">Chat</button>
       <button data-mode="agent">Agent</button>
     </div>
-    <div class="ctl-card">
+    <div class="card ctl-card">
       <div class="ctl-row"><span class="ctl-label">Provider</span><select id="providerSelect" class="ctl-select"></select></div>
       <div class="ctl-row"><span class="ctl-label">Model</span><select id="modelSelect" class="ctl-select"></select></div>
       <div class="ctl-row"><span class="ctl-label">Thinking</span><select id="thinkSelect" class="ctl-select"></select></div>
@@ -363,7 +363,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=44"></script>
+<script src="/static/app.js?v=45"></script>
 <script src="/static/git.js?v=15"></script>
 <script src="/static/harness.js?v=21"></script>
 <script src="/static/platform.js?v=15"></script>

@@ -258,6 +258,7 @@ def _pid_cmdline(pid: int) -> str:
                 ["powershell", "-NoProfile", "-Command",
                  f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}')"
                  ".CommandLine"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=20)
             return (out.stdout or "").strip()
         except Exception:
@@ -268,6 +269,27 @@ def _pid_cmdline(pid: int) -> str:
                 return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace").strip()
         except Exception:
             return ""
+
+
+def kill_tree(pid: int) -> bool:
+    """Hard-stop a process and everything under it, by pid.
+
+    Only ever called on a pid whose *current* command line has been proved to
+    carry one of our markers — that proof is what makes a tree kill safe, and it
+    is why nothing here looks at the exe name. The Windows call keeps `taskkill`
+    on the inherited-stdin allowlist (tests/test_shell_stdin.py): it is a Tacit
+    tool call, not an agent command, and it takes no input.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(int(pid))],
+                           capture_output=True, timeout=15)
+        else:
+            import signal
+            os.kill(int(pid), signal.SIGKILL)
+        return True
+    except Exception:
+        return False
 
 
 def sweep() -> dict:
@@ -303,15 +325,7 @@ def sweep() -> dict:
             cmdline = _pid_cmdline(pid)
             if any(m in cmdline for m in MARKERS):
                 # Ours, from a previous crash. Kill it.
-                try:
-                    if os.name == "nt":
-                        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                                       capture_output=True, timeout=15)
-                    else:
-                        import signal
-                        os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
+                kill_tree(pid)
                 killed.append(row)
             else:
                 # Alive but we cannot prove it is ours (pid reuse, or the
@@ -381,7 +395,9 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
         env.pop("TACIT_SESSION_ID", None)
     if not mark and isinstance(argv, str):
         # The user's command, verbatim.
-        proc = subprocess.Popen(argv, cwd=cwd, env=env, **popen_kwargs)
+        proc = subprocess.Popen(argv, cwd=cwd, env=env,
+                          stdin=popen_kwargs.pop("stdin", subprocess.DEVNULL),
+                          **popen_kwargs)
         proc._tacit_role = role
         if contain:
             _assign_job(proc)
@@ -392,7 +408,9 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
     if not argv:
         raise ValueError("empty argv")
     marked = _marked_argv(argv, role) if mark else list(argv)
-    proc = subprocess.Popen(marked, cwd=cwd, env=env, **popen_kwargs)
+    proc = subprocess.Popen(marked, cwd=cwd, env=env,
+                            stdin=popen_kwargs.pop("stdin", subprocess.DEVNULL),
+                            **popen_kwargs)
     proc._tacit_role = role
     if contain:
         _assign_job(proc)

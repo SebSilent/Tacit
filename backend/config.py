@@ -173,11 +173,20 @@ BROWSER_TIMEOUT = int(os.environ.get("TACIT_BROWSER_TIMEOUT", "90"))
 BROWSER_TEXT_LIMIT = int(os.environ.get("TACIT_BROWSER_TEXT_LIMIT", "6000"))
 BROWSER_SEARCH_TIMEOUT = int(os.environ.get("TACIT_BROWSER_SEARCH_TIMEOUT", "120"))
 RESEARCH_ASPECTS = int(os.environ.get("TACIT_RESEARCH_ASPECTS", "3"))
-RESEARCH_MAX_STEPS = int(os.environ.get("TACIT_RESEARCH_STEPS", "10"))
+# Retuned for what this tool actually is: a bounded read-only sweep, not an
+# unbounded investigation. Ten steps per aspect was sized for work nobody asks
+# research for — an ordinary check is two or three fetches and a browse, and the
+# steps past that are a sub-agent wandering. The wall clock came down with it:
+# 600s of a card that looked frozen was indistinguishable from a hang, and the
+# cap fires a *partial report* rather than an error, so a shorter cap costs a
+# thinner answer, never a missing one. These three numbers are what the tool
+# description and the run's first notify state, so the budget is on screen and
+# not hidden here.
+RESEARCH_MAX_STEPS = int(os.environ.get("TACIT_RESEARCH_STEPS", "6"))
 # A research call used to be unbounded in wall clock and tokens: three sub-agents
 # at ten steps each, serially, with nothing watching the clock. The cap is on the
 # whole call, not per aspect, because the caller is the one waiting.
-RESEARCH_TIMEOUT_S = int(os.environ.get("TACIT_RESEARCH_TIMEOUT", "600"))
+RESEARCH_TIMEOUT_S = int(os.environ.get("TACIT_RESEARCH_TIMEOUT", "240"))
 # Delegated work (sub-agents, research) runs on the session's model unless this
 # names another one. Empty means: same model, which is the old behaviour.
 DELEGATE_MODEL = os.environ.get("TACIT_DELEGATE_MODEL", "")
@@ -381,6 +390,19 @@ def turn_sound() -> bool:
     return True if v is None else bool(v)
 
 
+def alert_sound() -> bool:
+    """Whether the browser chimes for things that happen *during* work. Off by default.
+
+    The turn-end chime above announces finished work, which is why it can start
+    on. These two are a different promise: a budget warning fires while a turn is
+    still running, and the tick fires once per cycle of a loop that can run for
+    hours unattended. Sound that repeats by itself is the kind a person reaches
+    for the mute on, so it starts silent and is opted into.
+    """
+    v = prefs().get("alertSound")
+    return False if v is None else bool(v)
+
+
 def deliver_guarantee() -> bool:
     """The delivery guarantee, on by default.
 
@@ -397,6 +419,39 @@ def deliver_guarantee() -> bool:
         return raw.strip().lower() not in ("0", "off", "false", "no")
     v = prefs().get("deliverGuarantee")
     return True if v is None else bool(v)
+
+
+SHELL_OVERLAP_MODES = ("block", "advise", "off")
+
+
+def shell_overlap_pinned() -> bool:
+    """True when TACIT_SHELL_OVERLAP outranks the stored preference.
+
+    The Settings switch needs to know: saving a mode the environment overrides
+    would leave a control that lies about what is running, which is the failure
+    mode the gated MCP rows on the same tab exist to avoid.
+    """
+    return os.environ.get("TACIT_SHELL_OVERLAP") is not None
+
+
+def shell_overlap() -> str:
+    """How the agent's shell is policed for commands that re-implement a tool.
+
+    "block" (the default) refuses a command whose every segment is a worse version
+    of read_file/list_files/grep_files/write_file/edit_file and returns the tool
+    call instead; "advise" runs it and appends one line; "off" stays silent.
+
+    Defaulting to block is the point: the observed behaviour is the agent reaching
+    for `type` and `dir` habitually (174 shell calls to 44 read_file on the
+    recorded runs), and a switch that defaults off fixes nothing. Off exists
+    because an interception that is occasionally wrong has to be overridable from
+    inside the session, or it reads as a broken tool.
+    """
+    raw = os.environ.get("TACIT_SHELL_OVERLAP")
+    if raw is None:
+        raw = str(prefs().get("shellOverlap") or "")
+    v = raw.strip().lower()
+    return v if v in SHELL_OVERLAP_MODES else "block"
 
 
 def save_prefs(patch: dict) -> dict:

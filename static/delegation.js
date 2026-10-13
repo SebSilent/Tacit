@@ -49,22 +49,28 @@
         'the transcript.</span></div>';
       return;
     }
+    // Every event re-renders the whole card set, so anything the person has
+    // *done* to a card — expanded its trace — has to live on the card object or
+    // it is lost on the next one. With research ticking once a second, a trace
+    // that collapses under the reader is the failure mode here.
     box.innerHTML = mine.map((k) => {
       const c = cards.get(k);
       const age = Math.max(0, Math.round((Date.now() - (c.ts || 0)) / 1000));
       const traceHtml = renderTrace(c.trace || []);
+      const open = !!c.expanded;
       return `
-      <div class="dg-card ${c.state || 'active'}" data-key="${esc(k)}">
-        <div class="dg-head">
+      <div class="card dg-card ${c.state || 'active'}" data-key="${esc(k)}" data-ts="${c.ts || 0}">
+        <div class="card-head">
           <span class="dg-dot"></span>
           <span class="dg-label">${esc(c.label || k)}</span>
           <span class="dg-age">${age}s</span>
-          <button class="dg-toggle" title="Expand/collapse" aria-expanded="false">
+          <button class="dg-toggle" title="Expand/collapse" aria-expanded="${open ? 'true' : 'false'}">
             <svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
           </button>
         </div>
         <div class="dg-activity">${esc(c.activity || 'working…')}</div>
-        <div class="dg-trace" hidden>${traceHtml}</div>
+        ${c.budget ? `<div class="dg-budget">${esc(budgetLine(c.budget))}</div>` : ''}
+        <div class="dg-trace"${open ? '' : ' hidden'}>${traceHtml}</div>
       </div>`;
     }).join('');
 
@@ -80,8 +86,21 @@
           btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
           btn.querySelector('svg').style.transform = expanded ? '' : 'rotate(180deg)';
         }
+        const c = cards.get(card.getAttribute('data-key'));
+        if (c) c.expanded = !expanded;
       });
     });
+  }
+
+  // Rendered from the budget the backend sent with the first note, never from a
+  // constant copied into this file: the numbers a person reads have to be the
+  // numbers the run enforces, and `config` is the only place they live.
+  function budgetLine(b) {
+    const bits = [];
+    if (b.aspects) bits.push('up to ' + b.aspects + ' aspects');
+    if (b.steps) bits.push(b.steps + ' steps each');
+    if (b.cap_s) bits.push(b.cap_s + 's cap');
+    return bits.join(' · ');
   }
 
   function renderTrace(trace) {
@@ -201,8 +220,10 @@
     }
     const existing = cards.get(key);
     const trace = (existing && existing.trace) || [];
-    // Append this event to the trace
-    trace.push(m);
+    // A heartbeat tick is a timer, not history. It has to reach the card — that
+    // is the whole point of sending it — without piling up to 240 invisible
+    // entries onto the trace of a run that hits its cap.
+    if (m.type !== 'tool_progress') trace.push(m);
     // Determine done state: explicit done flag, or tool_end without error,
     // or a substantial text event after tool activity.
     let state = 'active';
@@ -213,7 +234,13 @@
       label: label || (existing && existing.label) || key,
       activity: activity || (existing && existing.activity) || 'working…',
       state: state,
-      ts: Date.now(),
+      // How long this card has existed. Refreshing `ts` on every event pinned
+      // every busy card to "0s", which is the one number the person waiting on
+      // this run came here to read.
+      ts: (existing && existing.ts) || Date.now(),
+      budget: m.budget || (existing && existing.budget) || null,
+      // Set from the card, not from the DOM: the next event rebuilds this node.
+      expanded: existing ? !!existing.expanded : false,
       trace: trace,
     });
     if (!order.includes(key)) order.push(key);
@@ -232,6 +259,21 @@
       if (k.startsWith(prefix)) { cards.delete(k); order.splice(order.indexOf(k), 1); }
     }
     renderMessages();
+  }
+
+  // ── the age keeps moving even when nothing is arriving ─────────────────
+  // Research ticks once a second on its own, but a `task` sub-agent sitting in a
+  // ninety-second build emits nothing at all, and a card frozen at "0s" looks
+  // exactly like a dead one. Text-only update on purpose: rebuilding innerHTML
+  // here would close the trace the reader is currently looking at.
+  function tickAges() {
+    if (!isOpen()) return;
+    document.querySelectorAll('.dg-card').forEach((el) => {
+      const ts = Number(el.getAttribute('data-ts') || 0);
+      if (!ts) return;
+      const out = el.querySelector('.dg-age');
+      if (out) out.textContent = Math.max(0, Math.round((Date.now() - ts) / 1000)) + 's';
+    });
   }
 
   // ── auto-open on launch ────────────────────────────────────────────────
@@ -280,6 +322,7 @@
       }
     });
     renderMessages();
+    setInterval(tickAges, 1000);   // install() has already returned if the panel is not here
   }
 
   function togglePanel() {

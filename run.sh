@@ -21,4 +21,16 @@ fi
 export TACIT_PORT="${TACIT_PORT:-8550}"
 export TACIT_HOME="${TACIT_HOME:-$HOME/.tacit}"
 echo "[tacit] http://localhost:$TACIT_PORT   state: $TACIT_HOME"
-exec "$VENVPY" -m backend.main "$@"
+# Stop what is provably Tacit's and wait for the port before starting anything.
+# The Restart button runs this same script, so there is one launch path. The step
+# is Python because proving a process is ours means reading its command line, and
+# doing that in sh means a platform branch per statement.
+"$VENVPY" -m backend.launcher prelaunch || {
+    echo "[tacit] not started: a Tacit server still holds the port." >&2
+    echo "[tacit] nothing was launched; see restart.log in the Tacit state folder." >&2
+    exit 1
+}
+# The marker token is what lets a later stop step prove this process is Tacit's;
+# it sits where the interpreter ignores it, so a server started here looks like
+# one started by the Restart button's watcher.
+exec "$VENVPY" -m backend.main tacit-server "$@"

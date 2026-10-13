@@ -1,4 +1,5 @@
 import collections
+import contextvars
 import fnmatch
 import inspect
 import json
@@ -64,7 +65,14 @@ def _clip(text: str, limit: int | None = None) -> str:
 
 # Commands whose only job is to print a file. Piping or grepping disqualifies a
 # command from the hint, because there the cut is in a derived result, not in a source.
-_DUMPERS = ("cat", "head", "tail", "less", "more", "sed")
+# The verb set is read from the overlap table so there is one vocabulary, not two that
+# can disagree: `cat`/`type` arrive from it, while head/tail/less/more/sed are added by
+# hand because no tool returns "the last N lines" and `sed` maps to edit_file there
+# (printing a range is the one shape where it is a dump). Absorbing the old hint this
+# way also fixes a gap: `type` — the file printer on Windows, which this platform runs
+# on — was never covered at all.
+_DUMPERS = tuple(v for v, (tool, _) in guidance.SHELL_OVERLAP.items()
+                 if tool == "read_file") + ("head", "tail", "less", "more", "sed")
 _FILE_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,6}")
 
 
@@ -275,8 +283,29 @@ def _blocked_shell(command: str) -> bool:
     return False
 
 
+def _audit_overlap(cmd: str, hit: dict, mode: str, chars: int, session: str) -> None:
+    """Put the cost of an overlap line or a refusal in the ledger.
+
+    Guidance is paid for on every step and is otherwise invisible, and "one short
+    line" is a claim that needs checking rather than asserting: `run_shell` skips
+    the ordinary tool row (`_audit_tool` returns early for it, because the sandbox
+    writes a richer one), so without this the added tokens belong to no record.
+    """
+    audit.record("shell_overlap", session=session, tool="run_shell", mode=mode,
+                 status="blocked" if mode == "blocked" else "noted",
+                 verbs=",".join(hit.get("verbs") or [])[:60],
+                 tools=",".join(hit.get("tools") or [])[:60],
+                 chars=int(chars or 0), pure=bool(hit.get("pure")))
+
+
 def t_run_shell(command: str, project: str | None = None, timeout: int | None = None,
-                session: str = "") -> str:
+                session: str = "", on_output=None) -> str:
+    """Run one shell command. `on_output` is injected by `call_tool`, never by the
+    model — it is not in the tool schema, so no argument list can bring one in. It
+    exists only so a person watching the card sees the run while it is happening;
+    the string returned below, which is the model's entire view, is identical with
+    or without it.
+    """
     cmd = str(command or "").strip()
     if not cmd:
         return "ERROR: empty command"
@@ -284,9 +313,19 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
         return ("version control is turned off for the agent in this workspace. Use the Git panel "
                 "for status, commits, branches, push and pull, or turn the agent's access on in "
                 "Settings > Tools.")
+    # A command that is nothing but a worse version of a first-class tool is refused
+    # before it runs (mode "block"), and a real command that merely contains one gets
+    # a line after the result ("advise", or the note block "block" declined to refuse).
+    mode = config.shell_overlap()
+    hit = guidance.overlap(cmd) if mode != "off" else None
+    if hit and mode == "block" and hit["pure"]:
+        refusal = guidance.overlap_refusal(hit)
+        _audit_overlap(cmd, hit, "blocked", len(refusal), session)
+        return refusal
     # Everything runs through the sandbox layer, so which backend ran it, and what
     # it changed, is recorded whether or not isolation was in force.
-    res = sandbox.run(cmd, project=project, timeout=timeout, session=session)
+    res = sandbox.run(cmd, project=project, timeout=timeout, session=session,
+                      on_output=on_output)
     if not res.get("ok"):
         err = (res.get("stderr") or "ERROR: the command did not run").strip()
         if "timed out" in err:
@@ -313,7 +352,14 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
             body += f"\n[{res['backend']}] {note}"
     clipped = _clip(body)
     hint = _dump_hint(cmd, clipped)
-    return clipped + hint if hint else clipped
+    # A clipped file dump already gets a precise sentence naming read_file and the
+    # file; a second line saying the same thing is the bloat this exists to remove.
+    if hint and hit and hit["tools"] == ["read_file"]:
+        hit = None
+    note = guidance.overlap_note(hit) if hit else ""
+    if hit:
+        _audit_overlap(cmd, hit, mode, len(note), session)
+    return clipped + hint + note
 
 
 def t_bg_start(command: str, project: str | None = None, cwd: str | None = None,
@@ -433,11 +479,19 @@ def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     tool calls with no tool_start, no notify, nothing. This yields the aspects'
     events as they happen, tagged `research: True`, and puts the report in
     ``out["result"]`` at the end, exactly as `run_subagent` does for `task`.
+
+    `parent_call_id` doubles as the research call's own card id, which is what
+    the heartbeats inside `research()` tick on — the one event type that stays on
+    the main transcript rather than becoming `delegation_activity`, because
+    `session_runtime` only redirects text/reason/tool_start/tool_end/notify.
+    ``ctx["stop"]`` is handed down too: a Stop press now abandons the call at the
+    next second instead of waiting out its wall-clock cap.
     """
     from . import research as R
     report: list = []
     for ev in R.research(str(args.get("question") or ""), project=ctx.get("project"),
-                         ref=ctx.get("ref")):
+                         ref=ctx.get("ref"), call_id=parent_call_id or "",
+                         stop=ctx.get("stop")):
         if isinstance(ev, dict):
             yield {**ev, "research": True, "parent_call_id": parent_call_id}
         else:
@@ -456,7 +510,13 @@ def run_terminal(command: str, project: str | None = None, timeout: int | None =
         return {"ok": False, "error": "empty command", "cwd": str(cwd), "shell": config.SHELL}
     limit = max(1, min(int(timeout or config.SHELL_TIMEOUT), 600))
     try:
-        r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True, text=True, timeout=limit)
+        # stdin: DEVNULL, same reason as every other spawn site. This one runs in
+        # the server process rather than a turn worker, so it inherits the console
+        # Tacit was started from: a command that reads input sits there until the
+        # timeout kills it, and the person watching the terminal sees a hang with
+        # no explanation.
+        r = subprocess.run(cmd, shell=True, cwd=str(cwd), stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=limit)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timed out after {limit}s", "cwd": str(cwd), "shell": config.SHELL}
     except Exception as e:
@@ -627,8 +687,16 @@ TOOLS = [
                    "that need JavaScript - plain pages are faster with fetch.",
         {"action": _S, "url": _S, "selector": _S, "text": _S, "path": _S, "full": {"type": "boolean"}},
         ["action"]),
-    _fn("research", "Investigate a question across several sources and return a cited report "
-                    "with a section on what could not be confirmed. Slower than a plain fetch.",
+    # Re-scoped on purpose. "Investigate a question across several sources" sold
+    # this as deep research, and the only cost hint offered was "slower than a
+    # plain fetch" — which is true of almost everything. It is a bounded sweep
+    # with a stated budget, so the budget goes in the description, read from
+    # config so the sentence cannot drift away from the caps.
+    _fn("research", f"Bounded multi-source check: up to {config.RESEARCH_ASPECTS} read-only "
+                    f"sub-agents sweep in parallel ({config.RESEARCH_MAX_STEPS} steps each, "
+                    f"{config.RESEARCH_TIMEOUT_S}s wall clock), then one cited report with an "
+                    "Uncertainties section. Costs far more than `fetch` — use it when the "
+                    "question needs several sources, not one.",
         {"question": _S}, ["question"]),
     _fn("evidence", "Record a citable fact (action=add with source/note/snippet), read one back "
                     "(get, by id) or list what is recorded.",
@@ -1351,6 +1419,107 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
            "message": "sub-agent complete"}
 
 
+# ── live tool output ──────────────────────────────────────────────────────
+# None of this changes what the model sees. The tool's return value is the same
+# string it always was, clipped by TOOL_OUTPUT_LIMIT on the way into the
+# transcript; what follows only decides when a *person* gets to read it.
+PROGRESS_COALESCE_S = 0.25       # one event per tool at most this often...
+PROGRESS_COALESCE_CHARS = 4096   # ...or one burst this big, whichever comes first
+PROGRESS_MAX_CHUNK = 8192        # bound a single event, however loud the command
+PROGRESS_HEARTBEAT_S = 1.0       # a silent run still has to look alive
+
+
+def _stream_tool(fn, args: dict, name: str, out: dict, call_id: str):
+    """Run one tool in a worker thread, yielding its output as it lands.
+
+    Reached only for a tool whose signature declares `on_output` — today
+    `run_shell` alone — so every other tool keeps the inline call in `call_tool`.
+
+    The thread is not a refinement, it is the whole idea: output has to be read
+    *while* the command runs, and a generator that stays empty until the command
+    is finished is precisely the hang the card exists to disprove. The work runs
+    under `copy_context().run` so the thread sees the same contextvars the inline
+    call would — a tool must not behave differently because someone is watching.
+
+    The events go to the bus and nowhere near the transcript. `trace.append`
+    happens at step boundaries out of text/reason/tools, and the parent's loop
+    forwards an unrecognised kind straight to the bus, so a viewer joining
+    mid-command gets the tail from the replay while the model never sees any of
+    it. Exceptions are re-raised here rather than mapped, so the caller's
+    ToolError / TypeError / Exception handling stays one block, not two.
+    """
+    q: queue.Queue = queue.Queue()
+    done: dict = {}
+
+    def on_output(kind: str, text: str) -> None:
+        # Called from the sandbox's reader threads. A full queue can never
+        # happen — this queue is unbounded — but a callback that raised into a
+        # reader would silently stop the stream, so it swallows.
+        try:
+            q.put((kind, text))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def work():
+        try:
+            done["result"] = str(fn(**args, on_output=on_output))
+        except BaseException as exc:  # noqa: BLE001 — mapped by the caller, as inline
+            done["error"] = exc
+        finally:
+            q.put(None)
+
+    t = threading.Thread(target=contextvars.copy_context().run, args=(work,),
+                         daemon=True, name=f"tacit-tool-{name}")
+    t.start()
+
+    def event(now: float, chunk: str) -> dict:
+        return {"type": "tool_progress", "id": call_id, "name": name, "chunk": chunk,
+                "elapsed_s": round(now - started, 1), "chars": total[0]}
+
+    started = time.time()
+    total = [0]
+    pending = ""
+    last_flush = started
+    last_beat = started
+
+    while True:
+        try:
+            item = q.get(timeout=PROGRESS_COALESCE_S)
+        except queue.Empty:
+            item = ()  # nothing arrived; the timers below decide if that is news
+        if item is None:
+            break  # the tool is finished
+        now = time.time()
+        if item:
+            pending += item[1]
+            total[0] += len(item[1])
+        # A burst goes out at once, piece by piece; a trickle waits for the
+        # window, so a loop printing a line every 50ms costs four events a
+        # second rather than twenty. Either way no event is ever larger than
+        # PROGRESS_MAX_CHUNK -- including the last one of a loud command, which
+        # is where an unbounded tail would otherwise land in one payload.
+        while pending and (len(pending) >= PROGRESS_COALESCE_CHARS
+                          or time.time() - last_flush >= PROGRESS_COALESCE_S):
+            now = time.time()
+            yield event(now, pending[:PROGRESS_MAX_CHUNK])
+            pending = pending[PROGRESS_MAX_CHUNK:]
+            last_flush = now
+        if not pending and now - last_beat >= PROGRESS_HEARTBEAT_S:
+            last_beat = now
+            yield event(now, "")
+
+    # Whatever arrived in the last fraction of a second still belongs to the run.
+    # `tool_end` follows and the card replaces the tail with the real result, so
+    # this is the last thing a viewer sees of the command itself.
+    while pending:
+        yield event(time.time(), pending[:PROGRESS_MAX_CHUNK])
+        pending = pending[PROGRESS_MAX_CHUNK:]
+    t.join()
+    if "error" in done:
+        raise done["error"]
+    out["result"] = done.get("result", "ERROR: the tool produced no result")
+
+
 def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = None):
     if ctx.get("readonly"):
         refusal = readonly_guard(name, args)
@@ -1380,12 +1549,26 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
             return
         out["result"] = f"ERROR: unknown tool '{name}'"
         return
-    if "project" not in args and "project" in inspect.signature(fn).parameters:
+    params = inspect.signature(fn).parameters
+    if "project" not in args and "project" in params:
         args = {**args, "project": ctx.get("project")}
-    if "session" not in args and "session" in inspect.signature(fn).parameters:
+    if "session" not in args and "session" in params:
         args = {**args, "session": ctx.get("session") or ""}
     try:
-        out["result"] = str(fn(**args))
+        if "on_output" in params and parent_call_id:
+            # A tool that can report while it runs, and a card to report to. With
+            # no call id there is nothing to place the tail on, so the run stays
+            # inline and no events are spent that nobody could attribute.
+            # `on_output` is injected here and nowhere else: it is not in the tool
+            # schema, so the model cannot pass one, and a `**kwargs` tool never
+            # matches this test. The streaming call sits *inside* the try, because
+            # a tool that fails while threaded has to produce the same `ERROR:`
+            # string the model already knows rather than escape and end the turn —
+            # GeneratorExit is a BaseException, so abandoning the tail still
+            # unwinds straight past this block instead of waiting on the command.
+            yield from _stream_tool(fn, args, name, out, str(parent_call_id))
+        else:
+            out["result"] = str(fn(**args))
     except ToolError as e:
         out["result"] = f"ERROR: {e}"
     except TypeError as e:
@@ -1412,6 +1595,11 @@ def _run_parallel(specs: list[tuple], ctx: dict, results: dict):
     def worker(cid: str, name: str, args: dict):
         out: dict = {}
         outs[cid] = out
+        # Timed here, not by the caller: a delegation runs concurrently, so by the
+        # time the main loop picks the result up the wall clock has moved on and the
+        # only honest number is the one the worker saw. A sub-agent sweep is the
+        # slowest thing a turn can do and must not render as 0ms.
+        _t0 = time.monotonic()
         try:
             # Create a mock call object with the ID so sub-agent events get parent_call_id
             mock_call = {"id": cid}
@@ -1420,6 +1608,7 @@ def _run_parallel(specs: list[tuple], ctx: dict, results: dict):
         except Exception as exc:  # noqa: BLE001
             out["result"] = f"ERROR: {exc}"
         finally:
+            out["elapsed_ms"] = int(round((time.monotonic() - _t0) * 1000))
             q.put(("end", cid))
 
     threads = [threading.Thread(target=worker, args=spec, daemon=True) for spec in specs]
@@ -1468,6 +1657,41 @@ def _audit_tool(name: str, args: dict, result, failed: bool, ctx: dict) -> None:
                  status="error" if failed else "ok",
                  depth=int(ctx.get("depth") or 0), args=digest,
                  result_chars=len(str(result or "")))
+
+
+def _shell_card_fields(name: str, result) -> dict:
+    """The two facts a run_shell card should show and did not: which sandbox ran the
+    command, and how many files it changed on disk.
+
+    Both were already computed. `sandbox.run` returns `backend` on every path and
+    keeps a `changed` diff of the project — and the loop forwarded only the result
+    *string* the model reads, so the answer sat in a dict one level up and never
+    reached the card. The plan asks the card to answer "which sandbox backend ran
+    this command, and what changed on disk"; this is that, not a new measurement.
+
+    Only run_shell has them. A count of zero is not a fact worth a badge, so a
+    read-only command says nothing about files.
+    """
+    if name != "run_shell":
+        return {}
+    try:
+        d = json.loads(result) if isinstance(result, str) else result
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    fields: dict = {}
+    backend = str(d.get("backend") or "")[:24]
+    if backend:
+        fields["backend"] = backend
+    try:
+        count = int(((d.get("changed") or {}) if isinstance(d.get("changed"), dict)
+                     else {}).get("count") or 0)
+    except Exception:  # noqa: BLE001
+        count = 0
+    if count > 0:
+        fields["changed"] = count
+    return fields
 
 
 def model_reasons(ref: str | None = None) -> bool:
@@ -1667,6 +1891,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         for c in calls:
             args = parse_args(c["arguments"])
             yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
+            # Measured around the call, not around the model's turn: "how long did
+            # this take" is a fact about the tool. A severed call never executes, so
+            # it honestly reads ~0ms rather than the time the model spent inventing it.
+            _t0 = time.monotonic()
             if c.get("id") in _severed(calls):
                 out = {"result": SEVERED}
                 yield {"type": "notify", "level": "info",
@@ -1687,10 +1915,15 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             path = str(args.get("path") or args.get("file") or "")
             if path:
                 written.add(path.replace("\\", "/").rsplit("/", 1)[-1])
+            _ms = int(round((time.monotonic() - _t0) * 1000))
+            # `backend`/`changed` ride the same path as `elapsed_ms`: onto the stored
+            # record (so a reload keeps them) and onto the live event.
+            _card = _shell_card_fields(c["name"], result)
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
-                               "result": result, "is_error": failed})
+                               "result": result, "is_error": failed,
+                               "elapsed_ms": _ms, **_card})
             yield {"type": "tool_end", "name": c["name"], "result": result,
-                   "id": c["id"], "is_error": failed}
+                   "id": c["id"], "is_error": failed, "elapsed_ms": _ms, **_card}
         if trace is not None:
             trace.append({"text": "".join(got), "reason": "".join(why).strip(),
                           "tools": step_tools})
@@ -2007,6 +2240,11 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 note = _auto_snapshot(project, c["name"], session)
                 if note:
                     yield {"type": "notify", "level": "info", "message": note}
+            # A call that never executes here - severed mid-arguments, or one whose
+            # result already arrived from the parallel worker - took no measurable
+            # time in this loop. Defaulting it keeps every branch honest and keeps
+            # the append below from naming a variable that was never set.
+            _ms = 0
             if c["id"] in broken:
                 # Never execute a call that arrived in pieces.
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
@@ -2015,6 +2253,9 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                        "message": f"discarded a {c['name']} call cut off mid-arguments"}
             elif c["id"] in parallel:
                 out = parallel[c["id"]]
+                # The worker's own measurement, not this loop's: the call finished
+                # some time ago and the number that matters is how long it ran.
+                _ms = int(out.get("elapsed_ms") or 0)
             elif (seen >= REPEAT_BLOCK_AFTER and c["name"] not in REPEAT_EXEMPT
                     and key in call_cache
                     and not str(call_cache[key]).startswith("ERROR:")):
@@ -2032,10 +2273,12 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 blocked_run += 1
             else:
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
+                _t0 = time.monotonic()
                 out = {}
                 for p in call_tool(c["name"], args, ctx, out, c):
                     yield p
                 blocked_run = 0
+                _ms = int(round((time.monotonic() - _t0) * 1000))
             result = out.get("result", "ERROR: the tool produced no result")
             call_cache[key] = result
             if c["name"] in MUTATING:
@@ -2065,10 +2308,15 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # The call and its result are stored together. This record is what a
             # later turn rebuilds its own history from, so a step that ran tools
             # but said nothing is still a step the model can remember.
+            # backend/changed ride the same path as elapsed_ms: onto the stored
+            # record, so a reload keeps them, and onto the live event, so the card
+            # can say what ran the command while it is still running.
+            _card = _shell_card_fields(c["name"], result)
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
-                               "result": result, "is_error": failed})
+                               "result": result, "is_error": failed,
+                               "elapsed_ms": _ms, **_card})
             yield {"type": "tool_end", "name": c["name"], "result": result,
-                   "id": c["id"], "is_error": failed}
+                   "id": c["id"], "is_error": failed, "elapsed_ms": _ms, **_card}
             if failed:
                 step_errors.append((c["name"], str(result)[:200]))
 

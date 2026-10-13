@@ -1537,11 +1537,14 @@ class TestParallelDelegation(Isolated):
             out["result"] = "a report"
             return iter(())
         agent.run_subagent = fake_sub
-        self.addCleanup(setattr, agent, "run_subagent", fake_sub)
+        # Restore the original, not the stub. Handing `fake_sub` to addCleanup
+        # left `agent.run_subagent` replaced by a stub that yields nothing for
+        # every test that ran after this one in the same process — invisible
+        # here, because this test only counts `_run_parallel` calls.
+        self.addCleanup(setattr, agent, "run_subagent", orig_sub)
         msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "go"}]
         list(agent.run_turn(msgs, project=None, ref="p/m"))
         self.assertEqual(seen, [])
-        del orig_sub
 
 
 class TestSalvageWordingNamesEveryFile(unittest.TestCase):
@@ -1638,9 +1641,13 @@ class TestServerRestart(Isolated):
         # The whole watcher loop, with the port already free and the start
         # stubbed: the handshake is consumed, the server command is this
         # interpreter as a module, and the watcher blocks on the child.
+        # The command the button decided on travels IN the handshake, so the
+        # watcher runs that path rather than resolving a `python` of its own.
         (config.HOME / extras.HANDSHAKE_FILE).write_text(
             json.dumps({"host": "127.0.0.1", "port": self._free_port(), "pid": 1,
-                        "ts": 0}), encoding="utf-8")
+                        "ts": 0, "via": "interpreter",
+                        "cmd": [sys.executable, "-m", "backend.main", "tacit-server"]}),
+            encoding="utf-8")
         spawned: list = []
         orig_popen = extras.subprocess.Popen
 

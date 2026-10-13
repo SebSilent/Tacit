@@ -47,12 +47,24 @@ $('#hoTabs').addEventListener('click', e => {
 });
 
 function openOverlay() { overlay.hidden = false; setNote(''); loadPanel(activeTab()); }
-function closeOverlay() { overlay.hidden = true; setNote(''); }
+// The theme the cursor is currently previewing, or null. Kept here rather than
+// derived from the DOM because `endPreview()` needs the COMMITTED theme, which is
+// exactly what the DOM attribute no longer says.
+let previewing = null;
+function stopThemePreview() {
+  if (previewing === null) return;
+  previewing = null;
+  if (window.TacitTheme) window.TacitTheme.endPreview();
+}
+function closeOverlay() { stopThemePreview(); overlay.hidden = true; setNote(''); }
 function activeTab() {
   const t = document.querySelector('.ho-tab.active');
   return t ? t.dataset.tab : 'general';
 }
 function loadPanel(tab) {
+  // Switching tabs replaces the appearance panel's markup wholesale, which kills
+  // the hovered card without a `pointerleave`. Same reason as in the renderer.
+  stopThemePreview();
   if (tab === 'general') return window.TacitPlatform && window.TacitPlatform.render('general');
   if (tab === 'providers') return renderProviders();
   if (tab === 'tools') return renderSkillsAndTools();
@@ -83,16 +95,31 @@ function renderAppearancePanel() {
     <div class="ho-toolbar"><span class="ho-sub">Pick a look — applies instantly, stored per-browser (<code>tacit.theme</code>).</span></div>
     <div class="theme-cards">` +
     T.themes.map(t => `
-      <button class="theme-card ${t.id === cur ? 'active' : ''}" data-theme="${esc(t.id)}">
+      <button class="card theme-card ${t.id === cur ? 'active' : ''}" data-theme="${esc(t.id)}">
         <span class="theme-dot sw-${esc(t.id)}"></span>
         <span class="theme-meta"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span>
         <span class="theme-check">${t.id === cur ? 'Active' : ''}</span>
       </button>`).join('') +
     `</div>`;
-  panel.querySelectorAll('.theme-card').forEach(b => b.addEventListener('click', () => {
-    T.apply(b.dataset.theme);
-    renderAppearancePanel();
-  }));
+  // A repaint destroys the card under the cursor, so no `pointerleave` ever fires
+  // for it: drop any live preview by hand first, or the committed theme never comes
+  // back and the flag claims there was never a preview.
+  stopThemePreview();
+  panel.querySelectorAll('.theme-card').forEach(b => {
+    const id = b.dataset.theme;
+    b.addEventListener('click', () => {
+      stopThemePreview();
+      T.apply(id);
+      renderAppearancePanel();
+    });
+    // `pointerenter`, not `mouseover`: the card holds three child spans, and
+    // `mouseover` re-fires on every move between them.
+    b.addEventListener('pointerenter', () => { previewing = id; T.preview(id); });
+    b.addEventListener('pointerleave', () => { if (previewing === id) stopThemePreview(); });
+    // Same preview for the keyboard, or the feature is mouse-only.
+    b.addEventListener('focus', () => { previewing = id; T.preview(id); });
+    b.addEventListener('blur', () => { if (previewing === id) stopThemePreview(); });
+  });
 }
 
 // Keep session actions in the sidebar / command palette, not in the harness.
@@ -139,10 +166,10 @@ async function renderProviders() {
       ? `<span class="badge key">env:${esc(p.apiKey.env)}${p.apiKey.env_set ? '' : ' (unset)'}</span>`
       : (p.apiKey.kind === 'value' ? '<span class="badge key">key</span>' : '<span class="badge key">no-key</span>');
     html += `
-      <div class="prov-card" data-prov="${esc(name)}">
-        <div class="prov-head">
+      <div class="card prov-card" data-prov="${esc(name)}">
+        <div class="card-head prov-head">
           <div class="prov-name">${esc(name)} ${keyBadge}</div>
-          <div class="prov-actions">
+          <div class="card-actions">
             <button class="ho-btn small" data-act="probe" title="Re-scan">Re-scan</button>
             <button class="ho-btn small danger" data-act="del" title="Delete">Delete</button>
           </div>
@@ -270,8 +297,8 @@ async function renderSkills(container) {
   const d = await api('/api/skills');
 
   const skillCard = (s) => `
-    <div class="skill-card" data-name="${esc(s.name)}">
-      <div class="skill-head">
+    <div class="card skill-card" data-name="${esc(s.name)}">
+      <div class="card-head skill-head">
         <span class="skill-name">${esc(s.name)}</span>
         <span class="badge">${esc(s.kind || 'skill')}</span>
         <button class="ho-btn small danger skill-del" title="Delete">Delete</button>
@@ -363,8 +390,36 @@ async function renderTools(container) {
     </div>`;
   };
 
+  // Three states, not a toggle — the same shape as Settings > Learning's mode
+  // select, because a boolean cannot express "run it but tell me". The mode
+  // *vocabulary* comes from the server (config.SHELL_OVERLAP_MODES); the words
+  // describing each mode are presentation and stay here.
+  const OVERLAP_LABEL = {
+    block: 'Block — refuse the command, return the tool call',
+    advise: 'Advise — run it, append one line',
+    off: 'Off — no interception',
+  };
+  const ovModes = (d.shellOverlapModes || ['block', 'advise', 'off']);
+  const ovCur = d.shellOverlap || 'block';
+  // A switch that cannot take effect is a lie, so say so rather than let the
+  // person save into an environment override and believe it applied.
+  const ovPinned = d.shellOverlapPinned
+    ? `<div class="ho-sub sm"><b>Pinned by <code>TACIT_SHELL_OVERLAP</code> to ${esc(ovCur)}.</b> ` +
+      `Saving here does nothing until that variable is unset.</div>`
+    : '';
+
   panel.innerHTML = `
     <div class="ho-toolbar"><span class="ho-sub">${esc(d.note || '')}</span></div>
+    <div class="ho-section">Shell overlap <span class="ho-sub sm">commands that re-implement a tool</span></div>
+    <div class="mcp-add">
+      <select class="git-select" id="toolOverlap">${ovModes.map(m =>
+        `<option value="${esc(m)}"${m === ovCur ? ' selected' : ''}>${esc(OVERLAP_LABEL[m] || m)}</option>`).join('')}</select>
+      <button class="ho-btn small" id="toolOverlapSave">Save</button>
+    </div>
+    <div class="ho-sub sm">How to handle a shell command whose every segment is a worse version of
+      an existing tool — the command is refused and the tool call returned instead. Applies to new
+      agent turns; the interception never fires on a chained command, a pipe or a heredoc.</div>
+    ${ovPinned}
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>
     <div class="tool-list">${(d.builtin || []).map(toolRow).join('')}</div>`;
 
@@ -381,6 +436,17 @@ async function renderTools(container) {
         setNote(`${name} ${enable ? 'enabled' : 'disabled'} (applies to new agent sessions)`);
       } else setNote(r.error || 'Toggle failed', true);
     });
+  });
+
+  const ovSel = panel.querySelector('#toolOverlap');
+  const ovBtn = panel.querySelector('#toolOverlapSave');
+  if (ovBtn && ovSel) ovBtn.addEventListener('click', async () => {
+    ovBtn.disabled = true;
+    const r = await post('/api/tools/toggle', { name: 'shellOverlap', mode: ovSel.value });
+    ovBtn.disabled = false;
+    if (!r.ok) { setNote(r.error || 'could not save the overlap mode', true); return; }
+    setNote('shell overlap: ' + r.mode + ' (applies to new agent turns)');
+    renderTools(panel);   // re-read, so a pinned override shows up again
   });
 
 }

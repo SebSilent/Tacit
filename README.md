@@ -1000,6 +1000,7 @@ Nothing is ever matched on the executable name.
 | `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
 | `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
+| `TACIT_SHELL_OVERLAP` | `block` | what happens to a shell command that re-implements a tool: `block`, `advise` or `off`. Set it and **Settings > Tools > Shell overlap stops working** — the environment outranks the stored preference, and the switch says so rather than pretending |
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
 
 ---

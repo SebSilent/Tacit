@@ -117,6 +117,13 @@ def _local_version() -> str:
         return ""
 
 
+def local_version() -> str:
+    """The public handle on the one VERSION reader. `/api/info` and the
+    autoupdater status both surface the same string, so neither gets to read the
+    file its own way."""
+    return _local_version()
+
+
 def _http_get(url: str, timeout: float = 30.0) -> bytes:
     """The one seam every fetched byte comes through; the tests stub this."""
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -366,6 +373,9 @@ def get_status() -> dict:
         "enabled": state.get("enabled", True),
         "last_check": state.get("last_check", 0),
         "last_version": state.get("last_version", ""),
+        # What this checkout says it is. The panel has always shown the remote
+        # side of the comparison and never the local one.
+        "local_version": _local_version(),
         "last_update": state.get("last_update", 0),
         "auto_check_interval": state.get("auto_check_interval", 3600),
     }

@@ -7,6 +7,7 @@ stored in the transcript, nothing here costs a model call, and no block is
 repeated while the previous one still applies.
 """
 
+import os
 import re
 
 # Character ceiling for a block. Guidance that outgrows the task description stops
@@ -250,6 +251,281 @@ def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(), missing=(
 def nudge() -> str:
     """The instruction sent when a step planned instead of acting."""
     return _clip(_DO_IT)
+
+
+# --- Shell overlap ---------------------------------------------------------
+#
+# The agent has first-class tools for reading, listing and searching, and still
+# reaches for the shell to do the same job: `type` for read_file, `dir` for
+# list_files, `findstr` for grep_files. Each of those costs a process spawn, a
+# step, and a result clipped by the shell's output ceiling; the tool call costs
+# one and says the same thing exactly. Measured on the recorded runs: 174 shell
+# calls against 44 read_file, 29 greps against 10 grep_files, 11 `dir` against 1
+# list_files.
+#
+# This table is the whole vocabulary — verb to (tool, why the tool is the better
+# call). `overlap()` decides whether a command is *only* that, which is the
+# condition for refusing it before it runs rather than commenting afterwards.
+# The old `_dump_hint` in agent.py is the seed of this table and now reads its
+# mapping from here, so there is one vocabulary and two consumers.
+#
+# Three things disqualify a command from any advice at all, because guessing here
+# is worse than silence — a refusal that blocks real work teaches the model to
+# distrust the tool list, and I hit the first one myself while testing:
+#   • a pipe. `python -m unittest 2>&1 | findstr OK` filters a *stream*; findstr
+#     is reading stdin, and no tool composes stages. Refusing it loses the test run.
+#   • a flag outside OVERLAP_FLAGS. `grep -i` wants case-insensitive matching,
+#     which grep_files does not offer; `ls -l` wants sizes and permissions, which
+#     list_files does not return. Pointing at a tool that cannot do the job is
+#     worse advice than saying nothing.
+#   • an output redirect on a read verb. `cat a > b` is a copy: read_file reads and
+#     cannot write, so the shell here is doing a two-call job in one.
+
+SHELL_OVERLAP: dict[str, tuple[str, str]] = {
+    "cat": ("read_file",
+            "read_file returns numbered lines, the range it showed and the offset to continue "
+            "from, and is not cut off at the shell's output ceiling"),
+    "type": ("read_file",
+             "read_file returns numbered lines and a continue offset, and is not cut off at the "
+             "shell's output ceiling"),
+    "dir": ("list_files",
+            "list_files takes a path and returns the files and folders in it"),
+    "ls": ("list_files",
+           "list_files takes a path and returns the files and folders in it"),
+    "findstr": ("grep_files",
+                "grep_files searches file contents by regex and returns file:line matches"),
+    "grep": ("grep_files",
+             "grep_files searches file contents by regex and returns file:line matches"),
+    "rg": ("grep_files",
+           "grep_files searches file contents by regex and returns file:line matches"),
+    "sed": ("edit_file",
+            "edit_file replaces one snippet that matches exactly and appears once"),
+    "echo": ("write_file",
+             "write_file creates or replaces a file in one call, without shell quoting"),
+    "curl": ("fetch",
+             "fetch returns a URL as readable text; it cannot save a binary, so keep the "
+             "download here and use fetch to read a page"),
+    "wget": ("fetch",
+             "fetch returns a URL as readable text; it cannot save a binary, so keep the "
+             "download here and use fetch to read a page"),
+    # Name-vs-content, which is why these are never refused outright: on Windows
+    # `find` searches inside files (grep_files) and elsewhere it searches by name
+    # (glob_files), while `where`/`which` search PATH, which no tool reaches.
+    "find": ("glob_files",
+             "glob_files matches file names; note that on Windows `find` searches file *content* "
+             "instead, which is grep_files"),
+    "where": ("glob_files",
+              "glob_files matches file names inside the project; `where` searches PATH, which no "
+              "tool does, so keep it if that is what you meant"),
+    "which": ("glob_files",
+              "glob_files matches file names inside the project; `which` searches PATH, which no "
+              "tool does, so keep it if that is what you meant"),
+}
+
+# Refused outright when a whole command is nothing but this verb. `curl`, `find`,
+# `where` and `which` stay out: a download, a PATH lookup and an ambiguous
+# name-vs-content search are jobs the tool table cannot promise to do.
+BLOCKABLE = {"cat", "type", "dir", "ls", "findstr", "grep", "echo"}
+
+# Flags that do not change the job. Anything outside this set means the shell is
+# doing something the named tool cannot, and telling the agent to call a tool that
+# will not do the job is worse than saying nothing: `grep -i` (grep_files has no
+# case-insensitive option), `ls -l` (sizes and permissions list_files does not
+# return), `dir /s` (recursive), `cat -v`.
+OVERLAP_FLAGS: dict[str, set[str]] = {
+    "cat": {"-n", "-b", "--number"},
+    "type": set(),
+    "dir": {"/b"},
+    "ls": {"-1"},
+    "findstr": {"/r", "/s"},
+    "grep": {"-r", "-R", "-n", "--recursive", "--line-number"},
+    "rg": set(),
+    "sed": {"-i"},
+    "echo": set(),
+    "curl": set(), "wget": set(), "find": set(), "where": set(), "which": set(),
+}
+
+# Verbs that read. An output redirect on one of these makes the command a *copy*
+# (`cat a > b`), which is two tool calls at best, so it is not an overlap at all.
+_READING = {"read_file", "list_files", "grep_files", "glob_files"}
+
+# Verbs whose overlap is only real in one shape. `sed` re-implements edit_file
+# when it edits in place and nothing when it is printing a range; `echo`
+# re-implements write_file only with a redirect.
+_EDITING = re.compile(r"^-i(\S+)?$")
+# An s-command with a `g` flag, matched anywhere in the command rather than at its
+# end: `sed -i s/a/b/g x.py` puts the file after the expression, and anchoring this
+# to the end let exactly that through as if it edited one match.
+_SED_GLOBAL = re.compile(r"\bs[/|].*?[/|].*?[/|][A-Za-z]*g")
+
+# Commands, not pipeline *stages*: `||` is a separator and a single `|` is a pipe, so
+# the split must not eat the pipe or `python -m unittest | findstr OK` reads as a
+# bare findstr and gets refused, losing the half of the command that mattered.
+_COMMAND_SPLIT = re.compile(r"&&|\|\||[;\n]+")
+_ASSIGN = re.compile(r"^\w+=")
+_FLAG = re.compile(r"^-{1,2}[A-Za-z][A-Za-z0-9_-]*$|^/[A-Za-z]{1,2}$")
+# A redirect to a real file, not `2>&1`.
+_OUTFILE = re.compile(r"(?:^|[\s;])\d*>{1,2}\s*(?!&)(&?\S+)")
+_HEREDOC = re.compile(r"<<[-~]?\s*['\"]?\w")
+# Shell features that make a command more than its verb: variable expansion,
+# substitution and subshells are all jobs a single tool call cannot express.
+_DYNAMIC = re.compile(r"[%$`!()]")
+# Any output redirect, including `2>&1`, which is still the shell doing plumbing.
+_REDIR = re.compile(r"(?:^|[\s;])\d*>")
+_DEVICES = {"nul", "con", "prn", "aux", "stdin", "stdout", "stderr", "/dev/stdin", "/dev/null"}
+_WRAPPERS = {"sudo", "env", "nohup", "time", "command", "start", "cmd", "sh", "bash",
+             "/c", "/k", "-c", "run", "do"}
+
+
+def _words(segment: str) -> list[str]:
+    """The tokens of one command, quotes and grouping stripped."""
+    out = []
+    for w in re.split(r"[\s()<>`]+", segment):
+        w = w.strip().strip("'\"")
+        if w:
+            out.append(w)
+    return out
+
+
+def _verb_of(words: list[str]) -> tuple[int, str]:
+    """(index, verb) past any wrappers and `FOO=bar` assignments, or (-1, "")."""
+    i = 0
+    while i < len(words) and (words[i].lower() in _WRAPPERS or _ASSIGN.match(words[i])):
+        i += 1
+    if i >= len(words):
+        return -1, ""
+    verb = words[i].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+    return i, re.sub(r"\.(exe|bat|cmd)$", "", verb)
+
+
+def _segment_overlap(command: str) -> dict | None:
+    """One command, classified — or None if it is not an overlap *at all*.
+
+    Returning None rather than a non-intercepting hit matters: a command the tool
+    cannot do is not a worse version of a tool, and a note about it is noise that
+    trains the model to ignore the notes that are right.
+    """
+    seg = command.strip()
+    # A pipe composes stages, which no tool does; a heredoc writes a body the split
+    # cannot even see. Both are the shell doing its own job.
+    if "|" in seg or _HEREDOC.search(seg):
+        return None
+    words = _words(seg)
+    idx, verb = _verb_of(words)
+    if idx < 0:
+        return None
+    entry = SHELL_OVERLAP.get(verb)
+    if not entry:
+        return None
+    tool, why = entry
+    if verb == "find" and os.name == "nt":
+        tool, why = ("grep_files",
+                     "Windows `find` searches file *content*, which is grep_files")
+    rest = words[idx + 1:]
+    flags = [w for w in rest if _FLAG.match(w)]
+    targets = [w for w in rest if w not in flags]
+    redirected = [m.group(1) for m in _OUTFILE.finditer(seg) if m.group(1) not in _DEVICES]
+
+    if verb == "sed":
+        # Only an in-place, single-match edit re-implements edit_file: `sed -n` is a
+        # file dump (_dump_hint says better), and `s/a/b/g` replaces every match
+        # while edit_file refuses one that appears more than once.
+        if not any(_EDITING.match(f) for f in flags) or _SED_GLOBAL.search(seg):
+            return None
+    elif verb == "echo":
+        if not redirected:
+            return None            # `echo hi` prints; it is not writing a file
+    elif _REDIR.search(seg):
+        # `cat a > b` and `dir > list.txt` are copies: the read tool reads and
+        # cannot write, so this is a two-call job the shell is doing in one.
+        return None
+    if _DYNAMIC.search(seg) or any(f.lower() not in OVERLAP_FLAGS.get(verb, set())
+                                   for f in flags):
+        return None
+    # A wildcard turns a listing into a name search, which is glob_files and a real
+    # substitute. On a reader it is many files in one command, which no call does.
+    if any(set("*?") & set(t) for t in targets):
+        if tool == "list_files":
+            tool, why = "glob_files", "glob_files matches file names by pattern"
+        else:
+            return None
+    # Bare `dir`/`ls` is list_files('.'), which the tool defaults to. A reader with
+    # no argument is reading stdin, which no tool does.
+    needs = verb in ("cat", "type", "findstr", "grep", "rg", "sed", "echo")
+    return {"verb": verb, "tool": tool, "why": why, "flags": flags, "targets": targets[:4],
+            "file": (redirected[:1] or targets[:1] or [""])[0],
+            "intercept": bool(verb in BLOCKABLE and (targets or not needs)
+                               and not any(t.lower() in _DEVICES for t in targets)),
+            "segment": seg}
+
+
+def overlap(cmd: str) -> dict | None:
+    """Classify a shell command against the tool table.
+
+    None when nothing here re-implements a tool. Otherwise a dict with `hits`,
+    `tools`, `verbs` and `pure`. `pure` is the condition for refusing before the
+    command runs: *every* command is an overlap, every one of them blockable, and
+    one tool would do the whole job. `dir && python build.py` is a real command
+    that happens to contain an overlap and gets a note instead of a refusal — the
+    trap is refusing half a chain and losing the half that mattered.
+    """
+    raw = str(cmd or "").strip()
+    if not raw:
+        return None
+    commands = [s.strip() for s in _COMMAND_SPLIT.split(raw) if s.strip()]
+    if not commands:
+        return None
+    hits = [h for h in (_segment_overlap(s) for s in commands) if h]
+    if not hits:
+        return None
+    tools = list(dict.fromkeys(h["tool"] for h in hits))
+    pure = (len(hits) == len(commands) and all(h["intercept"] for h in hits)
+            and len(tools) == 1)
+    return {"hits": hits, "tools": tools, "verbs": [h["verb"] for h in hits],
+            "pure": pure, "tool": tools[0]}
+
+
+def overlap_refusal(hit: dict) -> str:
+    """The refusal for a command that is nothing but a worse version of a tool.
+
+    Shaped like `readonly_guard`: an ERROR the model reads as a dead end, plus the
+    call to make instead, plus the switch that turns this off — because a refusal
+    that cannot be overridden reads as a broken tool rather than a redirect.
+    """
+    h = hit["hits"][0]
+    tg = h["targets"]
+    # Name the call it should have made, arguments and all: a refusal that says
+    # only "use the tool" costs a step to decode, and quoting the path exactly as
+    # typed leaves no room to wonder which file was meant.
+    if h["tool"] == "grep_files":
+        alt = f"grep_files(pattern='{tg[0]}', path='{tg[1] if len(tg) > 1 else '.'}')"
+    elif h["tool"] == "glob_files":
+        alt = f"glob_files(pattern='{tg[0] if tg else '*'}')"
+    elif h["tool"] == "list_files":
+        alt = f"list_files(path='{tg[0] if tg else '.'}')"
+    elif h["tool"] == "read_file":
+        alt = f"read_file(path='{tg[0]}')"
+    elif h["tool"] == "write_file":
+        alt = f"write_file(path='{h['file']}', content=...)"
+    else:
+        alt = f"{h['tool']}(path='{h['file']}')"
+    shown = " ".join(tg[:2]) or h["file"] or h["verb"]
+    return _clip(f"ERROR: `{h['verb']} {shown}` is a tool call wearing a shell: {h['why']}. "
+                 f"Call {alt} instead. (Settings > Tools > Shell overlap turns this off if the "
+                 f"shell really is the right tool here.)")
+
+
+def overlap_note(hit: dict) -> str:
+    """One line appended to a result that ran despite containing an overlap.
+
+    Deliberately not appended when the command was refused, and never more than
+    one line: this is the injection path, and an unbounded note on every shell
+    result is the standing-prompt bloat the README says guidance exists to avoid.
+    """
+    parts = "; ".join(f"`{h['verb']}` is what {h['tool']} does — {h['why']}" for h in hit["hits"][:2])
+    if not parts:
+        return ""
+    return _clip("\n[overlap] " + parts + ". (Shell overlap=off silences this.)")
 
 
 def closing() -> str:

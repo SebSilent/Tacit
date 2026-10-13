@@ -184,7 +184,15 @@ $Launcher = Join-Path $BinDir 'tacit.cmd'
 @echo off
 set "TACIT_HOME=$TacitHome"
 cd /d "$AppDir"
-"$VenvPy" -m backend.main %*
+"$VenvPy" -m backend.launcher prelaunch
+if errorlevel 1 (
+  echo Tacit did not start: a Tacit server still holds the port.
+  exit /b 1
+)
+rem tacit-server is the marker token that lets a later stop step prove this
+rem process is ours; the interpreter ignores it. Same token the watcher's
+rem command and run.bat pass, so one proof covers every launch path.
+"$VenvPy" -m backend.main tacit-server %*
 "@ | Set-Content -Path $Launcher -Encoding ASCII
 Ok "launcher written to $Launcher"
 
@@ -199,7 +207,7 @@ Write-Host ''
 Write-Host 'done.' -ForegroundColor White
 Write-Host ''
 Write-Host "  start:  $Launcher"
-Write-Host "  or:     cd $AppDir; & '$VenvPy' -m backend.main"
+Write-Host "  or:     cd $AppDir; & '$VenvPy' -m backend.main tacit-server"
 Write-Host "  open:   http://localhost:$Port"
 Write-Host "  state:  $TacitHome"
 Write-Host ''

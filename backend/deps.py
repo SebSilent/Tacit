@@ -45,6 +45,7 @@ def _probe_container() -> tuple[bool, str, str]:
     name = binary.replace("\\", "/").rsplit("/", 1)[-1]
     try:
         got = subprocess.run([binary, "info", "--format", "{{.ServerVersion}}"],
+                             stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=5)
     except Exception as e:  # noqa: BLE001
         return False, f"{name} present but the check failed ({e})", f"start {name} and try again"

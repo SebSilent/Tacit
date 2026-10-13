@@ -163,7 +163,14 @@ cat > "$LAUNCHER" <<LAUNCH
 TACIT_HOME="\${TACIT_HOME:-$TACIT_HOME}"
 export TACIT_HOME
 cd "$APP_DIR" || exit 1
-exec "$VENV/bin/python" -m backend.main "\$@"
+# Stop what is provably Tacit's and wait for the port before starting, then
+# start with the marker token a later stop step can prove. Same three steps as
+# run.sh: one launch mechanism, whether it was typed as `tacit` or `./run.sh`.
+"$VENV/bin/python" -m backend.launcher prelaunch || {
+    echo "Tacit did not start: a Tacit server still holds the port." >&2
+    exit 1
+}
+exec "$VENV/bin/python" -m backend.main tacit-server "\$@"
 LAUNCH
 chmod +x "$LAUNCHER"
 ok "launcher written to $LAUNCHER"
@@ -171,7 +178,7 @@ ok "launcher written to $LAUNCHER"
 PORT="${TACIT_PORT:-8550}"
 printf '\n%sdone.%s\n\n' "$C_BLD" "$C_OFF"
 printf '  start:  %s\n' "$LAUNCHER"
-printf '  or:     cd %s && %s/bin/python -m backend.main\n' "$APP_DIR" "$VENV"
+printf '  or:     cd %s && %s/bin/python -m backend.main tacit-server\n' "$APP_DIR" "$VENV"
 printf '  open:   http://localhost:%s\n' "$PORT"
 printf '  state:  %s\n\n' "$TACIT_HOME"
 case ":$PATH:" in

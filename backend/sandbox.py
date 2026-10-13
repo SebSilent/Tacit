@@ -34,6 +34,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -99,7 +100,8 @@ def _can_unshare_net() -> bool:
     if shutil.which("unshare") is None:
         return False
     try:
-        probe = subprocess.run(["unshare", "--net", "true"], capture_output=True, timeout=5)
+        probe = subprocess.run(["unshare", "--net", "true"], stdin=subprocess.DEVNULL,
+                             capture_output=True, timeout=5)
         return probe.returncode == 0
     except Exception:  # noqa: BLE001
         return False
@@ -233,8 +235,13 @@ def _spawn(command: str, cwd: str, timeout: int, limits: dict, network: bool,
 
 
 def run(command: str, project: str | None = None, backend: str | None = None,
-        timeout: int | None = None, session: str = "") -> dict:
-    """Run one command under the selected sandbox. Records it in the ledger."""
+        timeout: int | None = None, session: str = "", on_output=None) -> dict:
+    """Run one command under the selected sandbox. Records it in the ledger.
+
+    ``on_output(kind, text)`` streams the command's output as it lands, for a
+    viewer. It changes nothing about what is returned or recorded, so the model
+    reads the same result whether or not anyone is watching.
+    """
     cmd = str(command or "").strip()
     cfg = providers.load()
     box = dict(cfg.get("sandbox") or {})
@@ -260,11 +267,16 @@ def run(command: str, project: str | None = None, backend: str | None = None,
         return _result(False, f"ERROR: the '{chosen}' sandbox is unavailable: {why}",
                        backend=chosen, cwd=str(root))
 
+    # All three backends run the command through `_run_captured`, so all three can
+    # stream it. (The plan scoped this to `none` and `tacit-micro`; leaving the
+    # container backend out would have been an arbitrary gap, not a safety one.
+    # What does NOT stream is an image pull, which happens before the command runs
+    # and can legitimately take twenty minutes with a silent card.)
     if chosen == "tacit-micro":
-        return _run_micro(cmd, root, box, limit, session)
+        return _run_micro(cmd, root, box, limit, session, on_output)
     if chosen == "container":
-        return _run_container(cmd, root, box, limit, session)
-    return _run_none(cmd, root, limit, session)
+        return _run_container(cmd, root, box, limit, session, on_output)
+    return _run_none(cmd, root, limit, session, on_output)
 
 
 def _result(ok: bool, text: str = "", **fields) -> dict:
@@ -309,14 +321,97 @@ def _kill_tree(proc) -> None:
             pass
 
 
+def _drain_lines(stream, kind: str, on_output, buf: list, lock) -> None:
+    """Read one child stream line by line, keeping the whole text for the caller.
+
+    Line-based rather than byte-chunk-based, and that is not a shortcut: with
+    ``text=True`` the stream already translates universal newlines, so a progress
+    bar that rewrites itself with a bare ``\\r`` arrives as a line and streams. A
+    reader thread per stream is also what keeps a chatty stderr from deadlocking a
+    quiet stdout, which is the failure ``communicate()`` was written to avoid.
+
+    Exceptions die quietly on purpose. The command's own result is decided by the
+    exit code; a reader that broke must not turn a successful build into a crash.
+    """
+    try:
+        for line in stream:
+            with lock:
+                buf.append(line)
+            on_output(kind, line)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_streamed(proc, timeout: int, on_output) -> tuple[int, str, str, bool]:
+    """``_run_captured``'s blocking path, but handing output to a callback as it lands.
+
+    Returns the same ``(code, stdout, stderr, timed_out)`` as the captured path,
+    with the same 124-on-timeout convention: the model must not see a different
+    result because a human was watching. Only the *timing* of the bytes differs.
+    """
+    lock = threading.Lock()
+    outs: list = []
+    errs: list = []
+    readers = [
+        threading.Thread(target=_drain_lines, args=(proc.stdout, "stdout", on_output, outs, lock),
+                         daemon=True, name="tacit-out-reader"),
+        threading.Thread(target=_drain_lines, args=(proc.stderr, "stderr", on_output, errs, lock),
+                         daemon=True, name="tacit-err-reader"),
+    ]
+    for t in readers:
+        t.start()
+    timed_out = False
+    try:
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the tree first, then let the readers hit EOF. The order matters:
+            # draining before the kill is what made the old timeout wait on a pipe
+            # held open by a grandchild that was still alive.
+            timed_out = True
+            _kill_tree(proc)
+            try:
+                proc.wait(timeout=GRACE_SECONDS)
+            except Exception:  # noqa: BLE001
+                pass
+            code = 124
+        for t in readers:
+            t.join(GRACE_SECONDS)
+            if t.is_alive():
+                # A survivor still holding the pipe: closing it is the only way to
+                # unblock the reader, and abandoning it is better than hanging the
+                # turn for a process we have already killed.
+                try:
+                    (proc.stdout if t.name == "tacit-out-reader" else proc.stderr).close()
+                except Exception:  # noqa: BLE001
+                    pass
+        with lock:
+            out, err = "".join(outs), "".join(errs)
+        return code, out, err, timed_out
+    except Exception as exc:  # noqa: BLE001
+        _kill_tree(proc)
+        return 1, "", f"ERROR: {exc}", False
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                if stream:
+                    stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False,
-                  preexec_fn=None) -> tuple[int, str, str, bool]:
+                  preexec_fn=None, on_output=None) -> tuple[int, str, str, bool]:
     """Run a command and capture it, with a timeout that actually returns.
 
     Returns ``(code, stdout, stderr, timed_out)``; a timeout reports exit 124, the
     same convention `timeout(1)` uses. The bounded second read is what makes the
     timeout real: after the tree is killed, draining is given a short grace period
     and then abandoned rather than waited on indefinitely.
+
+    ``on_output(kind, text)`` is optional and only ever called from a reader
+    thread. Leaving it None keeps `communicate()` — the one path every non-viewed
+    command has always taken.
     """
     # stdin is DEVNULL, never inherited. A turn runs in the worker process, whose
     # stdin is the parent's control pipe carrying {"cancel": true} and steer lines.
@@ -337,6 +432,10 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
         # Its own process group, so the whole tree can be signalled at once.
         kwargs["start_new_session"] = True
     proc = subprocess.Popen(argv if not shell else argv, **kwargs)
+    if on_output is not None:
+        # A caller that wants it live. The captured path below stays untouched so
+        # every command nobody is watching behaves exactly as it always did.
+        return _run_streamed(proc, timeout, on_output)
     try:
         out, err = proc.communicate(timeout=timeout)
         return proc.returncode, out or "", err or "", False
@@ -358,9 +457,10 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
         return 1, "", f"ERROR: {exc}", False
 
 
-def _run_none(cmd: str, root: Path, limit: int, session: str) -> dict:
+def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) -> dict:
     started = time.time()
-    code, out, err, timed_out = _run_captured(cmd, cwd=str(root), timeout=limit, shell=True)
+    code, out, err, timed_out = _run_captured(cmd, cwd=str(root), timeout=limit, shell=True,
+                                              on_output=on_output)
     if timed_out:
         partial = (out or "").strip()
         note = (f"ERROR: timed out after {limit}s. That is this shell's cap, not the task's "
@@ -389,7 +489,8 @@ def _run_none(cmd: str, root: Path, limit: int, session: str) -> dict:
     return res
 
 
-def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str) -> dict:
+def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
+               on_output=None) -> dict:
     started = time.time()
     network = bool(box.get("network"))
     readonly = bool(box.get("readonly_project"))
@@ -401,7 +502,7 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str) -> dic
     argv, kwargs, notes = _spawn(cmd, str(root), limit, limits, network, readonly)
     code, out, err, timed_out = _run_captured(
         argv, cwd=kwargs.get("cwd") or str(root), env=kwargs.get("env"),
-        timeout=limit, preexec_fn=kwargs.get("preexec_fn"))
+        timeout=limit, preexec_fn=kwargs.get("preexec_fn"), on_output=on_output)
     if code == 1 and not out and str(err).startswith("ERROR:"):
         return _result(False, err, backend="tacit-micro", cwd=str(root))
 
@@ -547,7 +648,8 @@ def _kill_container(name: str) -> None:
         pass
 
 
-def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str) -> dict:
+def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
+                   on_output=None) -> dict:
     started = time.time()
     runtime = _container_runtime()
     if not runtime:
@@ -582,7 +684,8 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str) ->
     argv = container_argv(cmd, str(root), image, network=network, readonly=readonly,
                           limits=limits, name=name, pids_limit=settings["pids_limit"])
     before = _scan(root)
-    code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit)
+    code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit,
+                                              on_output=on_output)
     if timed_out:
         # The runtime, not just the client: `docker run` dying leaves the container
         # alive, so the command would carry on after Tacit reported it stopped.

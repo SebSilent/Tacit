@@ -26,5 +26,24 @@ if not exist "%VENVPY%" (
   exit /b 1
 )
 echo [tacit] http://localhost:%TACIT_PORT%   state: %TACIT_HOME%
-"%VENVPY%" -m backend.main
+rem Stop what is provably Tacit's and wait for the port, before anything is
+rem started. That step is Python, not batch: proving a process is ours means
+rem reading its command line, and the two lines that used to do it here matched
+rem python.exe and uvicorn.exe by name, which is how a stop step could hit an
+rem unrelated Python. The Restart button runs this same script, so there is one
+rem launch path to read, fix and trust.
+"%VENVPY%" -m backend.launcher prelaunch
+if errorlevel 1 (
+  echo.
+  echo Tacit did not start: a Tacit server is still holding the port.
+  echo   Nothing was launched, so there is nothing to lose to a bind race.
+  echo   See the output above, and restart.log in the Tacit state folder.
+  echo.
+  pause
+  exit /b 1
+)
+rem The marker token is what lets any later stop step prove this process is
+rem Tacit's. It sits where the interpreter ignores it, so a server started here
+rem looks like one started by the watcher.
+"%VENVPY%" -m backend.main tacit-server
 pause

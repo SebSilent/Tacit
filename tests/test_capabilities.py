@@ -650,7 +650,15 @@ class TestGateways(Isolated):
         self.assertEqual(argv, ["echo", "-n", "hi"])
 
     def test_a_selected_gateway_runs_and_is_recorded(self):
-        self.gw.add({"id": "notes", "command": "echo"})
+        # Not "echo". echo is a cmd.exe builtin, so this only ever passed
+        # because whatever launched the server happened to put a coreutils
+        # echo.exe on PATH -- it broke the moment the venv stopped inheriting
+        # a foreign shell's PATH. Pin the command to the interpreter, which is
+        # already on PATH by definition and is what the timeout test below does.
+        import sys
+        self.gw.add({"id": "notes", "command": sys.executable,
+                     "args": ["-c", "import sys; print(' '.join(sys.argv[1:]))",
+                              "{task}"]})
         self.gw.select("notes")
         res = self.gw.run("notes", "hello there", session="s1")
         self.assertTrue(res["ok"], res)

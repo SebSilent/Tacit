@@ -170,6 +170,20 @@
       api('/api/processes').catch(() => ({ processes: [] })),
     ]);
 
+    // A restart that failed leaves no server standing to report it, so the watcher
+    // writes the outcome to disk and whichever server comes back — including one a
+    // person started by hand — hands it over. PLAN.md item 4: failure has to surface
+    // here, not only in a restart.log nobody opens.
+    const lr = (srv || {}).last_restart;
+    const byHand = lr && lr.cmd && lr.cmd.length
+      ? esc(lr.cmd.join(' '))
+      : ((navigator.userAgent || '').includes('Windows') ? 'run.bat' : './run.sh');
+    const restartWarn = lr && lr.state === 'failed'
+      ? `<p class="hint err">restart failed (${esc(lr.stage || 'unknown stage')}) — `
+        + `${esc(lr.detail || 'the replacement server never came up')}. Start Tacit by hand with `
+        + `<code>${byHand}</code>, then read <code>~/.tacit/restart.log</code>.</p>`
+      : '';
+
     const profileRow = (p) => `
       <div class="prof-row ${p.active ? 'on' : ''}" data-name="${esc(p.name)}">
         <span class="prof-name">${esc(p.label)}</span>
@@ -183,10 +197,15 @@
     const vcsOn = !!(vcs || {}).allow_version_control;
     const dgOn = !!(dg || {}).deliver_guarantee;
     const sndOn = (snd || {}).turn_sound !== false;
+    const alertOn = (snd || {}).alert_sound === true;
     const auOn = !!(au || {}).enabled;
     const lastCheck = (au || {}).last_check ? new Date(au.last_check * 1000).toLocaleString() : 'never';
     const lastUpdate = (au || {}).last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
     const version = (au || {}).last_version ? String(au.last_version) : '';
+    // The checkout's own version, from the same VERSION file the updater reads.
+    // It belongs beside the remote comparison: "Up to date — version X" means
+    // nothing until you can see which X it is talking about.
+    const localVersion = (au || {}).local_version ? String(au.local_version) : '';
 
     panel.innerHTML = `
       <div class="ho-section">Profile <span class="ho-sub sm">a named bundle of cost and containment</span></div>
@@ -229,15 +248,27 @@
           <span class="tgl-knob"></span>
         </button>
       </div>
+      <div class="tool-row ${alertOn ? '' : 'off'}" data-perm="alert-sound">
+        <span class="tool-name">Mid-turn sounds</span>
+        <span class="tool-desc">Off by default. Two chimes that fire while work is still
+          running: a drop in pitch when the token budget warning triggers, and one soft tick
+          each time an autonomous cycle starts. Separate from the turn-end chime because these
+          repeat on their own — a loop left running for hours would otherwise make a noise every
+          cycle whether or not anyone is listening. Also stored on the server.</span>
+        <button class="tgl ${alertOn ? 'on' : ''}" data-act="toggle-alert-sound" role="switch" aria-checked="${alertOn}" title="${alertOn ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>
 
       <div class="ho-section">Server</div>
       <div class="tool-row" data-perm="restart">
         <span class="tool-name">Restart</span>
-        <span class="tool-desc">${srv ? `listening on ${esc(srv.host)}:${esc(srv.port)} · pid ${esc(srv.pid)}` : 'status unavailable'}.
+        <span class="tool-desc">${srv ? `listening on ${esc(srv.host)}:${esc(srv.port)} · pid ${esc(srv.pid)}` : `status unavailable — if a restart did not bring the server back, start it by hand with <code>${byHand}</code>`}.
           Stop this process and start a fresh one on the same port. The browser reconnects on its own;
           a turn that is running is cut off.</span>
         <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
       </div>
+      ${restartWarn}
       <div class="tool-row" data-perm="mcp-helpers">
         <span class="tool-name">MCP helper tools</span>
         <span class="tool-desc">${(srv || {}).mcp_servers
@@ -256,7 +287,9 @@
       <div class="tool-row ${auOn ? '' : 'off'}" data-perm="autoupdater-enabled">
         <span class="tool-name">Auto-updater</span>
         <span class="tool-desc">On by default. Checks GitHub for new commits every hour and can pull
-          changed files automatically. Tacit has no releases — every push is an update.</span>
+          changed files automatically. Tacit has no releases — every push is an update.
+          ${localVersion ? `This checkout: <code>${esc(localVersion)}</code>.`
+            : 'This install has no VERSION file, so it predates version tracking.'}</span>
         <button class="tgl ${auOn ? 'on' : ''}" data-act="toggle-au" role="switch" aria-checked="${auOn}" title="${auOn ? 'Disable' : 'Enable'}">
           <span class="tgl-knob"></span>
         </button>
@@ -340,6 +373,21 @@
       note(enable ? 'the turn-end chime is on' : 'the turn-end chime is off');
     });
 
+    panel.querySelector('[data-act="toggle-alert-sound"]').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-act="toggle-alert-sound"]');
+      const enable = !btn.classList.contains('on');
+      const r = await post('/api/harness/sound', { alert_sound: enable });
+      if (!r.ok) { note(r.error || 'Could not change that setting', true); return; }
+      btn.classList.toggle('on', enable);
+      btn.setAttribute('aria-checked', enable);
+      btn.closest('.tool-row').classList.toggle('off', !enable);
+      // Same live refresh as the master switch: the chat holds its own copy of
+      // both, and a toggle that needs a reload is a toggle that looks broken.
+      if (window.Tacit && window.Tacit.refreshSoundPref) window.Tacit.refreshSoundPref();
+      note(enable ? 'the budget and autonomous chimes are on'
+                  : 'the budget and autonomous chimes are off');
+    });
+
     panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
       if (!confirm('Restart the Tacit server? A turn that is running is cut off; ' +
           'this page reconnects on its own.')) return;
@@ -372,16 +420,19 @@
       btn.disabled = false;
       btn.textContent = 'Check now';
       if (!r.ok) { note(r.error || 'Check failed', true); return; }
+      // Both sides of the comparison, or the sentence is unfalsifiable: "Up to
+      // date — version 2026-10-09" told you nothing about what this checkout is.
+      const local = localVersion || 'unknown';
       if (r.update_available) {
         note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.note}`);
         pullRow.hidden = false;
         statusRow.hidden = false;
-        statusText.textContent = `Behind by ${r.changed_count + r.new_count} file(s) — version ${r.latest_version}`;
+        statusText.textContent = `Local ${local} — behind by ${r.changed_count + r.new_count} file(s), remote version ${r.latest_version}`;
       } else {
         note('Already up to date');
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Up to date — version ${r.latest_version}`;
+        statusText.textContent = `Local ${local} — up to date, remote version ${r.latest_version}`;
       }
     });
 
@@ -662,8 +713,8 @@
     const inj = d.injection || {};
 
     const serverCard = (s) => `
-      <div class="mcp-card" data-id="${esc(s.id)}">
-        <div class="mcp-head">
+      <div class="card mcp-card" data-id="${esc(s.id)}">
+        <div class="card-head mcp-head">
           <span class="mcp-name">${esc(s.name)}</span>
           <span class="badge ${s.enabled ? 'on' : ''}">${s.enabled ? 'enabled' : 'disabled'}</span>
           <span class="badge state-${esc(s.state)}">${esc(s.state)}</span>
@@ -671,7 +722,7 @@
         </div>
         <div class="mcp-meta"><code>${esc(s.command)} ${esc((s.args || []).join(' '))}</code></div>
         ${s.error ? `<div class="ho-err">${esc(s.error)}</div>` : ''}
-        <div class="mcp-actions">
+        <div class="card-actions mcp-actions">
           <button class="ho-btn small" data-act="toggle">${s.enabled ? 'Disable' : 'Enable'}</button>
           <button class="ho-btn small" data-act="start">Start</button>
           <button class="ho-btn small" data-act="stop">Stop</button>
@@ -992,15 +1043,15 @@
       ${rows.length === 0 && unfiled ? `<div class="ho-sub sm">${unfiled} earlier snapshot(s) predate per-session tracking and are not listed here.</div>` : ''}
       <div class="snap-list">
         ${rows.map((s) => `
-          <div class="snap-card" data-name="${esc(s.name)}">
-            <div class="mcp-head">
+          <div class="card snap-card" data-name="${esc(s.name)}">
+            <div class="card-head mcp-head">
               <span class="snap-time">${esc(s.created || s.name)}</span>
               ${s.label ? `<span class="badge">${esc(s.label)}</span>` : ''}
               <span class="badge">${s.file_count} file(s)</span>
               <span class="badge">${esc(fmt(s.bytes))} B</span>
             </div>
             <div class="snap-files">${(s.files || []).slice(0, 12).map(esc).join(' · ')}${s.file_count > 12 ? ' …' : ''}</div>
-            <div class="mcp-actions">
+            <div class="card-actions mcp-actions">
               <button class="ho-btn small" data-act="compare">Compare</button>
               <button class="ho-btn small" data-act="restore">Restore</button>
             </div>
@@ -1271,8 +1322,8 @@
         <span class="badge">startup impact: ${esc(fmt(impact.total))} tokens</span>
       </div>
       ${rows.map((p) => `
-        <div class="plug-card" data-id="${esc(p.id)}">
-          <div class="mcp-head">
+        <div class="card plug-card" data-id="${esc(p.id)}">
+          <div class="card-head mcp-head">
             <span class="mcp-name">${esc(p.name)}</span>
             <span class="badge">v${esc(p.version)}</span>
             <span class="badge ${p.enabled ? 'on' : ''}">${p.enabled ? 'enabled' : 'disabled'}</span>
@@ -1283,7 +1334,7 @@
           <div class="mcp-meta">${esc(p.description)}</div>
           ${(p.permissions || []).length ? `<div class="mcp-meta"><span class="ho-sub">permissions: ${esc(p.permissions.join(', '))}</span></div>` : ''}
           ${p.error ? `<div class="ho-err">${esc(p.error)}</div>` : ''}
-          <div class="mcp-actions">
+          <div class="card-actions mcp-actions">
             <button class="ho-btn small ${p.enabled ? '' : 'primary'}" data-act="toggle">${p.enabled ? 'Disable' : 'Enable'}</button>
             ${(p.settings || []).length ? '<button class="ho-btn small" data-act="settings">Settings</button>' : ''}
             <button class="ho-btn small" data-act="logs">Logs</button>

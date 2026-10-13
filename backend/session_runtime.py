@@ -326,7 +326,14 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
     # still spent a turn of a budget the person never used. A launch that
     # worked also clears the failure count, so the count means *consecutive*.
     _autonomy_launch(sid, ok=True)
-    _autonomy_bump(sid, cycles=1)
+    after = _autonomy_bump(sid, cycles=1)
+    # A launched cycle used to be silent on the bus: nothing separated "a new
+    # cycle started" from the turn events that followed it, so an audible tick had
+    # no moment to attach to. Published once per *successful* launch — a refused
+    # launch is not new work, and a tick announcing work that never started is
+    # worse than no tick.
+    turn_bus.publish(sid, {"type": "autonomy_cycle", "sid": sid,
+                           "cycle": int(after.get("cycles") or 0)})
 
 
 # ── shared helpers (moved here from the socket handler they used to live in) ─

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, proctools
+from . import config, launcher, proctools
 
 BG: dict[str, dict] = {}
 TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
@@ -365,22 +365,57 @@ def restore(name: str, root: str) -> str:
 
 HANDSHAKE_FILE = "restart.json"
 RESTART_LOG = "restart.log"
+RESTART_STATE_FILE = "restart_state.json"
 PORT_FREE_TIMEOUT = 30.0     # seconds to wait for the old listener to drop
 COMEBACK_TIMEOUT = 20.0      # seconds to wait for the new listener to appear
+# How long a finished restart's outcome stays worth reporting. A failure is news
+# for the next few minutes, not for ever: once the server is back and has been
+# serving for a while, `last_restart` is history, and history belongs in
+# audit.jsonl rather than in the Settings panel.
+RESTART_STATE_TTL = 900.0
 
 
 def _server_command() -> list[str] | None:
-    """The command that starts the server: this interpreter, as a module.
+    """The FALLBACK start command: this interpreter, as a module.
 
-    The interpreter running Tacit is the right one to run it again — it is
-    where the packages are, and run.bat would work but ends in a `pause`.
-    The environment is inherited, so TACIT_PORT, TACIT_HOST and every other
-    setting the running server had, the new one has too.
+    Only for a server with no launcher script to hand the job to — an embedded
+    run, a test client, a checkout that never ran install. Reusing this
+    interpreter is right there (it is where the packages are) and the environment
+    carries over.
+
+    It is the fallback and not the rule. Starting the server this way is what
+    made the Restart button a second launch path nobody could read: no console,
+    the environment of a process already on its way out, and none of what
+    run.bat sets. See `_start_command`.
+
+    The marker token rides as the script's first argument, exactly where
+    `proctools._marked_argv` puts it, so a server started by the fallback and a
+    server started by the launcher are proved by the same command-line check.
     """
     exe = Path(sys.executable)
     if not exe.name.lower().startswith("python"):
         return None
-    return [str(exe), "-m", "backend.main"]
+    return [str(exe), "-m", "backend.main", launcher.SERVER_MARKER]
+
+
+def _start_command() -> tuple[list[str] | None, str]:
+    """(command, which path) — the launcher script if there is one, else this interpreter.
+
+    Decided when the button is pressed and written into the handshake, so the
+    watcher runs the path the response reported instead of re-picking one after
+    the fact. Re-resolving it in the watcher is how plan section 0.4 got two
+    interpreters in one chain: `python` was looked up off PATH by a process whose
+    parent had been started from a `.venv`.
+    """
+    script = launcher.launcher_path()
+    if script is not None:
+        # `/bin/sh script` rather than the script alone: the +x bit is not
+        # guaranteed on a checkout, and sh does not need it.
+        if config.OS == "Windows":
+            return ["cmd.exe", "/c", str(script)], "launcher"
+        return ["/bin/sh", str(script)], "launcher"
+    cmd = _server_command()
+    return (cmd, "interpreter") if cmd else (None, "none")
 
 
 def restart_server() -> dict:
@@ -400,18 +435,24 @@ def restart_server() -> dict:
         # second watcher, and two starters on one port is a bind race.
         return {"ok": False, "error": "a restart is already in progress"}
 
+    # Which path will start the next server, decided NOW and carried in the
+    # handshake: the watcher must run the one this response reports, not
+    # re-resolve a `python` off PATH after the parent is gone.
+    start_cmd, via = _start_command()
+    if not start_cmd:
+        return {"ok": False, "error": "could not identify the interpreter to restart with, "
+                                      "and no launcher script was found"}
     handshake = {"host": config.HOST, "port": config.PORT,
-                 "pid": os.getpid(), "ts": time.time()}
+                 "pid": os.getpid(), "ts": time.time(),
+                 "cmd": start_cmd, "via": via}
     try:
         config.HOME.mkdir(parents=True, exist_ok=True)
         (config.HOME / HANDSHAKE_FILE).write_text(json.dumps(handshake), encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"could not write the restart handshake: {e}"}
-
-    cmd = _server_command()
-    if not cmd:
-        (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
-        return {"ok": False, "error": "could not identify the interpreter to restart with"}
+    # `starting` before anything else happens, so a reader during the gap sees an
+    # attempt in flight rather than the outcome of some earlier restart.
+    record_restart_state("starting", via=via, cmd=start_cmd, port=config.PORT)
 
     # Detached: the watcher must outlive this process, and on Windows that
     # takes DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP; the POSIX side gets
@@ -442,18 +483,26 @@ def restart_server() -> dict:
                 **kwargs)
     except Exception as e:  # noqa: BLE001
         (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
+        # This server stays up — the exit is only requested after the watcher is
+        # proved running — but the attempt and its reason are still recorded.
+        record_restart_state("failed", stage="watcher", detail=str(e),
+                             via=via, cmd=start_cmd, port=config.PORT)
         return {"ok": False, "error": f"could not start the restart watcher: {e}"}
     finally:
         # Recorded even when the spawn failed: the attempt is the fact.
         audit.record("server_restart", backend="server", mode="restart",
                      pid=os.getpid(), port=config.PORT, host=config.HOST,
-                     watcher=watcher.pid if watcher else 0)
+                     watcher=watcher.pid if watcher else 0, via=via)
 
     # Not os._exit: the point is that uvicorn's own shutdown runs, which stops
     # the analyzer, stops the MCP servers and removes the pid file.
     server.should_exit = True
+    # `via` is the point of item 4: the response says which path starts the next
+    # server — the launcher script a person runs, or this interpreter when there
+    # is no script to run — instead of the caller having to wonder.
     return {"ok": True, "pid": os.getpid(), "watcher": watcher.pid,
-            "port": config.PORT, "log": str(config.HOME / RESTART_LOG)}
+            "port": config.PORT, "log": str(config.HOME / RESTART_LOG),
+            "via": via, "cmd": start_cmd}
 
 
 def _can_bind(host: str, port: int) -> bool:
@@ -498,6 +547,68 @@ def _port_busy(host: str, port: int, timeout: float) -> bool:
     return False
 
 
+def _restart_state_file() -> Path:
+    return config.HOME / RESTART_STATE_FILE
+
+
+def record_restart_state(state: str, *, stage: str = "", detail: str = "",
+                         via: str = "", cmd: list[str] | None = None,
+                         port: int = 0) -> None:
+    """Leave the restart's outcome on disk for the next process to read.
+
+    The awkward part about a failed restart is that nobody is left holding the
+    fact: the watcher that knows it failed has no server to report through, and
+    the browser has nothing to ask. `restart.log` records the running commentary,
+    but a log file nobody opens is not making failure visible.
+
+    So the outcome is written where whichever server comes back can read it —
+    including one a person started by hand after the failure — and Settings >
+    Server reports it. Written atomically because a reader must never see half a
+    restart; a failed write is not worth failing the restart over.
+    """
+    payload = {"state": state, "stage": stage, "detail": detail, "via": via,
+               "cmd": [str(p) for p in (cmd or [])], "port": port,
+               "watcher": os.getpid(), "attempted_at": time.time()}
+    path = _restart_state_file()
+    try:
+        tmp = Path(str(path) + ".tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def restart_state(max_age: float = RESTART_STATE_TTL) -> dict:
+    """The last restart's outcome, or {} when there is nothing recent to report.
+
+    Age-gated on purpose: a failure is news for the next few minutes. After that
+    it belongs in the audit log, not in the panel a person opens to check a port.
+    """
+    try:
+        raw = json.loads(_restart_state_file().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        age = time.time() - float(raw.get("attempted_at") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if not 0 <= age <= max_age:
+        return {}
+    if raw.get("state") == "starting":
+        # A watcher that died mid-flight leaves `starting` behind and nothing
+        # corrects it. Past the point where every branch of restart_watch would
+        # have reported, silence IS the failure — so say that instead of letting
+        # the panel show a restart in flight forever.
+        stall = PORT_FREE_TIMEOUT + COMEBACK_TIMEOUT + 60.0
+        if age > stall:
+            return dict(raw, state="failed", stage="stalled",
+                        detail="the restart watcher never reported an outcome")
+    return raw
+
+
 def restart_watch() -> None:
     """The detached watcher: wait for the port to free, start the server, block.
 
@@ -518,6 +629,7 @@ def restart_watch() -> None:
         handshake = json.loads((config.HOME / HANDSHAKE_FILE).read_text(encoding="utf-8"))
     except Exception as e:  # noqa: BLE001
         log_line(f"no handshake ({e}); nothing to do")
+        record_restart_state("failed", stage="handshake", detail=str(e))
         return
     (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
 
@@ -525,6 +637,8 @@ def restart_watch() -> None:
     port = int(handshake.get("port") or 0)
     if not port:
         log_line("handshake named no port; nothing to do")
+        record_restart_state("failed", stage="handshake",
+                             detail="the handshake named no port")
         return
 
     # The old process was asked to exit, not killed, so the listener drops on
@@ -536,14 +650,50 @@ def restart_watch() -> None:
         if time.time() >= end:
             log_line(f"port {port} still held after {PORT_FREE_TIMEOUT:.0f}s; not starting "
                      "a replacement that would lose the bind race")
+            record_restart_state("failed", stage="port", port=port,
+                                 detail=f"port {port} was still held {PORT_FREE_TIMEOUT:.0f}s "
+                                        "after the old server was asked to exit, so nothing "
+                                        "was started")
             return
         time.sleep(0.25)
 
-    cmd = _server_command()
+    # The path the button chose, out of the handshake — so the launcher script
+    # that answered the request is the launcher script that runs. A handshake
+    # written before this existed has no command in it, and only then does the
+    # watcher decide for itself.
+    cmd = handshake.get("cmd") or None
+    via = str(handshake.get("via") or "")
+    if not cmd:
+        cmd, via = _start_command()
     if not cmd:
         log_line("could not identify the interpreter to restart with")
+        record_restart_state("failed", stage="start", port=port,
+                             detail="no launcher script was found and this interpreter could "
+                                    "not be reused — start Tacit with run.bat / run.sh")
         return
-    log_line(f"port {port} is free; starting {' '.join(cmd)}")
+    log_line(f"port {port} is free; starting via {via}: {' '.join(cmd)}")
+    spawn_kwargs: dict = {}
+    if via == "launcher":
+        # Two things the launcher path needs that the interpreter path does not.
+        # A marker token would be injected into `cmd.exe /c run.bat` and break
+        # it, so the argv goes through untouched — the server the script starts
+        # registers itself, marker and all. And on Windows the console is the
+        # feature: a new window, which run.bat's `pause` keeps open if the
+        # server dies. That is the difference between a failed restart a person
+        # can read and one that only exists in restart.log.
+        spawn_kwargs["mark"] = False
+        if config.OS == "Windows":
+            spawn_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    elif any(m in cmd for m in proctools.MARKERS):
+        # The fallback command already carries its marker: `_server_command` puts
+        # it in argv so a server started by a script and one started here are
+        # proved by the same check. Spawning it with the default `mark=True`
+        # injected a second token and left the child reading
+        # `backend.main tacit-server tacit-server`. Anything that arrives without
+        # a marker — an older handshake, or one written by a caller that forgot —
+        # still gets it added, because an unmarked server is one the next stop
+        # step cannot see.
+        spawn_kwargs["mark"] = False
     try:
         # The replacement server is marked (identifiable) but deliberately NOT
         # job-contained: it must outlive the watcher that started it, and a
@@ -551,9 +701,11 @@ def restart_watch() -> None:
         # registry row is what the next boot's sweep uses to tell a live
         # server from an orphan.
         proc = proctools.spawn(proctools.ROLE_SERVER, cmd, cwd=str(config.ROOT),
-                               contain=False)
+                               contain=False, **spawn_kwargs)
     except Exception as e:  # noqa: BLE001
         log_line(f"failed to start the server: {e}")
+        record_restart_state("failed", stage="spawn", detail=str(e),
+                             via=via, cmd=cmd, port=port)
         return
     # The watcher's registry row comes off IMMEDIATELY, not once the server is
     # confirmed back: the replacement's own startup sweep runs before its port
@@ -564,8 +716,22 @@ def restart_watch() -> None:
     proctools.unregister(os.getpid())
     if _port_busy("127.0.0.1", port, COMEBACK_TIMEOUT):
         log_line(f"server is back on port {port} (pid {proc.pid})")
+        record_restart_state("ok", stage="bind", via=via, cmd=cmd, port=port,
+                             detail=f"pid {proc.pid} is listening on port {port}")
     else:
+        # The one failure the plan asked to make visible: started, never bound.
+        # The console the launcher opened is what a person reads; this is what
+        # Settings says once any server is answering again.
+        detail = (f"the server started by {via or 'the watcher'} (pid {proc.pid}) never "
+                  f"accepted on port {port} within {COMEBACK_TIMEOUT:.0f}s")
         log_line(f"server (pid {proc.pid}) did not accept on port {port} within "
                  f"{COMEBACK_TIMEOUT:.0f}s; it may have failed to start — see the log above")
-    proc.wait()
-    log_line(f"server (pid {proc.pid}) exited with {proc.returncode}")
+        record_restart_state("failed", stage="bind", detail=detail,
+                             via=via, cmd=cmd, port=port)
+    code = proc.wait()
+    log_line(f"server (pid {proc.pid}) exited with {code}")
+    if code not in (0, None):
+        # It bound, then died. Reporting `ok` after that would be a lie by the
+        # time anyone reads it, and a crash-on-boot is the failure worth naming.
+        record_restart_state("failed", stage="exit", via=via, cmd=cmd, port=port,
+                             detail=f"the replacement server (pid {proc.pid}) exited with {code}")

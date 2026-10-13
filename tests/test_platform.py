@@ -910,6 +910,82 @@ class TestTurnSoundSetting(Isolated):
         self.assertIn("post('/api/harness/sound', { turn_sound: enable })", plat)
 
 
+    # ── the second switch, and the merge that keeps the first one honest ──
+
+    def _post_sound(self, payload):
+        """Call the real route the way the panel does — one key at a time."""
+        import asyncio
+        from backend.routers import api as api_router
+
+        class FakeRequest:
+            def __init__(self, body):
+                self._body = body
+
+            async def json(self):
+                return self._body
+
+        return asyncio.run(api_router.set_sound(FakeRequest(payload)))
+
+    def test_alerts_are_off_until_a_person_asks(self):
+        self.assertFalse(config.alert_sound())
+        self.assertIsNone(config.prefs().get("alertSound"),
+                          "absent means off, and nothing had to be written to say so")
+
+    def test_setting_one_switch_does_not_silence_the_other(self):
+        """The bug the per-key merge exists for. The panel's two switches post on
+        their own, so a handler that rebuilt the whole prefs dict from one field —
+        as this route once did — would turn the master back on every time someone
+        enabled an alert, or silence the alerts on every master click."""
+        self._post_sound({"turn_sound": False})
+        out = self._post_sound({"alert_sound": True})
+        self.assertTrue(out["alert_sound"])
+        self.assertFalse(out["turn_sound"], "enabling alerts re-armed the master")
+        out = self._post_sound({"turn_sound": True})
+        self.assertTrue(out["turn_sound"])
+        self.assertTrue(out["alert_sound"], "using the master silenced the alerts")
+
+    def test_only_the_key_a_person_clicked_reaches_disk(self):
+        self._post_sound({"alert_sound": True})
+        stored = config.read_json(config.PREFS_FILE, {})
+        self.assertIs(stored["alertSound"], True)
+        self.assertNotIn("turnSound", stored,
+                         "a switch nobody touched must not be defaulted into the file")
+
+    def test_an_empty_post_changes_nothing(self):
+        before = dict(config.prefs())
+        out = self._post_sound({})
+        self.assertEqual(config.prefs(), before, "an unrelated POST wrote prefs")
+        self.assertTrue(out["turn_sound"])
+        self.assertFalse(out["alert_sound"])
+
+    @staticmethod
+    def _branch(app, name):
+        """One case of the socket's switch, so a guard can pin a call to the branch
+        that owns it instead of trusting that a substring is unique."""
+        start = app.index(f"case '{name}':")
+        return app[start:app.index("break;", start)]
+
+    def test_the_two_new_sounds_hang_on_the_alert_switch(self):
+        """Text can pin the wiring, not the noise: which events chime, and behind
+        which switch. Whether a person can tell a tick from a warn is ears' work,
+        and the tick firing once per launched cycle is the gate's own test."""
+        root = Path(__file__).resolve().parent.parent
+        app = (root / "static" / "app.js").read_text(encoding="utf-8")
+        plat = (root / "static" / "platform.js").read_text(encoding="utf-8")
+        self.assertIn("const ALERT_KINDS = new Set(['warn', 'tick']);", app)
+        self.assertIn("if (ALERT_KINDS.has(kind) && !alertSoundOn) return;", app)
+        self.assertIn("alertSoundOn = d.alert_sound === true;", app,
+                      "silent unless the server says on")
+        self.assertIn("chime('warn')", self._branch(app, "notify"))
+        self.assertIn("chime('tick')", self._branch(app, "autonomy_cycle"),
+                      "the tick is the cycle's own event, not a turn epilogue's")
+        # `toast(` and not `toast`: this branch's own comment says "Deliberately no
+        # toast", so the bare word matches prose and the guard fails on a correct file.
+        self.assertNotIn("toast(", self._branch(app, "autonomy_cycle"),
+                         "a loop that runs for hours must not paint a banner per cycle")
+        self.assertIn("post('/api/harness/sound', { alert_sound: enable })", plat)
+
+
 class TestSavedFolders(Isolated):
     """Folders that have been used are remembered, and can be forgotten."""
 
@@ -2731,6 +2807,151 @@ class TestAutonomyPersistence(Isolated):
         reverts the other. New autonomy fields have to join the list."""
         for field in (assistant.GOAL_FIELD, assistant.AUTONOMY_FIELD):
             self.assertIn(field, store.PRESERVED)
+
+
+# ── 7c. the launch gate: the one moment the loop can spend a person's budget ──
+class TestAutonomyLaunchGate(Isolated):
+    """``_autonomy_after_assistant`` against the real store, with the agent stubbed.
+
+    The autonomous-cycle tick was wired onto this function's success path with no
+    test of its own — PLAN.md item 5 records that as the slice's debt, because the
+    rule the tick leans on is the rule that was hardest to get right: a launch that
+    did not happen charges no cycle, ends no run, and makes no noise. Every
+    assertion below is about a number on disk or an event on the bus. No model, no
+    turn, no browser.
+    """
+
+    def _rt(self):
+        # Imported per call, never at module scope: see the note by the imports.
+        from backend import session_runtime
+        return session_runtime
+
+    def _armed(self, answer="```text\nDo the next step.\n```", **budget):
+        sr = self._rt()
+        sid = store.save(store.create(title="gate", project=None, model="p/m",
+                                      mode="agent"))["id"]
+        sr.goal_set(sid, "Land the remaining slices.")
+        sr.autonomy_set(sid, enabled=True, **budget)
+        store.patch(sid, assistant=[{"role": "assistant", "content": answer}])
+        return sid
+
+    def _drive(self, sid, *, start=None, running=False):
+        """Run the gate once. Returns (launches, events): what the agent was asked
+        for, and what the bus heard. ``start`` is the whole reply start_turn gives
+        back, so a refusal is a return value and not an exception."""
+        sr = self._rt()
+        launches, events = [], []
+
+        def fake_start(sid_, rec, text, *args, **kwargs):
+            # *args/**kwargs on purpose: a refactor of start_turn's signature must
+            # not fail the fake, it must fail the assertion on what was passed.
+            launches.append({"text": text, "origin": kwargs.get("origin")})
+            return {"ok": True} if start is None else start
+
+        class FakeBus:
+            def publish(self, sid_, event):
+                events.append(event)
+
+        orig = (sr.start_turn, sr.turn_running, sr.turn_bus)
+
+        def restore():
+            sr.start_turn, sr.turn_running, sr.turn_bus = orig
+
+        self.addCleanup(restore)
+        sr.start_turn = fake_start
+        sr.turn_running = lambda s: running
+        sr.turn_bus = FakeBus()
+        sr._autonomy_after_assistant(sid, store.get(sid), None)
+        return launches, events
+
+    def _ticks(self, events):
+        return [e for e in events if e.get("type") == "autonomy_cycle"]
+
+    def test_a_launched_cycle_charges_one_and_announces_one(self):
+        sid = self._armed()
+        launches, events = self._drive(sid)
+        self.assertEqual(len(launches), 1, "an armed run with work to do must launch")
+        self.assertEqual(launches[0]["text"], "Do the next step.",
+                         "the agent got the Assistant's words, not the Goal")
+        self.assertEqual(launches[0]["origin"], "autonomous")
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertEqual((st["cycles"], st["failures"]), (1, 0))
+        ticks = self._ticks(events)
+        self.assertEqual(len(ticks), 1, "one launched cycle is one tick")
+        self.assertEqual((ticks[0]["sid"], ticks[0]["cycle"]), (sid, 1))
+
+    def test_a_refused_launch_charges_nothing_and_says_nothing(self):
+        sid = self._armed()
+        launches, events = self._drive(
+            sid, start={"ok": False, "error": "no model configured"})
+        self.assertEqual(len(launches), 1, "the gate did ask")
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertEqual(st["cycles"], 0, "a cycle that never started spent budget")
+        self.assertEqual(st["failures"], 1)
+        self.assertTrue(st["enabled"], "one refusal retries on the next cycle")
+        self.assertEqual(self._ticks(events), [],
+                         "a tick announced work that never started")
+
+    def test_a_launch_that_lost_the_race_costs_the_run_nothing(self):
+        """The person asked something by hand; that turn's epilogue continues the
+        chain. Ending the mode here is the bug this branch exists to prevent."""
+        sid = self._armed()
+        _launches, events = self._drive(
+            sid, start={"ok": False, "error": "a turn is already running"})
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertEqual((st["cycles"], st["failures"]), (0, 0),
+                         "a hand-typed question must not spend the run's budget")
+        self.assertTrue(st["enabled"])
+        self.assertEqual(self._ticks(events), [])
+
+    def test_two_refusals_in_a_row_end_the_run_without_a_tick(self):
+        sid = self._armed()
+        err = {"ok": False, "error": "no model configured"}
+        self._drive(sid, start=err)
+        _launches, events = self._drive(sid, start=err)
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertFalse(st["enabled"], "a run that cannot start keeps being asked")
+        self.assertIn("twice in a row", st["reason"])
+        self.assertEqual(st["cycles"], 0)
+        self.assertEqual(self._ticks(events), [])
+
+    def test_done_ends_the_chain_before_the_agent_is_asked(self):
+        sid = self._armed(answer="```text\nDONE\n```")
+        launches, events = self._drive(sid)
+        self.assertEqual(launches, [], "a met Goal must not start another turn")
+        self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"])
+        self.assertEqual(self._ticks(events), [])
+
+    def test_an_exhausted_budget_never_reaches_the_agent(self):
+        sid = self._armed(max_cycles=1)
+        store.patch(sid, assistantAutonomy=dict(assistant.AUTONOMY_DEFAULTS,
+                                                enabled=True, max_cycles=1, cycles=1))
+        launches, events = self._drive(sid)
+        self.assertEqual(launches, [], "the limit is checked before the spawn")
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertFalse(st["enabled"])
+        self.assertIn("limit", st["reason"])
+        self.assertEqual(self._ticks(events), [])
+        self.assertEqual(st["cycles"], 1, "hitting the limit must not charge a turn")
+
+    def test_a_manual_question_does_not_disarm_the_run(self):
+        sid = self._armed()
+        launches, events = self._drive(sid, running=True)
+        self.assertEqual(launches, [])
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertTrue(st["enabled"], "a question typed by hand ended an armed run")
+        self.assertEqual((st["cycles"], st["failures"]), (0, 0))
+        self.assertEqual(events, [], "nothing happened, so the bus should hear nothing")
+
+    def test_an_unarmed_session_is_inert(self):
+        sr = self._rt()
+        sid = store.save(store.create(title="off", project=None, model="p/m",
+                                      mode="agent"))["id"]
+        sr.goal_set(sid, "Land the remaining slices.")
+        launches, events = self._drive(sid)
+        self.assertEqual(launches, [])
+        self.assertEqual(events, [])
+        self.assertEqual(assistant.autonomy_of(store.get(sid))["cycles"], 0)
 
 
 class TestAssistantPaneWiring(unittest.TestCase):

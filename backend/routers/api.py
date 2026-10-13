@@ -56,6 +56,7 @@ async def info():
     default = reg.get("default") or ""
     rows = config.model_list()
     resolved = config.resolve_model(default) if default else None
+    from .. import autoupdater
     return {
         "models": rows,
         "default": default,
@@ -65,6 +66,11 @@ async def info():
         "thinking_levels": _thinking_block(default or (resolved or {}).get("ref"))["thinking_levels"],
         "thinking_info": thinking_meta(default or (resolved or {}).get("ref")),
         "default_thinking": config.prefs().get("thinking", "default"),
+        # PLAN.md item 5: the brand slot says which checkout this is. This is the
+        # same string the auto-updater compares against, read through the same
+        # function — empty when the install predates version tracking, and the
+        # client says so rather than showing a blank that looks like a bug.
+        "version": autoupdater.local_version(),
     }
 
 
@@ -834,15 +840,25 @@ async def set_deliver_guarantee(request: Request):
 
 @router.get("/api/harness/sound")
 async def get_sound():
-    """Whether the browser chimes when a turn ends. On by default."""
-    return _ok(turn_sound=config.turn_sound())
+    """The two chime switches: the turn-end pair (on by default) and mid-turn
+    alerts (off by default)."""
+    return _ok(turn_sound=config.turn_sound(), alert_sound=config.alert_sound())
 
 
 @router.post("/api/harness/sound")
 async def set_sound(request: Request):
     body = await request.json()
-    config.save_prefs({"turnSound": bool(body.get("turn_sound"))})
-    return _ok(turn_sound=config.turn_sound())
+    # Only the keys that actually arrived are written. The panel's two switches
+    # post on their own, and a handler that defaulted the missing one would
+    # silence the other switch every time either was clicked.
+    changes = {}
+    if "turn_sound" in body:
+        changes["turnSound"] = bool(body.get("turn_sound"))
+    if "alert_sound" in body:
+        changes["alertSound"] = bool(body.get("alert_sound"))
+    if changes:
+        config.save_prefs(changes)
+    return _ok(turn_sound=config.turn_sound(), alert_sound=config.alert_sound())
 
 
 @router.get("/api/tools")
@@ -854,7 +870,14 @@ async def get_tools():
         fn = t["function"]
         rows.append({"name": fn["name"], "description": fn["description"],
                      "enabled": fn["name"] not in disabled})
+    # `shellOverlap` rides along because the Tools tab is its home and the tab
+    # must render the current mode, not assume the default. The vocabulary comes
+    # from config so the switch cannot drift from what shell_overlap() accepts;
+    # the labels stay in the JS, where they belong.
     return {"builtin": rows, "tools": rows, "disabled": sorted(disabled),
+            "shellOverlap": config.shell_overlap(),
+            "shellOverlapModes": list(config.SHELL_OVERLAP_MODES),
+            "shellOverlapPinned": config.shell_overlap_pinned(),
             "note": "Toggles apply to new agent turns. Chat mode arms no tools at all."}
 
 
@@ -864,6 +887,19 @@ async def toggle_tool(request: Request):
     name = body.get("name")
     if not name:
         return _fail("name required")
+    # shellOverlap is not a tool — it is a three-state behaviour switch that
+    # lives on this endpoint because the Tools tab is its only home. It takes a
+    # `mode`, never an `enabled`: a boolean cannot say "advise", and silently
+    # coercing one would turn "off" into "block" on the way through.
+    if name == "shellOverlap":
+        mode = str(body.get("mode") or "").strip().lower()
+        if mode not in config.SHELL_OVERLAP_MODES:
+            return _fail("mode must be one of " + " / ".join(config.SHELL_OVERLAP_MODES))
+        if config.shell_overlap_pinned():
+            return _fail("TACIT_SHELL_OVERLAP pins this to " + config.shell_overlap()
+                         + "; unset it to change the mode here")
+        config.save_prefs({"shellOverlap": mode})
+        return _ok(name="shellOverlap", mode=mode)
     disabled = set(config.prefs().get("disabledTools") or [])
     if body.get("enabled"):
         disabled.discard(name)
@@ -918,11 +954,17 @@ async def server_restart():
 async def server_status():
     """Where this process listens and which pid it is — the General tab's Server section."""
     from .. import agent as agent_mod
+    from .. import extras
     helpers = [t["function"]["name"] for t in agent_mod.tools_for()
                if t["function"]["name"] in agent_mod.MCP_HELPER_NAMES]
+    # `last_restart` is the restart that just happened, successful or not. The
+    # watcher that knows a restart failed has no server to report through, so it
+    # leaves the outcome on disk and this reports it — which also means a server
+    # started by hand after a failure reports the failure it replaced.
     return _ok(host=config.HOST, port=config.PORT, pid=os.getpid(),
                mcp_helpers=len(helpers),
-               mcp_servers=len(mcp_registry.load()["servers"]))
+               mcp_servers=len(mcp_registry.load()["servers"]),
+               last_restart=extras.restart_state())
 
 
 @router.get("/api/processes")

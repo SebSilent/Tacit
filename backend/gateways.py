@@ -161,7 +161,11 @@ def run(gateway_id: str, task: str, cwd: str | None = None, timeout: int | None 
     import subprocess
 
     try:
-        r = subprocess.run(argv, cwd=workdir, capture_output=True, text=True, timeout=limit)
+        # stdin: DEVNULL. A gateway is an arbitrary command the operator typed,
+        # so this is the same hang as the shell tool: inheriting stdin lets it sit
+        # on a handle that will never deliver input until the timeout kills it.
+        r = subprocess.run(argv, cwd=workdir, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=limit)
         out = ((r.stdout or "") + ("\n" + r.stderr if r.stderr else "")).strip()
         code = r.returncode
     except subprocess.TimeoutExpired:

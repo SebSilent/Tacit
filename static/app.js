@@ -66,6 +66,9 @@ const THEMES = [
   { id: 'vapor',    name: 'Vapor',    hint: 'neon cyber' },
   { id: 'ocean',    name: 'Ocean',    hint: 'abyssal blue' },
   { id: 'ember',    name: 'Ember',    hint: 'warm forge' },
+  { id: 'contrast', name: 'Contrast', hint: 'high contrast' },
+  { id: 'contrast-light', name: 'Contrast light', hint: 'high contrast, light' },
+  { id: 'mono',     name: 'Mono',     hint: 'greyscale' },
 ];
 let theme = localStorage.getItem('tacit.theme') || 'midnight';
 if (!THEMES.some(t => t.id === theme)) theme = 'midnight';
@@ -77,8 +80,23 @@ function applyTheme(id) {
   document.documentElement.dataset.theme = id;
   localStorage.setItem('tacit.theme', id);
 }
+// Hover-preview: the Appearance panel can show a theme before you choose it.
+// Deliberately NOT `applyTheme` — a browse through eight palettes is not a
+// decision, and `localStorage` is the decision. `theme` stays the committed one,
+// so `current()` keeps answering "which theme do I actually have" while a preview
+// is on screen (the panel's "Active" label must not follow the cursor), and
+// `endPreview()` puts the committed one back on the document.
+function previewTheme(id) {
+  if (!THEMES.some(t => t.id === id)) return;
+  document.documentElement.dataset.theme = id;
+}
+function endPreview() { document.documentElement.dataset.theme = theme; }
+
 // consumed by the harness "Appearance" panel
-window.TacitTheme = { themes: THEMES, current: () => theme, apply: applyTheme };
+window.TacitTheme = {
+  themes: THEMES, current: () => theme, apply: applyTheme,
+  preview: previewTheme, endPreview: endPreview,
+};
 
 // NOTE: the "ensure at least one session" bootstrap deliberately does NOT run
 // here. newSession() -> renderTokMeter() touches `const tokMeter`, declared
@@ -778,6 +796,13 @@ function handle(m) {
         window.TacitDelegation.maybeLaunch(m.name);
       }
       break;
+    case 'tool_progress':
+      // Live tail of a command that is still running. Deliberately NOT pushed
+      // into streaming.msg.tools: that array is the transcript's tool list, and
+      // a progress chunk is not a result the model ever saw. Nothing here is
+      // saved — reload the session and the card shows the finished result.
+      progressToolCard(m);
+      break;
     case 'tool_end':
       finishToolCard(m);
       if (streaming) {
@@ -834,6 +859,17 @@ function handle(m) {
       // ordinary chatter. The governor's warnings are the ones worth noticing
       // while a turn is still running, so they get the emphatic toast.
       toast(m.message, m.level === 'warn');
+      // ...and, under its own switch, a chime that does not require the toast to
+      // be read. Every warn mark rings (50%, 75%, 90%): whether three chimes in
+      // one turn is too many is a listening judgement, recorded as one.
+      if (m.level === 'warn') chime('warn');
+      break;
+
+    case 'autonomy_cycle':
+      // A launched autonomous cycle. Deliberately no toast: the loop can run for
+      // hours, and a banner every cycle is noise the tick does not need — the
+      // point of the sound is that you hear it without looking at the tab.
+      chime('tick');
       break;
     case 'log':
       // raw agent stderr — surface only when clearly an error
@@ -977,26 +1013,50 @@ function ensureStreamingBubble() {
   setBusy(true);
 }
 
-// ── turn-end sound ─────────────────────────────────────────────────
+// ── turn sounds ────────────────────────────────────────────────────
 // Synthesised rather than an asset file: nothing to ship, nothing to
 // download, no codec, and it is quiet by construction. Two short notes say
 // "the work finished" without demanding to be looked at — the case the sound
 // exists for is the tab in the background. Gated on a server preference, so
 // every device pointed at this install agrees about whether it makes a noise.
+//
+// Two switches, because the two kinds of sound make different promises.
+// `turnSound` is the end of work someone is waiting for, so it can be on by
+// default. `alertSound` covers things that fire *while* work runs — a budget
+// warning, one tick per cycle of a loop that can run for hours unattended —
+// and starts silent: a sound that repeats by itself is the kind a person
+// reaches for the mute on.
 let turnSoundOn = true;
+let alertSoundOn = false;
 let audioCtx = null;
 let turnFailed = false;   // set by an error/fatal event, read by the chime
+
+// The tunable part, in one table. These four are placeholders picked so the
+// kinds are not confusable with each other — nobody has heard them, because
+// there are no ears in this environment. Pitch, spacing and length all belong
+// to a listening pass, and this object is the only place to change them.
+const CHIME_NOTES = {
+  done: [523, 784],     // C5 -> G5, rising: the turn finished
+  error: [392, 262],    // G4 -> C4, falling: it ended on an error
+  warn: [659, 523],     // E5 -> C5, a drop: still running, and not going well
+  tick: [880],          // one soft A5: a new autonomous cycle started
+};
+
+// The kinds the mid-turn switch governs. 'done'/'error' answer to the master.
+const ALERT_KINDS = new Set(['warn', 'tick']);
 
 async function loadSoundPref() {
   try {
     const r = await fetch('/api/harness/sound');
     const d = await r.json();
     turnSoundOn = d.turn_sound !== false;
+    alertSoundOn = d.alert_sound === true;   // silent unless the server says on
   } catch (e) { /* offline: keep the default */ }
 }
 
 function chime(kind) {
-  if (!turnSoundOn) return;
+  if (!turnSoundOn) return;                              // master switch
+  if (ALERT_KINDS.has(kind) && !alertSoundOn) return;     // mid-turn sounds are opted into
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
@@ -1005,8 +1065,12 @@ function chime(kind) {
     // end while nobody has clicked in this tab yet, so resume and let it fail
     // quietly rather than throw inside a stream handler.
     if (audioCtx.state === 'suspended') audioCtx.resume();
+    const notes = CHIME_NOTES[kind];
+    if (!notes) return;            // an unknown kind is silence, not a thrown error
     const t0 = audioCtx.currentTime + 0.02;
-    const notes = kind === 'error' ? [392, 262] : [523, 784];
+    // The tick is one soft mark that says "a cycle started" and then gets out of
+    // the way; the rest are calls to look at the screen.
+    const peak = kind === 'tick' ? 0.02 : 0.05;
     notes.forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -1014,7 +1078,7 @@ function chime(kind) {
       osc.frequency.value = freq;
       const at = t0 + i * 0.11;
       gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.05, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(peak, at + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -1084,8 +1148,10 @@ function appendMsg(role, text, origin) {
   const body = wrap.querySelector('.msg-body-inner');
   if (role === 'assistant') {
     body.innerHTML = `<div class="reason-block"><button class="reason-toggle">thinking…</button><div class="reason-body"></div></div><div class="tools"></div><div class="msg-content"></div>`;
-    body.querySelector('.reason-toggle').addEventListener('click', e =>
-      e.target.closest('.reason-block').classList.toggle('open'));
+    // No listener on .reason-toggle: one delegated click handler on messagesEl
+    // routes the whole transcript (see `// delegated` below). A listener per row
+    // is a listener per message, forever, on the one surface that grows without
+    // bound.
   } else {
     body.innerHTML = `<div class="msg-content"></div>`;
     body.querySelector('.msg-content').textContent = text;
@@ -1093,7 +1159,6 @@ function appendMsg(role, text, origin) {
     edit.className = 'msg-edit';
     edit.title = 'Edit — rewinds the session to this message and continues from it';
     edit.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4L19.5 8.5a2.12 2.12 0 0 0-3-3L5 17.05V20z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
-    edit.addEventListener('click', ev => { ev.stopPropagation(); editUserMessage(wrap); });
     body.parentElement.appendChild(edit);
   }
   const inner = ensureInner();
@@ -1159,9 +1224,67 @@ function addToolCard(m) {
     <div class="tool-body"><pre></pre></div>`;
   card.querySelector('.tool-badge').textContent = m.name || 'tool';
   card.querySelector('.tool-args').textContent = argStr;
-  card.querySelector('.tool-head').addEventListener('click', () => card.classList.toggle('open'));
   tools.appendChild(card);
   scrollBottom();
+}
+
+const TOOL_TAIL_CHARS = 32768;  // newest end wins: the card is a window, not a file
+
+function progressToolCard(m) {
+  const card = messagesEl.querySelector(`.tool-card[data-id="${CSS.escape(m.id || '')}"]`);
+  if (!card) return;
+  // No card means the command already finished, or a replay overtook its own
+  // tool_start. Dropping the chunk is the right call either way: the tail is a
+  // live view only, and `tool_end` replaces the body with the real result.
+  const pre = card.querySelector('.tool-body pre');
+  if (!pre) return;
+  if (m.chunk) {
+    pre.textContent += m.chunk;
+    if (pre.textContent.length > TOOL_TAIL_CHARS) {
+      pre.textContent = pre.textContent.slice(-TOOL_TAIL_CHARS);
+    }
+    // Follow the output only while the body is open, so a collapsed card can
+    // never move anything on screen.
+    if (card.classList.contains('open')) {
+      const body = card.querySelector('.tool-body');
+      body.scrollTop = body.scrollHeight;
+    }
+  }
+  let meta = card.querySelector('.tool-meta');
+  if (!meta) {
+    meta = document.createElement('span');
+    meta.className = 'tool-meta';
+    const head = card.querySelector('.tool-head');
+    head.insertBefore(meta, head.querySelector('.tool-spin'));
+  }
+  // A heartbeat arrives with an empty chunk and only this number moving, which
+  // is the whole point: a build that prints nothing for two minutes must not
+  // look like the hang it is not.
+  const chars = m.chars || 0;
+  const size = chars >= 1024
+    ? (chars / 1024).toFixed(chars >= 10240 ? 0 : 1) + ' KB'
+    : chars + ' B';
+  meta.textContent = `${Math.round(m.elapsed_s || 0)}s · ${size}`;
+}
+
+// One place decides how a duration reads, so the live card, the finished card and
+// a card rebuilt from the stored transcript all say the same thing about the same
+// call. Sub-second work is the common case and "0.4s" hides that a call took 40ms.
+function fmtMs(ms) {
+  if (ms === null || ms === undefined) return '';
+  const n = Number(ms);
+  return n < 1000 ? `${Math.round(n)}ms` : `${(n / 1000).toFixed(1)}s`;
+}
+
+function setToolMeta(card, text) {
+  let meta = card.querySelector('.tool-meta');
+  if (!meta) {
+    meta = document.createElement('span');
+    meta.className = 'tool-meta';
+    const head = card.querySelector('.tool-head');
+    head.insertBefore(meta, head.querySelector('.tool-spin'));
+  }
+  meta.textContent = text;
 }
 
 function finishToolCard(m) {
@@ -1171,6 +1294,28 @@ function finishToolCard(m) {
   const spin = card.querySelector('.tool-spin');
   if (spin) spin.remove();
   card.querySelector('.tool-body pre').textContent = m.result || (m.is_error ? 'error' : 'done');
+  // The live tail showed "8s · 2.1 KB" while a command ran; on the finished card
+  // the running byte count is meaningless, so the slot keeps its place and holds
+  // what still matters: how long it took, which sandbox ran it, how many files it
+  // changed. A missing elapsed_ms (an older session, or the Assistant's own loop)
+  // leaves the slot empty rather than inventing a zero.
+  const meta = toolCardMeta(m);
+  if (meta) setToolMeta(card, meta);
+}
+
+// One builder for the finished card's meta slot. The live card and the rebuilt
+// transcript card used to assemble it twice, which is the same duplication the
+// plan calls out for the card markup itself. Nothing is invented here: a field the
+// backend did not send simply does not appear, so an old session renders as it
+// always did.
+function toolCardMeta(m) {
+  if (!m) return '';
+  const bits = [];
+  const dur = fmtMs(m.elapsed_ms);
+  if (dur) bits.push(dur);
+  if (m.backend) bits.push('sandbox: ' + m.backend);
+  if (m.changed) bits.push(m.changed + (m.changed === 1 ? ' file changed' : ' files changed'));
+  return bits.join(' · ');
 }
 
 function renderTranscript(s) {
@@ -1223,7 +1368,11 @@ function renderTranscript(s) {
         card.querySelector('.tool-badge').textContent = t.name;
         card.querySelector('.tool-args').textContent = argStr;
         card.querySelector('.tool-body pre').textContent = t.result || '';
-        card.querySelector('.tool-head').addEventListener('click', () => card.classList.toggle('open'));
+        // Rebuilt cards get the same slot the live one showed, from the numbers
+        // stored with the call - reload a session and the work still says how long
+        // it took, what ran it, and what it touched.
+        const meta = toolCardMeta(t);
+        if (meta) setToolMeta(card, meta);
         tools.appendChild(card);
       }
     }
@@ -1484,7 +1633,18 @@ function editUserMessage(wrap) {
 }
 
 // ── markdown ─────────────────────────────────────────────────────────
-function esc(t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// `"` is load-bearing here, not decoration: the renderers interpolate esc()
+// inside double-quoted attributes (data-path, title, data-opt), so a value
+// carrying a bare quote escapes its attribute and lands new attributes on a
+// live element — no `<` needed, so escaping `<`/`>` does not cover it. The
+// other five modules' esc all replace it; this one was the odd one out.
+// The leading String() is the other five's other difference: eight call sites
+// in the workspace and file-browser renderers already write
+// esc(String(p.path)) by hand, because a bare esc(0) used to throw inside
+// md()/a renderer and the surrounding try/catch swallows it — the pane just
+// silently loses its content. Latent rather than live (nothing passes a
+// non-string statically), which is why those eight coercions exist at all.
+function esc(t) { return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 // inline markdown on already-escaped text: bold, italic, strike, code, links
 function inlineMd(t) {
@@ -1565,13 +1725,37 @@ function md(src) {
   return t;
 }
 
+// delegated: the ONE click handler for the transcript surface. Rows built by
+// appendMsg() carry no listeners of their own — anything clickable inside a
+// message is routed here by class, so a 2,000-message transcript costs one
+// listener instead of thousands. Add a branch, not an addEventListener.
 messagesEl.addEventListener('click', e => {
   const btn = e.target.closest('.copy-btn');
-  if (!btn) return;
-  const code = btn.closest('.code-block').querySelector('code').textContent;
-  navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1500);
-  });
+  if (btn) {
+    const code = btn.closest('.code-block').querySelector('code').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1500);
+    });
+    return;
+  }
+  const toggle = e.target.closest('.reason-toggle');
+  if (toggle) { toggle.closest('.reason-block').classList.toggle('open'); return; }
+  // Tool cards are the most numerous node in the transcript — one turn can make
+  // dozens, and every one of them used to carry its own click listener.
+  const head = e.target.closest('.tool-head');
+  if (head) { head.closest('.tool-card').classList.toggle('open'); return; }
+  // The edit button used to stopPropagation() so its own listener ran alone.
+  // There is now only this listener, so there is nothing left to stop.
+  const edit = e.target.closest('.msg-edit');
+  if (edit) {
+    // Kept from the per-node listener, for a reason I can name: the file has two
+    // document-level click handlers (1787, 2521) that close menus on an outside
+    // click. Stopping here still works the same way — this branch runs at
+    // messagesEl, which is below document, so the click never reaches them.
+    e.stopPropagation();
+    editUserMessage(edit.closest('.msg'));
+    return;
+  }
 });
 
 // ── model / mode / status ────────────────────────────────────────────
@@ -2045,6 +2229,11 @@ async function loadInfo() {
     const r = await fetch('/api/info');
     info = await r.json();
   } catch (e) { /* keep defaults */ }
+  // The brand slot states which checkout this is. It used to hold a hardcoded
+  // "Default Harness" — a claim about the active profile that no code ever
+  // wrote, and that stopped being true the moment a second profile existed.
+  const brand = document.getElementById('brandVersion');
+  if (brand) brand.textContent = info.version || 'version unknown';
   renderModelPickers();
   renderThinkSelect();
   // no permanent status widget — surface problems only, once per outage
