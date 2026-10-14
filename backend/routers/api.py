@@ -66,7 +66,7 @@ async def info():
         "thinking_levels": _thinking_block(default or (resolved or {}).get("ref"))["thinking_levels"],
         "thinking_info": thinking_meta(default or (resolved or {}).get("ref")),
         "default_thinking": config.prefs().get("thinking", "default"),
-        # PLAN.md item 5: the brand slot says which checkout this is. This is the
+        # the deleted plan item 5: the brand slot says which checkout this is. This is the
         # same string the auto-updater compares against, read through the same
         # function — empty when the install predates version tracking, and the
         # client says so rather than showing a blank that looks like a bug.

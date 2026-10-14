@@ -23,5 +23,14 @@ sandbox/
 PLAN.md
 PLAN2.md
 
+# design scratch: the OKLCH palette lab, the render probe and its screenshots.
+# Tooling for an appearance pass, not part of the app, and never served.
+.shots/
+
+# a restore point taken before the frontend was rebuilt from scratch. Kept on disk
+# on purpose -- it is the way back -- and kept out of the repo for the same reason:
+# a second copy of every served file is a fork nobody meant to create.
+.backups/static-*/
+
 .DS_Store
 Thumbs.db

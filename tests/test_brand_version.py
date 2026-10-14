@@ -1,4 +1,4 @@
-"""The brand line states the version of this checkout (PLAN.md item 5).
+"""The brand line states the version of this checkout (the deleted plan item 5).
 
 `static/index.html` used to hardcode `<span class="brand-sub">Default Harness</span>`.
 Nothing in `app.js` or `platform.js` ever wrote that element, so it was not the

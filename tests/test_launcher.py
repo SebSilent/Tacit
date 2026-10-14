@@ -568,7 +568,7 @@ class TestLaunchScripts(unittest.TestCase):
 class TestRestartState(Home):
     """The outcome of a restart has to survive the process that knows it.
 
-    PLAN.md item 4's last bullet: if the replacement never binds, that needs to
+    the deleted plan item 4's last bullet: if the replacement never binds, that needs to
     surface in Settings > Server status, not only in a log file nobody opens. The
     difficulty is *who* reports it. The detached watcher is the only process that
     learns the truth, and when it learns it there is often no server left to

@@ -5,7 +5,7 @@ The feature has to bite on the commands the agent actually types, so the cases
 below are the ones from the recorded runs (`type`, `dir`, `findstr`, `cat` of a
 whole file). The other half of the point is what must NOT be touched: a refusal
 that blocks real work teaches the model to distrust the tool list, which is the
-exact cost the plan warns about.
+exact cost the deleted plan warns about.
 """
 import asyncio
 import json
@@ -135,7 +135,7 @@ class TestOverlapTable(Isolated):
             self.assertEqual(hit["tool"], tool, cmd)
 
     def test_a_chained_command_is_never_refused(self):
-        # The trap named in the plan: refusing half a chain loses the half that
+        # The trap named in the deleted plan: refusing half a chain loses the half that
         # mattered. `dir` here is an overlap; `python build.py` is the job.
         hit = guidance.overlap("dir && python build.py")
         self.assertTrue(hit)

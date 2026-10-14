@@ -172,7 +172,7 @@
 
     // A restart that failed leaves no server standing to report it, so the watcher
     // writes the outcome to disk and whichever server comes back — including one a
-    // person started by hand — hands it over. PLAN.md item 4: failure has to surface
+    // person started by hand — hands it over. the deleted plan item 4: failure has to surface
     // here, not only in a restart.log nobody opens.
     const lr = (srv || {}).last_restart;
     const byHand = lr && lr.cmd && lr.cmd.length
@@ -258,6 +258,28 @@
         <button class="tgl ${alertOn ? 'on' : ''}" data-act="toggle-alert-sound" role="switch" aria-checked="${alertOn}" title="${alertOn ? 'Disable' : 'Enable'}">
           <span class="tgl-knob"></span>
         </button>
+      </div>
+
+      <div class="tool-row" data-perm="chime-audition">
+        <span class="tool-name">Chime audition</span>
+        <span class="tool-desc">Plays all four — finished, error, budget warning, cycle tick — past
+          both switches, so you hear what the two toggles above actually control. The pitches were
+          separated by contour and register rather than by ear, and nobody has listened since.</span>
+        <button class="ho-btn small" id="chimePreviewBtn">Hear them</button>
+      </div>
+
+      <div class="tool-row" data-perm="density">
+        <span class="tool-name">Transcript density</span>
+        <span class="tool-desc">How much vertical room the transcript gives its rows.
+          Compact fits more of a turn on screen; roomy is easier to read for long.
+          Applies to this browser only — it is a view preference, not part of the session,
+          so a fork or reload of the same session keeps your choice and nothing about the
+          transcript changes.</span>
+        <div class="seg" id="densitySeg">
+          <button data-dens="default">Default</button>
+          <button data-dens="compact">Compact</button>
+          <button data-dens="roomy">Roomy</button>
+        </div>
       </div>
 
       <div class="ho-section">Server</div>
@@ -387,6 +409,32 @@
       note(enable ? 'the budget and autonomous chimes are on'
                   : 'the budget and autonomous chimes are off');
     });
+
+    // The audition plays past both switches on purpose: you clicked to hear the
+    // sound, so answering the click with silence would be the one useless result.
+    // It also needs a gesture — a page that has never been clicked starts its
+    // AudioContext suspended, and this button is that first click.
+    const chimeBtn = panel.querySelector('#chimePreviewBtn');
+    if (chimeBtn) chimeBtn.addEventListener('click', () => {
+      if (!(window.Tacit && window.Tacit.previewChimes)) {
+        note('the chat client is not loaded, so there is nothing to play', true);
+        return;
+      }
+      window.Tacit.previewChimes();
+      note('playing: finished · error · warning · tick');
+    });
+
+    // Density: the current value is read off the document rather than through a second
+    // exported getter, so the panel does not need its own idea of what is set.
+    const dseg = panel.querySelector('#densitySeg');
+    if (dseg) dseg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      if (!(window.Tacit && window.Tacit.setDensity)) {
+        note('the chat client is not loaded, so density cannot be set', true);
+        return;
+      }
+      const now = window.Tacit.setDensity(b.dataset.dens);
+      note('density: ' + now);
+    }));
 
     panel.querySelector('#srvRestartBtn').addEventListener('click', async () => {
       if (!confirm('Restart the Tacit server? A turn that is running is cut off; ' +

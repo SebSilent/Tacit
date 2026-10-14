@@ -1,6 +1,6 @@
 """The turn worker: one process per running turn, owned by its session.
 
-The decision the plan records (Decision 2): a turn is a unit of work a person
+The decision the deleted plan records (Decision 2): a turn is a unit of work a person
 must be able to kill, and a thread cannot be killed in Python under any
 circumstance. A turn that is blocked in a model read, a stuck shell command or
 a runaway regex holds nothing of the server hostage, because it is not running

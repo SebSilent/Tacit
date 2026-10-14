@@ -838,7 +838,7 @@ class TestDeliverGuaranteeSetting(Isolated):
 class TestTurnSoundSetting(Isolated):
     """On by default, and silencing it is meant to last.
 
-    PLAN.md 6 asks for an end-of-turn chime and a Settings > General toggle that
+    the deleted plan item 6 asks for an end-of-turn chime and a Settings > General toggle that
     is "persisted, default on", and defines done as the toggle silencing it
     everywhere and surviving a reload. Two claims matter beyond the round-trip:
     the preference lives on the *server*, so "survives a reload" has to be
@@ -2754,7 +2754,7 @@ class TestAutonomyPersistence(Isolated):
         off in cleanup, and no prompt is ever sent, so nothing can run."""
         from backend import session_runtime
         sid = self._rec()["id"]
-        session_runtime.goal_set(sid, "Finish PLAN.md item 7.")
+        session_runtime.goal_set(sid, "Finish the deleted plan item 7.")
         st = session_runtime.autonomy_set(sid, enabled=True)
         self.addCleanup(session_runtime.autonomy_set, sid,
                         enabled=False, reason="test teardown")
@@ -2775,7 +2775,7 @@ class TestAutonomyPersistence(Isolated):
         panel editing the harness's own state."""
         from backend import session_runtime
         sid = self._rec()["id"]
-        session_runtime.goal_set(sid, "Finish PLAN.md item 7.")
+        session_runtime.goal_set(sid, "Finish the deleted plan item 7.")
         session_runtime.autonomy_set(sid, max_cycles=7, max_hours=2.5)
         rec = store.get(sid)
         assistant.bump_counters(rec, cycles=4, work_seconds=90)
@@ -2798,7 +2798,7 @@ class TestAutonomyPersistence(Isolated):
         self.assertFalse(st["enabled"],
                          "reset is not the switch; zeroing the spend must not "
                          "stop a run that is going")
-        self.assertEqual(assistant.goal_of(store.get(sid)), "Finish PLAN.md item 7.")
+        self.assertEqual(assistant.goal_of(store.get(sid)), "Finish the deleted plan item 7.")
         self.assertEqual(assistant.autonomy_of(store.get(sid))["cycles"], 0,
                          "the reset has to be on disk, not just in the reply")
 
@@ -2814,7 +2814,7 @@ class TestAutonomyLaunchGate(Isolated):
     """``_autonomy_after_assistant`` against the real store, with the agent stubbed.
 
     The autonomous-cycle tick was wired onto this function's success path with no
-    test of its own — PLAN.md item 5 records that as the slice's debt, because the
+    test of its own — the deleted plan item 5 records that as the slice's debt, because the
     rule the tick leans on is the rule that was hardest to get right: a launch that
     did not happen charges no cycle, ends no run, and makes no noise. Every
     assertion below is about a number on disk or an event on the bus. No model, no

@@ -1,4 +1,4 @@
-"""PLAN item 5, the "Lightweight" slice: what the browser loads, and how little of it.
+"""the deleted plan item 5, the "Lightweight" slice: what the browser loads, and how little of it.
 
 The plan's rule is precise — *"one delegated listener per surface, no per-message
 listeners"* — because the transcript is the one surface that grows without bound.
@@ -17,13 +17,13 @@ listeners" survives for months: nothing checked it, and the one place that did c
 
 These tests pin the structure, not the behaviour: they can prove a row carries no
 listener and that one handler routes the four clickable classes a row can produce.
-That a click still opens the right card is a browser question (see PLAN deviation).
+That a click still opens the right card is a browser question (see the recorded deviation below).
 
 Scope line, deliberately drawn: the rule is about what the *renderer* multiplies.
 Nodes built when you act — the edit dialog's Save/Cancel, a rename input, a toast —
 keep their own listeners and are checked by nothing here. They exist one at a time
 and die when the interaction ends; a tool card exists per tool call per turn for the
-life of the session. That is the difference the plan is protecting, so the guards
+life of the session. That is the difference the deleted plan is protecting, so the guards
 cover `appendMsg()` and the card builders and leave the dialogs alone. Panel rows
 (`platform.js`, `harness.js`, `git.js`) still attach one listener per row — bounded,
 rebuilt on open, and rewriting ~30 of them is a browser-verification task, recorded
@@ -35,6 +35,20 @@ platform.js 78,710 / 18,427 · index.html 23,770 / 5,194 · git.js 29,327 / 8,57
 harness.js 22,684 / 6,613 · assistant.js 21,614 / 6,684 · delegation.js 15,810 /
 5,158. **Total 403,468 raw / 103,154 gzip.** The budgets below are that plus ~4%:
 grow past it consciously, with a note, rather than accidentally.
+
+Re-measured 2026-10-13, raw / gzip: app.js 125,418 / 37,871 · style.css
+100,325 / 17,586 · platform.js 81,861 / 19,168 · index.html 23,775 / 5,198 ·
+git.js 29,327 / 8,570 · harness.js 24,181 / 7,117 · assistant.js 21,614 / 6,684 ·
+delegation.js 15,817 / 5,163. **Total 422,318 raw / 107,357 gzip.**
+Two things moved, and only one of them is this change:
+* +16,431 raw happened before it — the 2026-10-12 baseline was already stale, and
+  the budget had 101 bytes of headroom left when this started. A budget that is
+  nearly spent reads as a passing test, not as a warning; that is the real finding
+  here, and it is why the number is re-measured rather than nudged.
+* +2,419 raw / +203 gzip is the accessibility and sound work: five `--on-accent`
+  overrides and their measured ratios in comments, a `.ps-icon.ok` rule replacing a
+  hard-coded `#3fb950`, the `tone()`/`previewChimes()` split, and the audition row.
+  All of it is prose in comments; the code is ~40 lines.
 """
 import gzip
 import re
@@ -46,10 +60,35 @@ from unittest import TestCase
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "static"
 
-RAW_BASELINE = 403_468
-GZIP_BASELINE = 103_154
-RAW_BUDGET = 420_000
-GZIP_BUDGET = 110_000
+RAW_BASELINE = 450_542
+GZIP_BASELINE = 115_372
+# Re-measured at twenty themes: style.css 120,906 / 23,042, every other file
+# unchanged. The ten added theme blocks cost 11,207 raw and 2,696 gzip — about
+# 1.1 KB each, which is 29 tokens plus the comment saying what the world is and
+# why its hues sit where they do.
+# baseline + ~4%, the same margin the 2026-10-12 numbers were set with.
+#
+# Re-measured after the appearance revamp, raw / gzip: app.js 130,734 / 39,742 ·
+# style.css 109,699 / 20,674 · platform.js 83,199 / 19,538 · index.html 23,775 /
+# 5,198 · git.js 29,327 / 8,570 · harness.js 24,181 / 7,117 · assistant.js 21,614 /
+# 6,684 · delegation.js 15,817 / 5,163.
+#
+# That is +6,422 raw over the 431,924 this started from, and it is all in the two
+# files the revamp touched: +5,336 in style.css and +1,086 in app.js. What it bought
+# is eight theme blocks carrying their own measured ratios, three token families that
+# did not exist (tracking, motion, elevation) replacing 13 raw letter-spacing values
+# and one shadow used for everything, a control-state layer where the file previously
+# had one `:disabled` rule and no `:active` rule at all, and font stacks that name
+# only faces this app can actually resolve.
+#
+# The gzip side is the one that moved past its line: the old budget had 8,076 B of
+# raw headroom and looked comfortable, but gzip headroom was down to a few hundred
+# bytes, and prose comments compress far less than the code they describe. Same
+# lesson the 2026-10-13 note records — a budget that is nearly spent reads as a
+# passing test rather than a warning, so both numbers are re-measured here rather
+# than nudged.
+RAW_BUDGET = 468_500
+GZIP_BUDGET = 120_000
 
 # What one delegated handler on the transcript surface is allowed to route.
 ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit"}

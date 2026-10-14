@@ -1,6 +1,6 @@
 """`prefers-reduced-motion` must switch everything off, in one place.
 
-PLAN item 5: "Respect `prefers-reduced-motion`: every animation has an off state."
+the deleted plan item 5: "Respect `prefers-reduced-motion`: every animation has an off state."
 The way that fails is the per-selector `@media` block — someone adds a pulse,
 forgets the off switch, and nothing notices. `static/style.css` had exactly that
 bug: the session dot's pulse was covered and `tokPulse`, `dgPulse` and every
@@ -81,8 +81,30 @@ def animation_names(css):
     return out
 
 
+DUR_TOKEN = re.compile(r"(--dur-[\w-]+)\s*:\s*([\d.]+)(ms|s)\s*;")
+BARE_ROOT = re.compile(r"^:root\s*\{(.*?)^\}", re.M | re.S)
+VAR_DUR = re.compile(r"^var\(\s*(--dur-[\w-]+)\s*\)$")
+
+
+def duration_tokens(css):
+    """{--dur-N: seconds} declared in the bare `:root`."""
+    m = BARE_ROOT.search(css)
+    if not m:
+        return {}
+    return {n: (float(v) / 1000 if u == "ms" else float(v))
+            for n, v, u in DUR_TOKEN.findall(m.group(1))}
+
+
 def durations(css):
-    """Every duration declared in a `transition` shorthand, in seconds."""
+    """Every duration declared in a `transition` shorthand, in seconds.
+
+    Resolves `var(--dur-N)` against the bare `:root` rather than skipping it. The
+    motion grammar moved onto a duration token ladder, and a guard that only reads
+    literal `150ms` would have measured nothing at all after that move while still
+    reporting success — the quiet failure this suite names elsewhere. An unresolvable
+    token is raised as a duration far over the ceiling so the caller names it.
+    """
+    toks = duration_tokens(css)
     out = []
     for value in TRANS.findall(css):
         for token in value.split():
@@ -90,6 +112,10 @@ def durations(css):
             if m:
                 n = float(m.group(1))
                 out.append(n / 1000 if m.group(2) == "ms" else n)
+                continue
+            v = VAR_DUR.match(token)
+            if v:
+                out.append(toks.get(v.group(1), MAX_TRANSITION * 100))
     return out
 
 

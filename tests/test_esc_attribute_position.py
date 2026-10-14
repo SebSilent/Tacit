@@ -1,5 +1,5 @@
 """Item 5, the attribute half of the transcript: can a *path* or a *name* escape the
-attribute it was put in?  (PLAN.md item 5, the `innerHTML` audit)
+attribute it was put in?  (the deleted plan item 5, the `innerHTML` audit)
 
 `tests/test_md_escapes.py` settled model prose. It left the other ~180 `esc()` call
 sites — the ones fed by the filesystem, git and the planner — unexamined, and its own

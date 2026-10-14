@@ -60,19 +60,69 @@ let serverSyncTimer = null;
 let serverRegistryLoaded = false;
 
 // ── themes (apply before first paint) ────────────────────────────────
+// Eight composed worlds, not one shape re-hued eight times. Each hint names the
+// ground and the accent, because that is what you are actually choosing between;
+// a hint that names a mood ('neon cyber') tells you nothing you can pick on.
+// Ordered darks, lights, then the two AAA instruments.
 const THEMES = [
-  { id: 'midnight', name: 'Midnight', hint: 'deep space violet' },
-  { id: 'daybreak', name: 'Daybreak', hint: 'clean light' },
-  { id: 'vapor',    name: 'Vapor',    hint: 'neon cyber' },
-  { id: 'ocean',    name: 'Ocean',    hint: 'abyssal blue' },
-  { id: 'ember',    name: 'Ember',    hint: 'warm forge' },
-  { id: 'contrast', name: 'Contrast', hint: 'high contrast' },
-  { id: 'contrast-light', name: 'Contrast light', hint: 'high contrast, light' },
-  { id: 'mono',     name: 'Mono',     hint: 'greyscale' },
+  { id: 'graphite',   name: 'Graphite',   hint: 'warm graphite, petrol accent' },
+  { id: 'verdigris',  name: 'Verdigris',  hint: 'cool grey-green, copper' },
+  { id: 'amethyst',   name: 'Amethyst',   hint: 'plum ground, iris accent' },
+  { id: 'oxide',      name: 'Oxide',      hint: 'iron ground, chalk accent' },
+  { id: 'mono',       name: 'Mono',       hint: 'greyscale; colour only for status' },
+  { id: 'vellum',     name: 'Vellum',     hint: 'warm paper, ultramarine' },
+  { id: 'celadon',    name: 'Celadon',    hint: 'jade-glaze ground, deep teal' },
+  { id: 'signal',     name: 'Signal',     hint: 'cool white, chart-series colour' },
+  { id: 'nocturne',   name: 'Nocturne',   hint: 'indigo-slate, one brass lamp' },
+  { id: 'lagoon',     name: 'Lagoon',     hint: 'deep teal-slate, water cyan' },
+  { id: 'rosewood',   name: 'Rosewood',   hint: 'plum-rose ground, dusty mauve' },
+  { id: 'absinthe',   name: 'Absinthe',   hint: 'green-slate, chartreuse' },
+  { id: 'iris',       name: 'Iris',       hint: 'cool neutral, deep violet-blue' },
+  { id: 'slate',      name: 'Slate',      hint: 'mid-tone grey, amber indicator' },
+  { id: 'frost',      name: 'Frost',      hint: 'blue-white ground, deep cyan' },
+  { id: 'monotype',   name: 'Monotype',   hint: 'neutral light; the accent is ink' },
+  { id: 'foxglove',   name: 'Foxglove',   hint: 'warm light, muted plum' },
+  { id: 'sorrel',     name: 'Sorrel',     hint: 'pale clay ground, indigo ink' },
+  { id: 'contrast', name: 'Contrast', hint: 'AAA, white on black' },
+  { id: 'contrast-light', name: 'Contrast light', hint: 'AAA, black on white' },
 ];
-let theme = localStorage.getItem('tacit.theme') || 'midnight';
-if (!THEMES.some(t => t.id === theme)) theme = 'midnight';
+const DEFAULT_THEME = 'graphite';
+// The appearance revamp replaced every palette the old world shipped and renamed
+// most of them. A
+// stored id from before that is not an invalid preference, it is a preference for
+// a world that no longer exists -- so it is carried to the nearest survivor by
+// temperature and lightness instead of falling through to the default, which would
+// quietly move someone who had picked a light theme onto a dark one.
+const THEME_CARRIED = {
+  midnight: 'graphite', ocean: 'graphite', daybreak: 'signal',
+  vapor: 'verdigris', ember: 'oxide',
+};
+function resolveTheme(stored) {
+  if (stored && THEMES.some(t => t.id === stored)) return stored;
+  return THEME_CARRIED[stored] || DEFAULT_THEME;
+}
+let theme = resolveTheme(localStorage.getItem('tacit.theme'));
 document.documentElement.dataset.theme = theme;
+
+// Density is a view preference, not a property of a session: it changes no stored
+// content, so it belongs in localStorage beside the theme rather than on the server.
+// `default` deletes the attribute instead of writing a third value -- the common case
+// then costs no override block at all.
+let density = localStorage.getItem('tacit.density') || 'default';
+function applyDensity(id) {
+  density = (id === 'compact' || id === 'roomy') ? id : 'default';
+  if (density === 'default') delete document.documentElement.dataset.density;
+  else document.documentElement.dataset.density = density;
+  try { localStorage.setItem('tacit.density', density); } catch (e) { /* private mode */ }
+  paintDensity(density);
+  return density;
+}
+function paintDensity(id) {
+  const seg = document.getElementById('densitySeg');
+  if (seg) seg.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.dens === id));
+}
+applyDensity(density);
 
 function applyTheme(id) {
   if (!THEMES.some(t => t.id === id)) return;
@@ -1031,10 +1081,15 @@ let alertSoundOn = false;
 let audioCtx = null;
 let turnFailed = false;   // set by an error/fatal event, read by the chime
 
-// The tunable part, in one table. These four are placeholders picked so the
-// kinds are not confusable with each other — nobody has heard them, because
-// there are no ears in this environment. Pitch, spacing and length all belong
-// to a listening pass, and this object is the only place to change them.
+// The tunable part, in one table, and the only place to change any of it. The four
+// are separated by construction, not by luck: two rising/falling contours against
+// each other, a single note for the tick, and each pair landing in a different
+// register, so a chime is identifiable without seeing the tab.
+//
+// They were written blind — this environment has no ears — and they stay unverified
+// until someone listens. Settings > Tools now has an audition button that plays all
+// four past both switches for exactly that reason, so the person who can hear them
+// is the one who decides, not the person who read the source.
 const CHIME_NOTES = {
   done: [523, 784],     // C5 -> G5, rising: the turn finished
   error: [392, 262],    // G4 -> C4, falling: it ended on an error
@@ -1054,38 +1109,56 @@ async function loadSoundPref() {
   } catch (e) { /* offline: keep the default */ }
 }
 
+// The synthesis alone, with no opinion about the switches. `chime` gates and then
+// calls this; the Settings audition calls it directly, because you clicked to hear
+// a sound and a mute preference must not swallow the thing that answers the click.
+function tone(notes, peak) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  audioCtx = audioCtx || new AC();
+  // A context created before the first gesture starts suspended; a turn can
+  // end while nobody has clicked in this tab yet, so resume and let it fail
+  // quietly rather than throw inside a stream handler.
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const t0 = audioCtx.currentTime + 0.02;
+  notes.forEach((freq, i) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const at = t0 + i * 0.11;
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(peak, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(at);
+    osc.stop(at + 0.25);
+  });
+}
+
 function chime(kind) {
   if (!turnSoundOn) return;                              // master switch
   if (ALERT_KINDS.has(kind) && !alertSoundOn) return;     // mid-turn sounds are opted into
   try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    audioCtx = audioCtx || new AC();
-    // A context created before the first gesture starts suspended; a turn can
-    // end while nobody has clicked in this tab yet, so resume and let it fail
-    // quietly rather than throw inside a stream handler.
-    if (audioCtx.state === 'suspended') audioCtx.resume();
     const notes = CHIME_NOTES[kind];
     if (!notes) return;            // an unknown kind is silence, not a thrown error
-    const t0 = audioCtx.currentTime + 0.02;
     // The tick is one soft mark that says "a cycle started" and then gets out of
     // the way; the rest are calls to look at the screen.
-    const peak = kind === 'tick' ? 0.02 : 0.05;
-    notes.forEach((freq, i) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      const at = t0 + i * 0.11;
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(peak, at + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(at);
-      osc.stop(at + 0.25);
-    });
+    tone(notes, kind === 'tick' ? 0.02 : 0.05);
   } catch (e) { /* audio is never worth an error banner */ }
+}
+
+// Play all four, in order, spaced so four chimes do not arrive as one smear.
+// Deliberately ignores both switches — this is the listening pass the table above
+// has been waiting for. Returns the count so the panel can say what it played.
+function previewChimes() {
+  ['done', 'error', 'warn', 'tick'].forEach((kind, i) => {
+    setTimeout(() => {
+      try { tone(CHIME_NOTES[kind], kind === 'tick' ? 0.02 : 0.05); } catch (e) {}
+    }, i * 750);
+  });
+  return 4;
 }
 
 function endStream() {
@@ -1211,7 +1284,7 @@ function appendReason(delta) {
 function addToolCard(m) {
   const tools = streaming.el.querySelector('.tools');
   const card = document.createElement('div');
-  card.className = 'tool-card';
+  card.className = 'tool-card run';
   card.dataset.id = m.id || '';
   const argStr = m.name === 'bash' ? (m.args.command || '') :
     (m.args.path || m.args.file_path || m.args.pattern || JSON.stringify(m.args)).slice(0, 120);
@@ -1221,6 +1294,7 @@ function addToolCard(m) {
       <span class="tool-args"></span>
       <span class="tool-spin"></span>
     </div>
+    <div class="tool-rail"></div>
     <div class="tool-body"><pre></pre></div>`;
   card.querySelector('.tool-badge').textContent = m.name || 'tool';
   card.querySelector('.tool-args').textContent = argStr;
@@ -1265,6 +1339,10 @@ function progressToolCard(m) {
     ? (chars / 1024).toFixed(chars >= 10240 ? 0 : 1) + ' KB'
     : chars + ' B';
   meta.textContent = `${Math.round(m.elapsed_s || 0)}s · ${size}`;
+  // The bar runs up while the call is live. This is the one place in the transcript
+  // where motion carries information rather than decoration: a long command's bar
+  // lengthening is the progress, and it stops being true the moment the call ends.
+  setRail(card, (m.elapsed_s || 0) * 1000);
 }
 
 // One place decides how a duration reads, so the live card, the finished card and
@@ -1291,6 +1369,7 @@ function finishToolCard(m) {
   const card = messagesEl.querySelector(`.tool-card[data-id="${CSS.escape(m.id || '')}"]`);
   if (!card) return;
   card.classList.toggle('err', !!m.is_error);
+  card.classList.remove('run');
   const spin = card.querySelector('.tool-spin');
   if (spin) spin.remove();
   card.querySelector('.tool-body pre').textContent = m.result || (m.is_error ? 'error' : 'done');
@@ -1301,6 +1380,10 @@ function finishToolCard(m) {
   // leaves the slot empty rather than inventing a zero.
   const meta = toolCardMeta(m);
   if (meta) setToolMeta(card, meta);
+  // The finished duration is the bar's real value; the live one was a running guess.
+  card.dataset.ms = m.elapsed_ms || 0;
+  setRail(card, m.elapsed_ms);
+  railSum(card.parentElement);
 }
 
 // One builder for the finished card's meta slot. The live card and the rebuilt
@@ -1308,6 +1391,54 @@ function finishToolCard(m) {
 // plan calls out for the card markup itself. Nothing is invented here: a field the
 // backend did not send simply does not appear, so an old session renders as it
 // always did.
+// ── tool-call rail ───────────────────────────────────────────────────────
+// A fixed log scale in ms, so bars mean the same thing in every turn. Measured, not
+// guessed: the first version floored at 300ms, which mapped every duration from 20ms to
+// 300ms onto an identical EMPTY bar -- and fmtMs's own note says sub-second work is the
+// common case, so the majority of calls would have read as taking no time. 30ms spreads
+// each decade about equally (0.09-0.13 per doubling) and the display floor guarantees a
+// fast call still shows a stub. An absent duration returns 0 rather than the floor:
+// "not recorded" must not look like "instantly", which is the same reason the meta slot
+// stays empty instead of inventing a zero.
+const RAIL_MIN = 30, RAIL_MAX = 30000, RAIL_LOG = Math.log(RAIL_MAX / RAIL_MIN);
+const RAIL_FLOOR = 0.05;
+
+function railDur(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const clamped = Math.max(RAIL_MIN, Math.min(RAIL_MAX, n));
+  return Math.max(RAIL_FLOOR, Math.log(clamped / RAIL_MIN) / RAIL_LOG);
+}
+
+// One unitless custom property drives the fill: no length is written into a style
+// attribute, and the bar composites instead of laying out.
+function setRail(card, ms) {
+  const rail = card.querySelector('.tool-rail');
+  if (rail) rail.style.setProperty('--dur', railDur(ms).toFixed(3));
+}
+
+// The turn's aggregate readout. Recomputed from the cards instead of tracked in a
+// counter, because a counter that survives a reload has to be stored somewhere and
+// that is a second source of truth about work the transcript already describes.
+function railSum(tools) {
+  if (!tools) return;
+  let n = 0, total = 0, slow = 0;
+  tools.querySelectorAll('.tool-card').forEach(c => {
+    const ms = Number(c.dataset.ms || 0);
+    if (ms > 0) { n++; total += ms; slow = Math.max(slow, ms); }
+  });
+  let sum = tools.querySelector('.rail-sum');
+  if (!n) { if (sum) sum.remove(); return; }
+  if (!sum) {
+    sum = document.createElement('div');
+    sum.className = 'rail-sum';
+  }
+  const bits = [`${n} call${n === 1 ? '' : 's'}`, fmtMs(total) + ' total'];
+  if (n > 1) bits.push('slowest ' + fmtMs(slow));
+  sum.textContent = bits.join(' · ');
+  tools.appendChild(sum);  // also keeps it below the newest card
+}
+
 function toolCardMeta(m) {
   if (!m) return '';
   const bits = [];
@@ -1364,6 +1495,7 @@ function renderTranscript(s) {
           JSON.stringify(t.args || {}).slice(0, 120);
         card.innerHTML = `
           <div class="tool-head"><span class="tool-badge"></span><span class="tool-args"></span></div>
+          <div class="tool-rail"></div>
           <div class="tool-body"><pre></pre></div>`;
         card.querySelector('.tool-badge').textContent = t.name;
         card.querySelector('.tool-args').textContent = argStr;
@@ -1373,7 +1505,10 @@ function renderTranscript(s) {
         // it took, what ran it, and what it touched.
         const meta = toolCardMeta(t);
         if (meta) setToolMeta(card, meta);
+        card.dataset.ms = t.elapsed_ms || 0;
+        setRail(card, t.elapsed_ms);
         tools.appendChild(card);
+        railSum(tools);
       }
     }
     // A step that ran tools and said nothing is real work, but a group with
@@ -2517,7 +2652,7 @@ function renderPlanApproved(info) {
     ? ` · <span class="ps-ok">${esc(ctxName)} written</span>`
     : ' · <span class="ps-warn">no project file written</span>';
   planStrip.innerHTML = `
-    <div class="ps-head"><span class="ps-icon" style="animation:none;background:#3fb950"></span>
+    <div class="ps-head"><span class="ps-icon ok"></span>
       <span class="ps-phase">Plan approved & saved</span>
       <span class="ps-detail" title="${esc(info.message || '')}">${esc(info.plan_file || '')}${proj}</span></div>
     ${planBody(planText || info.text || '')}
@@ -2820,6 +2955,10 @@ window.Tacit = Object.assign(window.Tacit || {}, {
   getWorkdir: () => { const s = cur(); return (s && s.workdir) || ''; },
   refreshInfo: () => loadInfo(),
   refreshSoundPref: () => loadSoundPref(),
+  // Settings > Tools auditions the four chimes through this, past both switches
+  previewChimes: () => previewChimes(),
+  // Settings > Appearance sets transcript density through this
+  setDensity: (id) => applyDensity(id),
   pickDir: ({ key = 'workspace', ...opts } = {}) => openFsPicker(key, opts),
   // the assistant panel shares this one socket rather than opening its own
   sendMessage: (obj) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); },

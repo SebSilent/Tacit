@@ -1955,7 +1955,7 @@ class TestSessionIsolationClaims(Isolated):
     def test_a_turn_runs_in_its_own_killable_process(self):
         """Stage 3: the turn worker, and the two-stage stop.
 
-        The decision the plan records: a thread cannot be killed in Python,
+        The decision the deleted plan records: a thread cannot be killed in Python,
         so a turn runs in its own process by default. Stop is cooperative
         cancel first, tree kill after a grace — and the interface is told
         which one ran, the same honesty the sandbox layer applies.

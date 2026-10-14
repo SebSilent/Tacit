@@ -1,6 +1,6 @@
 """Session isolation: one session, one running turn, no cross-session bleed.
 
-Stage 1a of the plan. The leak the user reported was structural: one socket
+Stage 1a of the deleted plan. The leak the user reported was structural: one socket
 held one `running` dict while `switch` re-pointed `rec` at another session, so
 a turn started in session A could be steered, stopped and saved into session B.
 These tests pin the new invariants:
@@ -167,7 +167,7 @@ class SessionIsolationTest(unittest.TestCase):
         created inside its own connection, so there is no shared stop event
         left to reach. This test would fail on the old code only if the two
         sockets shared one — which they did not even then — but it pins the
-        behaviour the plan promises before 1b makes it load-bearing.
+        behaviour the deleted plan promises before 1b makes it load-bearing.
         """
         prov = _SlowProvider()
         from backend.ai import engine

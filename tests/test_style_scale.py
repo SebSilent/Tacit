@@ -23,9 +23,11 @@ Two invariants, both cheap to break by accident:
      property falls back to its inherited/initial value — the rule does not look
      broken, it just quietly loses its size.
 
-The migration was 1:1 with the values already in use, so it moved no pixels;
-collapsing the long tail (9px, 11.8px, 12.8px, 22px, 26px …) onto a shorter scale is
-a visual change that needs a browser pass, and is not asserted here.
+The migration that created the tokens was 1:1 with the values already in use, so it
+moved no pixels. Collapsing the long tail (9px, 11.8px, 12.8px, 22px, 26px …) onto a
+shorter ladder DID move pixels and needed a browser pass; that collapse has now
+happened (9 steps, ratio 1.125, floor 10px), and what is asserted here is the property
+that made it worth doing -- see test_the_type_ladder_is_a_scale_not_a_continuum.
 """
 
 import re
@@ -47,7 +49,7 @@ CSS = re.sub(r"/\*.*?\*/", "", CSS_RAW, flags=re.S)
 # a theme that redefines `--radius` moves corners the same way one that redefines
 # `--sp-9` moves gutters, and the invariant should not depend on which slice
 # happened to add the token.
-TOKEN = r"--(?:fs|sp|rd)-\d+|--radius[\w-]*"
+TOKEN = r"--(?:fs|sp|rd|tr)-\d+|--radius[\w-]*"
 
 # Every flat `selector { declarations }` rule. Theme blocks are flat, so this
 # reaches them; nested rules inside @media are reached too, which is what we want
@@ -74,15 +76,52 @@ def scale_defs(body):
     return {n.strip() for n in re.findall(r"(" + TOKEN + r")\s*:", body)}
 
 
+def ladder(prefix):
+    """A scale family's declared values, in step order, as floats.
+
+    Reads the numbers rather than counting the names, because the property that matters
+    is how far apart the steps are — not how many there are.
+    """
+    out = []
+    for sel, body in rules():
+        if sel != ":root":
+            continue
+        for m in re.finditer(prefix + r"(\d+)\s*:\s*([\d.]+)px", body):
+            out.append((int(m.group(1)), float(m.group(2))))
+    return [v for _, v in sorted(out)]
+
+
 class TestScaleIsDeclared(unittest.TestCase):
     def test_scale_tokens_exist(self):
         defined = set()
         for sel, body in rules():
             defined |= scale_defs(body)
         self.assertTrue(defined, "no --fs-*/--sp-* tokens defined at all")
-        # 23 type steps + 23 spacing steps came out of the real inventory.
-        self.assertGreaterEqual(len([t for t in defined if t.startswith("--fs-")]), 10)
-        self.assertGreaterEqual(len([t for t in defined if t.startswith("--sp-")]), 10)
+        # A revert tripwire only. The property that matters is asserted by name below --
+        # this used to be `>= 10`, which measured the artifact instead of the scale: it
+        # would have failed a 9-step ladder at ratio 1.125 (a real scale) while passing
+        # the 23-step ladder at 1.02 (not one).
+        self.assertGreaterEqual(len([t for t in defined if t.startswith("--fs-")]), 8)
+        self.assertGreaterEqual(len([t for t in defined if t.startswith("--sp-")]), 8)
+
+    def test_the_type_ladder_is_a_scale_not_a_continuum(self):
+        """Adjacent type steps must be far enough apart to read as different sizes.
+
+        `operate.md` prescribes 1.125-1.2 for an Operate surface. The file used to carry
+        23 steps whose neighbours differed by 1.016-1.06x -- half a pixel -- so 74% of all
+        type sat in 11-13px across five steps nobody could tell apart. A step you cannot
+        see is not a step; the count of them was never the point.
+        """
+        vals = ladder("--fs-")
+        self.assertGreaterEqual(len(vals), 8, "type ladder looks collapsed or reverted")
+        self.assertGreaterEqual(
+            vals[0], 10, f"ladder floor is {vals[0]}px; nothing in this UI may be set in type "
+            f"smaller than 10px -- it is not reading matter at any size below that",
+        )
+        ratios = [round(b / a, 4) for a, b in zip(vals, vals[1:])]
+        thin = [(f"{v}px", r) for v, r in zip(vals[1:], ratios) if r < 1.10]
+        self.assertFalse(thin, f"type steps too close to read as distinct: {thin}")
+        self.assertLessEqual(max(ratios), 1.35, f"type ladder has a jump, not a step: {max(ratios)}")
 
     def test_scale_is_declared_only_in_the_bare_root_block(self):
         """`:root` and only `:root` — not a theme, not a component rule."""

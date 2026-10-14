@@ -457,7 +457,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 pass
 
             elif kind in ("new_session", "client_new_session"):
-                # Stage 1b, per the plan decision: no server-side rebinding,
+                # Stage 1b, per the deleted plan's decision: no server-side rebinding,
                 # ever. A socket is born attached to one session and stays
                 # attached. Creating a session hands the new id back; the
                 # client closes nothing and opens a fresh socket for it.
@@ -570,7 +570,7 @@ async def ws_session(ws: WebSocket, sid: str):
                                               "sid": rec["id"]}))
 
             elif kind == "plan_implement":
-                # Stage 1b, per the plan decision: no server-side rebinding.
+                # Stage 1b, per the deleted plan's decision: no server-side rebinding.
                 # The implementation runs in a fresh session (the approval
                 # notice promises a clean context, leaving the planning
                 # discussion behind), and the client opens a socket for it —

@@ -1,6 +1,6 @@
 """The turn worker: one process per running turn, killable at any moment.
 
-Stage 3 of the plan. The decision (Decision 2) is process-per-turn with a
+Stage 3 of the deleted plan. The decision (Decision 2) is process-per-turn with a
 two-stage stop: cooperative cancel first, hard tree kill after a 5s grace.
 These tests drive a REAL subprocess — no faked engine — because the whole
 point is that the turn runs somewhere a thread cannot reach.

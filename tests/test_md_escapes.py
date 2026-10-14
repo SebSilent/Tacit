@@ -1,7 +1,7 @@
 """Item 5, the security half of the transcript: can text the model wrote become
-markup?  (PLAN.md item 5, "Lightweight" / the `innerHTML` audit)
+markup?  (the deleted plan item 5, "Lightweight" / the `innerHTML` audit)
 
-PLAN.md filed "the `innerHTML` sites' XSS audit" under *needs a browser*. That is the
+the deleted plan filed "the `innerHTML` sites' XSS audit" under *needs a browser*. That is the
 wrong tool. Clicking a page cannot prove an escaper — a click-through shows you the one
 input you thought to try — and it says nothing about the rest of the assignment sites.
 What settles the question is **executing the renderer**, node is available here, so this
@@ -195,7 +195,7 @@ class TheGuardHasTeeth(unittest.TestCase):
     def test_widening_the_link_matcher_is_caught(self):
         """The `javascript:` case means nothing unless a real change to the link rule
         turns it red. `inlineMd` links `https?:` only (`app.js:1629`); generalise the
-        target and the scheme becomes a live href — the hole the plan filed under
+        target and the scheme becomes a live href — the hole the deleted plan filed under
         *needs a browser*, closed without one."""
         src = renderer_source()
         line = next(l for l in src.splitlines() if "https?" in l and "replace" in l)

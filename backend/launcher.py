@@ -4,7 +4,7 @@ Item 4's complaint in one line: the button started the server *itself*
 (`python -m backend.main`, inheriting whatever environment the dying process
 happened to have, with no console), while a human started it with run.bat /
 run.sh. Two launch paths means the one you can read is not the one that runs —
-and section 0.4 of the plan recorded what that costs: four Tacit processes on
+and section 0.4 of the deleted plan recorded what that costs: four Tacit processes on
 two interpreters in one chain, the pid file naming a process that is not the one
 holding the port. So the scripts are authoritative now: they stop every Tacit
 they can *prove* is theirs, wait for the port to free, then start the server in
@@ -45,7 +45,7 @@ PORT_FREE_TIMEOUT = 20.0
 def launcher_path(root: Path | None = None) -> Path | None:
     """The launcher script for this platform, or None when there is not one.
 
-    Derived from config.ROOT, never hardcoded: the plan's incident had a
+    Derived from config.ROOT, never hardcoded: the deleted plan's incident had a
     hand-written restart.ps1 naming C:\\Projects\\Tacit in two places, which is a
     mechanism that silently stops working the day the project moves.
     """

@@ -363,7 +363,7 @@ def delegate_model() -> str:
 def turn_worker_mode() -> str:
     """How a session turn runs: its own process, or a thread in here.
 
-    "process" (the default) is the decision the plan records: a turn is a
+    "process" (the default) is the decision the deleted plan records: a turn is a
     unit of work a person must be able to kill, and a thread cannot be
     killed in Python under any circumstance. The worker process gets a
     cooperative cancel first and a process-tree kill after a short grace,

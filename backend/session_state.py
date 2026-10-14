@@ -11,7 +11,7 @@ reason.
 Two readers:
 
 - the interface, via ``GET /api/sessions/state``, which draws the per-session
-  indicators from it (stage 2 of the plan); and
+  indicators from it (stage 2 of the deleted plan); and
 - the socket handler, which consults it so that a second window attaching to
   the same session cannot start a second concurrent turn in it.
 

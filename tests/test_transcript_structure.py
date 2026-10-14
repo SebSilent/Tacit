@@ -1,17 +1,17 @@
 """Two transcript bullets that were met, unclaimed, and unguarded — pinned.
 
-`PLAN.md:544-546`: "Tighten the transcript: clearer role separation, calmer tool
+`the deleted plan, line 544-546`: "Tighten the transcript: clearer role separation, calmer tool
 cards (collapsed by default, expandable, result monospace), reasoning visually
 distinct from the answer."
 
-`PLAN.md:691-692`: "A 'thinking' surface that does not bury the answer: reasoning
+`the deleted plan, line 691-692`: "A 'thinking' surface that does not bury the answer: reasoning
 collapsed by default, one click to expand, never interleaved into the answer text."
 
 Neither was ticked, neither was written up as done, and no test named any part of
 either — while all of it is decidable from source text, which is why it belongs here
 rather than in the browser list. (An earlier draft of this docstring merged the two
 bullets into one and added a "one-line summary" clause that exists in neither, nor
-anywhere else in the repo. Quoting the plan from memory is how a wrong fact outlives
+anywhere else in the repo. Quoting the deleted plan from memory is how a wrong fact outlives
 the session that wrote it.)
 
 Two things this guard is *not*:
@@ -101,15 +101,24 @@ def result_written_as_text(js):
 
 
 def reasoning_is_distinct(css):
-    """`.reason-body` carries marks the answer's `.msg-content` does not."""
+    """`.reason-body` carries marks the answer's `.msg-content` does not.
+
+    Asserted as the marks themselves, not as one implementation. This clause used to
+    require a 2px `border-left`, which is precisely what craft-floor.md bans on a callout
+    ("a colored `border-left` or `border-right` above 1px on cards, list items, callouts,
+    or alerts"), so the block now sets in from the margin like a quotation instead. What
+    has to stay true is the property the border was only ever evidence of: reasoning reads
+    differently from the answer, and the answer stays plain.
+    """
     r, m = rule(css, ".reason-body"), rule(css, ".msg-content")
     if r is None or m is None:
         return False
     return (decl(r, "font-style") == "italic"
             and decl(r, "color") == "var(--muted)"
-            and (decl(r, "border-left") or "").startswith("2px")
+            and bool(decl(r, "margin-left"))
             and decl(m, "font-style") is None
-            and decl(m, "border-left") is None)
+            and decl(m, "border-left") is None
+            and decl(m, "margin-left") is None)
 
 
 def div_depths(fragment):

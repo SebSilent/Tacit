@@ -56,7 +56,7 @@ NAMESPACES = ["Tacit", "TacitTheme", "TacitAssistant", "TacitDelegation",
 # reviewed change rather than a panel that quietly stops responding.
 EXPECTED_EXPORTS = {
     "Tacit": {"getSid", "getWorkdir", "md", "pickDir", "refreshInfo",
-              "refreshSoundPref", "sendMessage", "toast"},
+              "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},
     "TacitTheme": {"apply", "current", "endPreview", "preview", "themes"},
     "TacitAssistant": {"handle", "load", "sessionChanged", "setExternalBusy",
                        "togglePanel"},
@@ -69,7 +69,7 @@ EXPECTED_EXPORTS = {
 
 EXPECTED_READS = {
     "Tacit": {"getSid", "getWorkdir", "md", "pickDir", "refreshInfo",
-              "refreshSoundPref", "sendMessage", "toast"},
+              "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},
     # `preview`/`endPreview` reviewed in the hover-preview change: the Appearance
     # panel reads them through the `const T =` alias. `apply` is exported but never
     # shows up here — the detector subtracts call/apply/bind as Function.prototype

@@ -1,7 +1,7 @@
 """No hard-coded colours outside `:root` and the theme blocks, and every `var()`
 reference resolves.
 
-PLAN item 5's "Done means" says *one token layer drives every surface and every
+the deleted plan item 5's "Done means" says *one token layer drives every surface and every
 theme*. Two ways that quietly stop being true, both invisible in the theme you are
 looking at:
 
@@ -14,7 +14,7 @@ looking at:
   was bypassed with the syntax of a token.
 
 Allowed to be literal: the bare `:root`, every `[data-theme]` block (that is what a
-theme *is*), and the eight `.sw-<theme>` swatch rules — a swatch must show its own
+theme *is*), and the twenty `.sw-<theme>` swatch rules — a swatch must show its own
 palette no matter which theme is active, so `var()` there would be wrong.
 """
 
@@ -39,6 +39,10 @@ SWATCH = re.compile(r"^\s*\.sw-[\w-]+\s*\{")
 # and the list is pinned so a theme-dependent colour cannot sneak in without a test
 # change — bare :root holding lengths only was the documented invariant.
 BARE_ROOT_COLORS = {"--on-accent", "--shade"}
+
+# Kept in step with test_style_themes.THEME_COUNT: a swatch is two stops, so the
+# literal allowance below is this times two and moves with the theme count only.
+THEME_COUNT = 20
 
 
 def blank_comments(text):
@@ -113,15 +117,18 @@ class TestColorLiterals(unittest.TestCase):
                          "hard-coded colours in shared rules (they freeze the default "
                          "theme's palette): " + ", ".join(f"L{l} {v}" for l, v, _ in bad))
 
-    def test_the_only_literals_are_the_eight_swatch_previews(self):
+    def test_the_only_literals_are_the_swatch_previews(self):
         """The exception is pinned, not open-ended.
 
         A swatch previews a palette the reader is not currently wearing, so it cannot
-        use var(). That is the one legitimate reason — and it is exactly eight rules.
+        use var(). That is the one legitimate reason — and it is exactly one rule per
+        theme, two stops each, so the count moves with the theme count and with
+        nothing else.
         """
         kept = [r for r in self._outside() if r[2]]
-        self.assertEqual(len(self.swatches), 8, "expected eight .sw-<theme> rules")
-        self.assertEqual(len(kept), 16,
+        self.assertEqual(len(self.swatches), THEME_COUNT,
+                         f"expected {THEME_COUNT} .sw-<theme> rules")
+        self.assertEqual(len(kept), THEME_COUNT * 2,
                          f"swatches hold {len(kept)} literals; a swatch is two stops")
 
     def test_bare_root_holds_only_the_named_theme_independent_colours(self):
@@ -138,7 +145,7 @@ class TestColorLiterals(unittest.TestCase):
         per-theme override, so the cascade has to be able to carry one: bare :root
         first, theme blocks after, equal specificity.
         """
-        self.assertLess(self.text.index(":root {"), self.text.index('[data-theme="midnight"]'))
+        self.assertLess(self.text.index(":root {"), self.text.index('[data-theme="graphite"]'))
         self.assertIn("--on-accent", self.text)
 
 

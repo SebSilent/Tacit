@@ -719,7 +719,7 @@ def restart_watch() -> None:
         record_restart_state("ok", stage="bind", via=via, cmd=cmd, port=port,
                              detail=f"pid {proc.pid} is listening on port {port}")
     else:
-        # The one failure the plan asked to make visible: started, never bound.
+        # The one failure the deleted plan asked to make visible: started, never bound.
         # The console the launcher opened is what a person reads; this is what
         # Settings says once any server is answering again.
         detail = (f"the server started by {via or 'the watcher'} (pid {proc.pid}) never "

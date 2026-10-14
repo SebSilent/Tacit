@@ -21,6 +21,10 @@
   let sessionModel = '';
   let sessionThinking = 'medium';
   let streaming = null;      // { el, text, raf }
+  // The assistant's tool calls for the turn in progress. Kept as data and not only
+  // as DOM, because the thread re-renders from `messages` on every save and a card
+  // that lived only in the DOM would vanish the moment the answer was stored.
+  let turnTools = [];
   let busy = false;
   // The run state is the server's, never typed here: it survives a reload, a
   // second tab and a browser that closed mid-run. A budget shown from a local
@@ -73,9 +77,42 @@
   }
 
   // ── rendering ──────────────────────────────────────────────────────────
+  function asToolsHtml() {
+    if (!turnTools.length) return '';
+    return '<div class="as-tools">' + turnTools.map(t => `
+      <div class="tool-card${t.open ? ' open' : ''}${t.err ? ' err' : ''}">
+        <div class="tool-head">
+          <span class="tool-badge">${esc(t.name)}</span>
+          <span class="tool-args">${esc(t.args)}</span>
+        </div>
+        <div class="tool-body"><pre>${esc(
+          t.result == null ? (t.running ? 'running\u2026' : '') : t.result)}</pre></div>
+      </div>`).join('') + '</div>';
+  }
+
+  // One delegated toggle for the whole list, bound once: the thread re-renders on
+  // every save, so a listener per card would have to be re-attached each time.
+  function bindToolToggles(box) {
+    if (!box || box._toolsBound) return;
+    box._toolsBound = true;
+    box.addEventListener('click', e => {
+      const head = e.target.closest('.as-tools .tool-head');
+      if (!head) return;
+      const card = head.closest('.tool-card');
+      const i = Array.prototype.indexOf.call(
+        box.querySelectorAll('.as-tools .tool-card'), card);
+      if (turnTools[i]) turnTools[i].open = !turnTools[i].open;
+      card.classList.toggle('open');
+    });
+  }
+
   function renderMessages() {
     const box = $('#asMessages');
     if (!box) return;
+    // Tools belong to the answer that follows the last prompt. When the thread ends
+    // on a user message there is no answer to attach them to yet, so a new turn
+    // starts clean without anything having to know when a turn begins.
+    if (messages.length && messages[messages.length - 1].role === 'user') turnTools = [];
     if (!messages.length) {
       box.innerHTML = '<div class="as-empty">Ask about this session. Draft a prompt, think an ' +
         'approach through, or ask what the agent just did.<br><br>' +
@@ -97,14 +134,16 @@
           ${offers ? `<button class="ho-btn small" data-send="${i}" title="Hand this prompt to the agent now">Send to agent</button>` : ''}
           <button class="ho-btn small" data-del="${i}" title="Remove this message from the assistant's memory">delete</button>
         </div>`;
+      const tools = (!mine && i === messages.length - 1) ? asToolsHtml() : '';
       return `
       <div class="as-msg ${mine ? 'me' : 'them'}">
-        <div class="as-body${mine ? '' : ' md'}">${
+        ${tools}<div class="as-body${mine ? '' : ' md'}">${
           mine ? esc(text) : renderMd(text)}</div>${acts}
       </div>`;
     }).join('');
     bindCopy(box);
     bindActions(box);
+    bindToolToggles(box);
     box.scrollTop = box.scrollHeight;
   }
 
@@ -346,11 +385,69 @@
         }
         break;
       }
-      case 'assistant_tool_start':
-        toast('assistant: ' + m.name);
+      case 'assistant_tool_start': {
+        // A tool call can arrive before any text, so the answer's message element
+        // cannot wait for the first delta to exist.
+        const box = $('#asMessages');
+        if (box) {
+          const empty = box.querySelector('.as-empty');
+          if (empty) empty.remove();
+          let el = box.querySelector('.as-msg.them:last-child');
+          if (!el) {
+            el = document.createElement('div');
+            el.className = 'as-msg them';
+            el.innerHTML = '<div class="as-body md"></div>';
+            box.appendChild(el);
+          }
+          let wrap = el.querySelector('.as-tools');
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'as-tools';
+            el.insertBefore(wrap, el.firstChild);
+          }
+          const a = m.args || {};
+          const rec = {
+            id: m.id || null,
+            name: m.name || 'tool',
+            args: String(a.path || a.file_path || a.pattern ||
+                         (Object.keys(a).length ? JSON.stringify(a) : '')).slice(0, 120),
+            result: null, running: true, open: false,
+          };
+          turnTools.push(rec);
+          const card = document.createElement('div');
+          card.className = 'tool-card';
+          card.innerHTML = '<div class="tool-head"><span class="tool-badge"></span>' +
+            '<span class="tool-args"></span></div>' +
+            '<div class="tool-body"><pre></pre></div>';
+          card.querySelector('.tool-badge').textContent = rec.name;
+          card.querySelector('.tool-args').textContent = rec.args;
+          card.querySelector('.tool-body pre').textContent = 'running\u2026';
+          wrap.appendChild(card);
+          bindToolToggles(box);
+          box.scrollTop = box.scrollHeight;
+        }
         break;
-      case 'assistant_tool_end':
+      }
+      case 'assistant_tool_end': {
+        const rec = turnTools.filter(t => t.running && (!m.id || t.id === m.id)).shift() ||
+                    turnTools[turnTools.length - 1];
+        if (rec) {
+          rec.result = m.result || (m.is_error ? 'error' : 'done');
+          rec.running = false;
+          // Recorded on the data, not only on the node: the thread re-renders from
+          // `turnTools` on every save, and a class added straight to the DOM would
+          // not survive it.
+          rec.err = !!m.is_error;
+        }
+        const box = $('#asMessages');
+        const cards = box ? box.querySelectorAll('.as-tools .tool-card') : [];
+        const i = rec ? turnTools.indexOf(rec) : -1;
+        if (cards[i]) {
+          cards[i].querySelector('.tool-body pre').textContent = rec.result;
+          if (m.is_error) cards[i].classList.add('err');
+        }
         break;
+      }
       case 'assistant_error':
         finishStream();
         toast('Assistant: ' + (m.message || 'failed'), true);

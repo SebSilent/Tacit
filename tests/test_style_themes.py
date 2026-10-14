@@ -25,7 +25,7 @@ THEME = re.compile(r'\[data-theme="([\w-]+)"\]\s*\{([^}]*)\}')
 DECL = re.compile(r"^\s*(--[\w-]+|color-scheme)\s*:\s*(.+?)[ \t]*;[ \t]*$", re.M)
 REGISTRY = re.compile(r"""\{\s*id:\s*'([\w-]+)'""")
 SWATCH = re.compile(r"^\.sw-([\w-]+)\s*\{", re.M)
-SCALE_NAME = re.compile(r"--(?:fs|sp|rd)-\d+$|^--radius[\w-]*$")
+SCALE_NAME = re.compile(r"--(?:fs|sp|rd|tr)-\d+$|^--radius[\w-]*$")
 
 # The pairs that must clear WCAG AA. `--text` on `--bg` is the body copy; `--muted`
 # is secondary copy at a smaller size, held to 4.5 as well because it is used for
@@ -38,6 +38,19 @@ MIN_MUTED = 4.5
 # fails: dark-on-light accents picked from a dark palette land at 2:1 on white.
 AAA_THEMES = ("contrast", "contrast-light")
 MIN_AAA = 7.0
+
+# The theme the bare `:root` is fused with, and therefore the one every other theme's
+# token SET is compared against. It was `midnight` until the 2026-10-13 appearance
+# revamp replaced the eight palettes; the guards below are written against this name
+# rather than a literal so the next world change moves one line, not six.
+DEFAULT_THEME = "graphite"
+
+# How many worlds ship. Pinned as a number rather than "at least eight" because
+# the swatch-literal guard in test_color_tokens has to know it too: a swatch is two
+# stops, so ten themes is twenty literals and not one more. The count moved 8 -> 10
+# when amethyst and celadon were added -- the purple and the cyan the palette had
+# been steering around, composed rather than avoided.
+THEME_COUNT = 20
 
 
 def themes():
@@ -78,35 +91,43 @@ def rgb_triplet(value):
     return [int(x.strip()) for x in value.split(",")]
 
 
-# ── item 5's open accessibility debt, measured instead of remembered ───────────
+# ── `--on-accent`, measured instead of remembered ──────────────────────────────
 # `--on-accent` is the foreground of six controls that sit on `--accent`: Send,
 # New chat, the picked option, the primary button, the assistant avatar, the
-# active segment. It is white in bare `:root` and no theme overrides it, so on a
-# light accent it is white on near-white. That is a palette decision (deviation 1)
-# and this file does not make it — but the debt was carried with no number
-# attached, and an unnumbered debt is how `contrast` ended up at 1.41:1 on *the
-# accessibility theme* while every other contrast in the file was checked.
+# active segment. It was white in bare `:root` with no theme overriding it, so on
+# a light accent it was white on near-white — `contrast` sat at 1.41:1 on *the
+# accessibility theme*, and the debt was carried with no number attached.
 #
-# So: the failing set is pinned. A 9th theme with a light accent cannot join it
-# quietly, an offender cannot deepen quietly, and when the palette call is made
-# the list has to be emptied — which is the decision being recorded, not lost.
+# Every palette re-measures this pair rather than inheriting an answer. Twelve of
+# the twenty declare `--on-accent: #000` in their own block, because their accents
+# are light enough that white on them falls under AA; the other eight keep the white
+# from bare `:root`, their accents being dark enough to carry it.
+#
+# Which side a theme falls on is a property of its accent's luminance and not of its
+# name, so the split is deliberately NOT enumerated here. It was, at eight themes,
+# and it went stale the moment the set grew — a list of names in a comment is a
+# second source of truth about a number the test already measures.
+# `test_every_theme_clears_aa_now_that_the_debt_is_paid` is what checks it.
+#
+# The debt list stays as a list rather than being deleted, because the guard below
+# compares against it: a theme with a light accent and no override re-enters this
+# dict and has to be argued for explicitly.
+#
+# Darkening `--accent` instead stays rejected, for the reason it always was:
+# `--accent` is also text on `--bg`, so a darker accent trades a button failure
+# for a link failure. Both pairs are measured in the palette lab, not one.
 MIN_ON_ACCENT = 4.5
-ON_ACCENT_DEBT = {          # theme -> ratio measured 2026-10-13, white on --accent
-    "contrast": 1.41,
-    "ember": 2.56,
-    "midnight": 3.99,
-    "ocean": 2.59,
-    "vapor": 2.94,
-}
-# `mono` was 1.12:1 — white text on a #f2f2f2 accent, i.e. white on white. Fixed
-# 2026-07-29 by the palette call (PLAN item 5, deviation 1: "just Mono"), which is
-# `--on-accent: #000` in the mono block. Removed from the dict above because a fixed
-# theme left listed is exactly what test_the_failing_set_is_exactly_the_recorded_debt
-# is built to catch; the remaining five were reviewed and judged acceptable as-is.
+ON_ACCENT_DEBT: dict = {}   # paid in full; see the note above before adding a row
 # A hue may be re-picked for any reason; drifting *below* the recorded ratio is
 # the only direction that makes the app worse.
 ON_ACCENT_SLACK = 0.02
-ON_ACCENT_CONSUMERS = 6
+# Six controls sit on `--accent`: Send, New chat, the picked option, the primary
+# button, the assistant avatar, the active segment. The appearance revamp added a
+# seventh -- `::selection`, which used to wash the accent at .35 over whatever
+# foreground was already there, so on a light accent it selected near-white text
+# onto a near-white ground. It now paints the accent solid with `--on-accent` on
+# it, which is the same measured pair as the other six rather than a new one.
+ON_ACCENT_CONSUMERS = 7
 
 RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 BG = re.compile(r"\bbackground(?:-color)?\s*:\s*([^;]+?)\s*;")
@@ -149,8 +170,8 @@ class TestThemeSets(unittest.TestCase):
         adding a token means adding it to every theme, which is the point.
         """
         t = themes()
-        self.assertIn("midnight", t, "the default theme block is gone")
-        base = set(t["midnight"])
+        self.assertIn(DEFAULT_THEME, t, "the default theme block is gone")
+        base = set(t[DEFAULT_THEME])
         self.assertTrue(base, "no tokens parsed — the guard is reading nothing")
         for ident in sorted(t):
             declared = set(t[ident])
@@ -273,16 +294,16 @@ class TestThemeSets(unittest.TestCase):
         self.assertEqual(css_ids, sw_ids,
                          f"CSS-only (no swatch) {sorted(css_ids - sw_ids)}, "
                          f"swatch-only {sorted(sw_ids - css_ids)}")
-        self.assertGreaterEqual(len(css_ids), 8,
-                                "the plan asks for 8 themes; the count went down")
+        self.assertGreaterEqual(len(css_ids), THEME_COUNT,
+                                "the theme count went down from %d" % THEME_COUNT)
 
     def test_the_guards_can_fail(self):
         """Prove the three interesting guards react, on mutated COPY only."""
         # a theme that forgets --text
-        missing = CSS.replace('  --text: #f2ebe1;\n', '', 1)
+        missing = CSS.replace('  --text: #eee6e3;\n', '', 1)
         t = {i: {n for n, _ in DECL.findall(b)} for i, b in THEME.findall(missing)}
-        self.assertIn("ember", t)
-        self.assertNotEqual(t["ember"], t["midnight"],
+        self.assertIn("oxide", t)
+        self.assertNotEqual(t["oxide"], t[DEFAULT_THEME],
                             "a theme missing --text looked complete")
 
         # a theme that re-spaces instead of re-colouring
@@ -313,7 +334,7 @@ class TestOnAccentContrast(unittest.TestCase):
 
     def test_every_theme_resolves_a_foreground_and_an_accent(self):
         r = self.ratios()
-        self.assertEqual(len(r), 8, "expected 8 theme blocks")
+        self.assertEqual(len(r), THEME_COUNT, "expected %d theme blocks" % THEME_COUNT)
         for ident, (got, fg, bg) in sorted(r.items()):
             self.assertIsNotNone(got, f"[{ident}] --on-accent={fg!r} or --accent={bg!r} "
                                       "is not a hex, so the pairing cannot be measured")
@@ -329,17 +350,29 @@ class TestOnAccentContrast(unittest.TestCase):
             "a fixed theme must be removed from ON_ACCENT_DEBT, that is the record "
             "catching up with the palette decision")
         passing = sorted(set(r) - failing)
-        self.assertEqual(passing, ["contrast-light", "daybreak", "mono"],
-                         "the themes that clear AA changed; update the note in "
-                         "PLAN item 5's deviation 1 (mono joined them on 2026-07-29)")
+        self.assertEqual(passing, sorted(r),
+                         "a theme fell below AA — every one of the eight clears it "
+                         "since the 2026-10-13 palette call, so a new offender means "
+                         "a regression or a new theme that owes an --on-accent row")
 
-    def test_no_offender_may_deepen(self):
-        for ident, floor in sorted(ON_ACCENT_DEBT.items()):
-            got = self.ratios()[ident][0]
+    def test_every_theme_clears_aa_now_that_the_debt_is_paid(self):
+        """The floor, applied to all eight instead of to a list of offenders.
+
+        While the debt was open this test walked `ON_ACCENT_DEBT` and compared each
+        theme against its own recorded ratio, which let five themes stay broken as
+        long as they did not get worse. The debt is empty now, so that loop would
+        iterate over nothing and report success — a guard that passes because it
+        measures nothing. This is the same check with the exception list removed:
+        every theme must clear AA against the accent it actually paints.
+        """
+        for ident, (got, fg, bg) in sorted(self.ratios().items()):
+            self.assertIsNotNone(got, f"[{ident}] {fg} on {bg} is not measurable")
             self.assertGreaterEqual(
-                got, floor - ON_ACCENT_SLACK,
-                f"[{ident}] --on-accent on --accent fell to {got:.2f}:1, below the "
-                f"recorded {floor:.2f}:1 — the debt got worse, not smaller")
+                got, MIN_ON_ACCENT,
+                f"[{ident}] --on-accent ({fg}) on --accent ({bg}) is {got:.2f}:1, "
+                f"under the {MIN_ON_ACCENT}:1 AA floor — either the accent moved or "
+                "the override was deleted. If it is deliberate, add the theme to "
+                "ON_ACCENT_DEBT with the measured ratio and say why.")
 
     def test_every_consumer_sits_on_the_accent_it_was_measured_against(self):
         """The measurement is only meaningful while `--on-accent` means "on --accent".
@@ -364,19 +397,37 @@ class TestOnAccentContrast(unittest.TestCase):
         self.assertLess(r["paper"][0], MIN_ON_ACCENT,
                         "a light-accent theme slipped under the failing-set check")
 
-        # a fixed theme left in the list would also have to be caught. Planting on
-        # `contrast`, not `mono`: mono is fixed now, so overriding it proves nothing —
-        # this must show the mechanism works on a theme that is *still* in the debt.
-        fixed = CSS.replace('--accent-rgb: 255, 214, 10;\n  --on-accent: #fff;',
-                            '--accent-rgb: 255, 214, 10;\n  --on-accent: #000;', 1)
-        self.assertGreaterEqual(on_accent_ratios(fixed)["contrast"][0], MIN_ON_ACCENT,
-                                "a per-theme override did not take effect, so the "
-                                "list could never be emptied")
+        # a paid theme re-broken. The old mutation planted `--on-accent: #fff` inside
+        # the contrast block, which no longer exists, so it replaced nothing and
+        # passed on a no-op — the quiet failure mode of every string-anchored
+        # mutation in this file. Assert the anchor moved first, then the ratio.
+        anchor = '--on-accent: #000;\n  --accent-2: #4ad9ff;'
+        regressed = CSS.replace(anchor, '--on-accent: #fff;\n  --accent-2: #4ad9ff;', 1)
+        self.assertNotEqual(regressed, CSS,
+                            "the contrast anchor moved, so this mutation proves nothing")
+        self.assertLess(on_accent_ratios(regressed)["contrast"][0], MIN_ON_ACCENT,
+                        "white on contrast's yellow came back and nothing noticed")
 
-        # an offender made worse — white on a *lighter* accent than the recorded one
-        worse = CSS.replace("--accent: #ffd60a;", "--accent: #fff08c;", 1)
-        self.assertLess(on_accent_ratios(worse)["contrast"][0], ON_ACCENT_DEBT["contrast"],
-                        "contrast's accent got lighter and nothing noticed")
+        # a declaration the token-set parser cannot read. `themes()` scans the RAW
+        # file and `DECL` needs the line to end with `;`, so a trailing comment drops
+        # `--on-accent` from that theme's declared set — the exact trap the 2026-10-13
+        # fix walked into, where three overrides were in the file, rendered correctly,
+        # and were invisible to `test_every_theme_declares_the_full_token_set`.
+        #
+        # `on_accent_ratios` strips comments before scanning, so it still reads #000
+        # here. The two parsers disagree, and the raw one is the stricter: pinning the
+        # stricter one is what keeps a commented declaration from passing quietly.
+        commented = CSS.replace(anchor,
+                                '--on-accent: #000;  /* white was 1.41:1 */\n'
+                                '  --accent-2: #4ad9ff;', 1)
+        self.assertNotEqual(commented, CSS, "the contrast anchor moved")
+        declared = {i: {n for n, _ in DECL.findall(b)} for i, b in THEME.findall(commented)}
+        self.assertNotIn("--on-accent", declared["contrast"],
+                         "a commented-out declaration still parsed, so the token-set "
+                         "test is not the guard this note claims it is")
+        self.assertIn("--on-accent", declared[DEFAULT_THEME],
+                         "the anchor theme lost its own row, so the comparison below "
+                         "has nothing to compare against")
 
         # a consumer painted on the wrong ground
         mispainted = CSS.replace(".send-btn {", ".send-btn {\n  color: var(--on-accent);\n"
