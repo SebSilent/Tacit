@@ -2,12 +2,11 @@
 (() => {
 'use strict';
 
-// crypto.randomUUID is undefined on plain-HTTP LAN origins (insecure context)
-const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
-  : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0;
-      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    }));
+// The id generator moved into transport.js: /mobile is served over a LAN origin
+// (http://0.0.0.0:8550 in the plan), which is an insecure context where
+// crypto.randomUUID does not exist at all. Two copies of that fallback is how one
+// page gets ids the other cannot make.
+const uuid = () => window.TacitTransport.uuid();
 
 const $ = s => document.querySelector(s);
 const messagesEl = $('#messages');
@@ -65,26 +64,26 @@ let serverRegistryLoaded = false;
 // a hint that names a mood ('neon cyber') tells you nothing you can pick on.
 // Ordered darks, lights, then the two AAA instruments.
 const THEMES = [
-  { id: 'graphite',   name: 'Graphite',   hint: 'warm graphite, petrol accent' },
-  { id: 'verdigris',  name: 'Verdigris',  hint: 'cool grey-green, copper' },
-  { id: 'amethyst',   name: 'Amethyst',   hint: 'plum ground, iris accent' },
-  { id: 'oxide',      name: 'Oxide',      hint: 'iron ground, chalk accent' },
-  { id: 'mono',       name: 'Mono',       hint: 'greyscale; colour only for status' },
-  { id: 'vellum',     name: 'Vellum',     hint: 'warm paper, ultramarine' },
-  { id: 'celadon',    name: 'Celadon',    hint: 'jade-glaze ground, deep teal' },
-  { id: 'signal',     name: 'Signal',     hint: 'cool white, chart-series colour' },
-  { id: 'nocturne',   name: 'Nocturne',   hint: 'indigo-slate, one brass lamp' },
-  { id: 'lagoon',     name: 'Lagoon',     hint: 'deep teal-slate, water cyan' },
-  { id: 'rosewood',   name: 'Rosewood',   hint: 'plum-rose ground, dusty mauve' },
-  { id: 'absinthe',   name: 'Absinthe',   hint: 'green-slate, chartreuse' },
-  { id: 'iris',       name: 'Iris',       hint: 'cool neutral, deep violet-blue' },
-  { id: 'slate',      name: 'Slate',      hint: 'mid-tone grey, amber indicator' },
-  { id: 'frost',      name: 'Frost',      hint: 'blue-white ground, deep cyan' },
-  { id: 'monotype',   name: 'Monotype',   hint: 'neutral light; the accent is ink' },
-  { id: 'foxglove',   name: 'Foxglove',   hint: 'warm light, muted plum' },
-  { id: 'sorrel',     name: 'Sorrel',     hint: 'pale clay ground, indigo ink' },
-  { id: 'contrast', name: 'Contrast', hint: 'AAA, white on black' },
-  { id: 'contrast-light', name: 'Contrast light', hint: 'AAA, black on white' },
+  { id: 'graphite', name: 'Graphite', tone: 'dark', hint: 'warm graphite, petrol accent' },
+  { id: 'verdigris', name: 'Verdigris', tone: 'dark', hint: 'cool grey-green, copper' },
+  { id: 'mono', name: 'Mono', tone: 'dark', hint: 'greyscale; colour only for status' },
+  { id: 'amethyst', name: 'Amethyst', tone: 'dark', hint: 'plum ground, iris accent' },
+  { id: 'nocturne', name: 'Nocturne', tone: 'dark', hint: 'indigo-slate, one brass lamp' },
+  { id: 'lagoon', name: 'Lagoon', tone: 'dark', hint: 'deep teal-slate, water cyan' },
+  { id: 'rosewood', name: 'Rosewood', tone: 'dark', hint: 'plum-rose ground, dusty mauve' },
+  { id: 'absinthe', name: 'Absinthe', tone: 'dark', hint: 'green-slate, chartreuse' },
+  { id: 'iris', name: 'Iris', tone: 'dark', hint: 'cool neutral, deep violet-blue' },
+  { id: 'slate', name: 'Slate', tone: 'dark', hint: 'mid-tone grey, amber indicator' },
+  { id: 'oxide', name: 'Oxide', tone: 'dark', hint: 'iron ground, chalk accent' },
+  { id: 'contrast', name: 'Contrast', tone: 'dark', hint: 'AAA, white on black' },
+  { id: 'vellum', name: 'Vellum', tone: 'light', hint: 'warm paper, ultramarine' },
+  { id: 'signal', name: 'Signal', tone: 'light', hint: 'cool white, chart-series colour' },
+  { id: 'celadon', name: 'Celadon', tone: 'light', hint: 'jade-glaze ground, deep teal' },
+  { id: 'frost', name: 'Frost', tone: 'light', hint: 'blue-white ground, deep cyan' },
+  { id: 'monotype', name: 'Monotype', tone: 'light', hint: 'neutral light; the accent is ink' },
+  { id: 'foxglove', name: 'Foxglove', tone: 'light', hint: 'warm light, muted plum' },
+  { id: 'sorrel', name: 'Sorrel', tone: 'light', hint: 'pale clay ground, indigo ink' },
+  { id: 'contrast-light', name: 'Contrast light', tone: 'light', hint: 'AAA, black on white' },
 ];
 const DEFAULT_THEME = 'graphite';
 // The appearance revamp replaced every palette the old world shipped and renamed
@@ -425,26 +424,9 @@ function startRenameTop() {
 // Switching sessions is an in-band `switch` command (server answers with a
 // `hello` carrying starting=true/false), never a reconnect.
 function wsUrl(s) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  // 'localhost' resolves to ::1 first on Windows; uvicorn is IPv4-bound, so
-  // every handshake would stall ~2s on the fallback. Pin the loopback v4.
-  const host = location.hostname === 'localhost'
-    ? '127.0.0.1' + (location.port ? ':' + location.port : '')
-    : location.host;
-  const think = s.thinking ? `&thinking=${s.thinking}` : '';
-  // Always send workdir (even empty) so clearing a workspace reaches the server.
-  // The server treats missing param as "leave alone", empty string as "clear".
-  const wd = `&workdir=${encodeURIComponent(s.workdir || '')}`;
-  // create=1 rides on a socket the New session button just asked for, and on
-  // the single re-attach after the server said it has never heard of this
-  // session (see onclose). It is not sent casually: _adopt is set once per
-  // session, so this cannot re-grow the list the way the old blind
-  // merge-on-connect did.
-  const mk = (s._new || s._adopt) ? '&create=1' : '';
-  // A restored session already has a title the user chose; a brand new one
-  // gets the server default, which is fine.
-  const nm = (s._adopt && s.title) ? `&name=${encodeURIComponent(s.title)}` : '';
-  return `${proto}://${host}/ws/${s.id}?model=${encodeURIComponent(s.model)}&mode=${s.mode}${think}${wd}${mk}${nm}`;
+  // The wire contract lives in transport.js now, because /mobile builds the same URL and
+  // two copies of it drift. Every call site here is unchanged.
+  return window.TacitTransport.wsUrl(s);
 }
 
 function connect() {
@@ -509,16 +491,16 @@ function connectSession(s) {
       if (!s._adopted) {
         s._adopted = true;
         s._adopt = true;
-        setConn('session not on server — re-creating');
+        setConn('session not on server. Re-creating');
         scheduleReconnect();
         return;
       }
-      setConn('session could not be restored — start a new one');
+      setConn('session could not be restored. Start a new one');
       return;
     }
     // Everything else stays on the old behaviour: the server is restarting or
     // the link dropped, and the next attempt may genuinely succeed.
-    setConn('disconnected — retrying');
+    setConn('disconnected. Retrying');
     scheduleReconnect();
   };
   sock.onerror = () => {};
@@ -567,14 +549,14 @@ function handleBackground(m, s) {
     // The same row, for the same reason, in a session that is not on screen:
     // without it mk() finds an assistant row last and appends the new turn to
     // the old bubble. mk() starts a fresh one once the user row is there.
-    s.messages.push({ role: 'user', content: m.text || '', origin: m.origin });
+    s.messages.push({ role: 'user', content: m.text || '', origin: m.origin, ts: m.ts });
     persist();
     return;
   }
   const mk = () => {
     let last = s.messages[s.messages.length - 1];
     if (!last || last.role !== 'assistant') {
-      last = { role: 'assistant', content: '', reason: '', tools: [] };
+      last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
       s.messages.push(last);
     }
     return last;
@@ -633,7 +615,7 @@ function resumeLiveStream() {
   if (!s) return;
   let last = s.messages[s.messages.length - 1];
   if (!last || last.role !== 'assistant') {
-    last = { role: 'assistant', content: '', reason: '', tools: [] };
+    last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
     s.messages.push(last);
   }
   emptyState.style.display = 'none';
@@ -644,7 +626,7 @@ function resumeLiveStream() {
   if (rendered.length) {
     body = rendered[rendered.length - 1].querySelector('.msg-body-inner');
   } else {
-    body = appendMsg('assistant', '');
+    body = appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last));
     const c = body.querySelector('.msg-content');
     c._raw = last.content || '';
     c.innerHTML = md(last.content || '');
@@ -763,7 +745,7 @@ function handle(m) {
         const mk = () => {
           let last = s.messages[s.messages.length - 1];
           if (!last || last.role !== 'assistant') {
-            last = { role: 'assistant', content: '', reason: '', tools: [] };
+            last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
             s.messages.push(last);
           }
           return last;
@@ -815,9 +797,12 @@ function handle(m) {
       const echoed = m.origin === 'you' && localEchoes.get(s.id) === (m.text || '');
       localEchoes.delete(s.id);
       if (echoed) break;
-      s.messages.push({ role: 'user', content: m.text || '', origin: m.origin });
+      // `ts` comes from the server's row (session_runtime publishes it), not from
+      // this window's clock, so a prompt typed in another tab shows when it was
+      // actually sent.
+      s.messages.push({ role: 'user', content: m.text || '', origin: m.origin, ts: m.ts });
       persist();
-      appendMsg('user', m.text || '', m.origin);
+      appendMsg('user', m.text || '', m.origin, m.ts);
       // A fresh assistant bubble for the turn this prompt started. No-op when
       // one is already open; the point is that the *previous* turn's bubble is
       // not still the thing receiving text.
@@ -973,30 +958,37 @@ function send(text) {
       const imgs = drainAttachments();
       ws.send(JSON.stringify({ type: 'steer', message: text, images: imgs }));
       const s = cur();
-      if (s) { s.messages.push({ role: 'user', content: text + (imgs.length ? ` · ${imgs.length} image(s)` : '') }); persist(); renderSessionList(); }
-      appendMsg('user', text);
+      const sent = nowTs();
+      if (s) { s.messages.push({ role: 'user', content: text + (imgs.length ? ` · ${imgs.length} image(s)` : ''), ts: sent }); persist(); renderSessionList(); }
+      appendMsg('user', text, null, sent);
       toast('Steering the running turn');
       return;
     }
   }
-  if (busy && planLive) { toast('Plan mode is running — wait for it or press Stop'); return; }
+  if (busy && planLive) { toast('Plan mode is running. Wait for it or press Stop'); return; }
   const s = cur();
   if (!s) { toast('Press New session to start one'); return; }
-  if (wsDead || !ws || ws.readyState !== 1) { connect(); toast('Reconnecting — your message will send once the link is up'); }
-  if (sessionStarting) toast('Agent is booting — message queued, it will fire the moment it is ready');
+  if (wsDead || !ws || ws.readyState !== 1) { connect(); toast('Reconnecting. Your message will send once the link is up'); }
+  if (sessionStarting) toast('Agent is booting. Message queued, it will fire the moment it is ready');
 
   emptyState.style.display = 'none';
   const imgs = drainAttachments();
   localEchoes.set(s.id, text);   // the server will publish this row too
-  s.messages.push({ role: 'user', content: text + (imgs.length ? ` · ${imgs.length} image(s)` : '') });
-  s.messages.push({ role: 'assistant', content: '', reason: '', tools: [] });
+  const sent = nowTs();
+  s.messages.push({ role: 'user', content: text + (imgs.length ? ` · ${imgs.length} image(s)` : ''), ts: sent });
+  s.messages.push({ role: 'assistant', content: '', reason: '', tools: [], ts: sent });
+  // Index this turn's first assistant row while it is being created. The backend
+  // stamps a snapshot with the number of stored rows at the moment it takes one
+  // (agent._turn_msg_index), which is this same row, so the two agree without
+  // either side asking the other.
+  const at = s.messages.length - 1;
   if (s.title === 'New session' && !s.namedByUser) s.title = autoTitle(text);
   renderSessionList();
   renderModelChip();
   persist();
 
-  appendMsg('user', text);
-  const el = appendMsg('assistant', '');
+  appendMsg('user', text, null, sent, at - 1);
+  const el = appendMsg('assistant', '', null, sent, at);
   streaming = { msg: s.messages[s.messages.length - 1], el };
   setBusy(true);
   markActiveSessionState('busy');
@@ -1054,11 +1046,15 @@ function ensureStreamingBubble() {
   if (!s) return;
   let last = s.messages[s.messages.length - 1];
   if (!last || last.role !== 'assistant') {
-    last = { role: 'assistant', content: '', reason: '', tools: [] };
+    last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
     s.messages.push(last);
   }
   emptyState.style.display = 'none';
-  const el = appendMsg('assistant', '');
+  // The row's own index, live. That is the coordinate the snapshot marker uses, so
+  // an undo point taken during this turn can hang on this bubble before the
+  // epilogue writes the row. indexOf rather than length-1 because the row being
+  // drawn may already have existed.
+  const el = appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last));
   streaming = { msg: last, el };
   setBusy(true);
 }
@@ -1172,6 +1168,7 @@ function endStream() {
     const blk = streaming.el.querySelector('.reason-block');
     if (blk) {
       if (streaming.msg.reason) {
+        blk.classList.remove('open');   // collapsed again: the trace must not bury the answer
         blk.querySelector('.reason-toggle').textContent = 'thought process';
       } else {
         blk.remove();   // nothing was ever thought — drop the empty pill
@@ -1192,6 +1189,11 @@ function endStream() {
   if (ranHere) chime(turnFailed ? 'error' : 'done');
   turnFailed = false;
   persist();
+  // The undo point this turn took appears without a reload: the snapshot was
+  // written mid-turn, so the directory only now has a row to match this bubble's
+  // index against.
+  const ended = cur();
+  if (ended) decorateSnapshots(ended.id);
 }
 
 function stop() {
@@ -1206,16 +1208,103 @@ function stop() {
 // typed and forgot.
 const MSG_TAGS = { assistant: 'Assistant', autonomous: 'Autonomous-Mode' };
 
-function appendMsg(role, text, origin) {
+// ── the transcript's clock ───────────────────────────────────────────
+// `ts` is epoch seconds, written by store.append (store.py:154) and carried on
+// every row registry() serves. It is formatted here, at display, and never
+// stored localised: a string with one machine's timezone in it would end up in
+// the record, in the markdown export, and in front of the model. HH:MM only --
+// a date on every row is noise, and the full stamp is on title=.
+function timeOf(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// No ts, no element. A time is never invented for a row that has none: that
+// covers everything written before the field existed and anything that arrived
+// through merge(), where the client's own rows replace the server's.
+function timeHtml(ts) {
+  const t = timeOf(ts);
+  if (!t) return '';
+  const d = new Date(ts * 1000);
+  return `<span class="msg-time" title="${esc(d.toLocaleString())}">${t}</span>`;
+}
+
+// A row created before the server's copy lands is stamped with this window's
+// clock, so the time appears the moment you send rather than on reload. It is a
+// fallback, not the truth: the stored row carries the server's `ts`, and a
+// reload replaces it.
+function nowTs() { return Date.now() / 1000; }
+
+// ── snapshots beside the message that caused them ─────────────────────────
+// A snapshot knows which row it belongs to because the backend wrote that index
+// beside the copy (extras.py's `.message` marker, set by agent._auto_snapshot
+// through _turn_msg_index). It is metadata *about* the message, never content in
+// it: the transcript sent to the model and the saved markdown export are
+// unchanged, which is the constraint PLAN.md item 4 puts on this feature.
+let snapRows = [];   // this session's snapshots, as /api/snapshots returns them
+let snapSeq = 0;     // a slow response must not decorate a newer session
+
+function decorateSnapshots(sid) {
+  snapSeq++;
+  const mine = snapSeq;
+  snapRows = [];
+  if (!sid) { paintSnapshotLinks(); return; }
+  fetch(`/api/snapshots?session=${encodeURIComponent(sid)}`)
+    .then((r) => (r && r.ok ? r.json() : { snapshots: [] }))
+    .then((d) => {
+      if (mine !== snapSeq) return;              // a newer render already won
+      snapRows = (d && d.snapshots) || [];
+      paintSnapshotLinks();
+    })
+    .catch(() => { /* no control beats one that opens nothing */ });
+}
+
+// One control per snapshot, on the row that caused it. A snapshot with no marker
+// -- the agent's own `snapshot` tool, or anything taken before this existed -- is
+// skipped rather than guessed at, and a session with no snapshots paints nothing.
+function paintSnapshotLinks() {
+  const byMsg = {};
+  for (const s of snapRows) {
+    if (typeof s.message !== 'number') continue;
+    (byMsg[s.message] = byMsg[s.message] || []).push(s);
+  }
+  messagesEl.querySelectorAll('.msg.assistant[data-msgi]').forEach((el) => {
+    // Idempotent: this runs on render *and* at the end of a turn, so a control
+    // already on the row would otherwise double on every reload-free turn.
+    el.querySelectorAll('.msg-snap').forEach((b) => b.remove());
+    const rows = byMsg[el.dataset.msgi];
+    if (!rows || !rows.length) return;
+    const role = el.querySelector('.msg-role');
+    if (!role) return;
+    const at = role.querySelector('.msg-time');   // the clock keeps the right edge
+    for (const s of rows) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'msg-snap';
+      b.dataset.snap = s.name;
+      b.textContent = 'snapshot';
+      b.title = `${s.name} · ${s.file_count} file(s) · taken before this turn's first edit — opens compare`;
+      role.insertBefore(b, at);
+    }
+  });
+}
+
+function appendMsg(role, text, origin, ts, msgi) {
   if (role === 'user') stickToBottom = true;
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}`;
+  // The position of the row this bubble draws, on the element itself. Snapshots
+  // are linked to a message by exactly that index, so this is where the two
+  // coordinate systems meet; nothing else in the renderer needs it.
+  if (msgi != null) wrap.dataset.msgi = String(msgi);
   const tag = (role === 'user' && MSG_TAGS[origin])
     ? ` <span class="msg-tag ${origin}">${MSG_TAGS[origin]}</span>` : '';
   wrap.innerHTML = `
     <div class="avatar">${role === 'user' ? 'YOU' : 'TC'}</div>
     <div class="msg-body">
-      <div class="msg-role">${role === 'user' ? 'You' : 'Tacit'}${tag}</div>
+      <div class="msg-role"><span class="msg-role-name">${role === 'user' ? 'You' : 'Tacit'}</span>${tag}${timeHtml(ts)}</div>
       <div class="msg-body-inner"></div>
     </div>`;
   const body = wrap.querySelector('.msg-body-inner');
@@ -1230,7 +1319,7 @@ function appendMsg(role, text, origin) {
     body.querySelector('.msg-content').textContent = text;
     const edit = document.createElement('button');
     edit.className = 'msg-edit';
-    edit.title = 'Edit — rewinds the session to this message and continues from it';
+    edit.title = 'Edit. Rewinds the session to this message and continues from it';
     edit.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4L19.5 8.5a2.12 2.12 0 0 0-3-3L5 17.05V20z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
     body.parentElement.appendChild(edit);
   }
@@ -1278,6 +1367,7 @@ function appendReason(delta) {
   r.textContent += delta;
   const blk = r.closest('.reason-block');
   blk.querySelector('.reason-toggle').textContent = 'thinking…';
+  blk.classList.add('open');   // arriving trace is visible, not parked in a hidden box
   scheduleStreamPaint();
 }
 
@@ -1298,7 +1388,12 @@ function addToolCard(m) {
     <div class="tool-body"><pre></pre></div>`;
   card.querySelector('.tool-badge').textContent = m.name || 'tool';
   card.querySelector('.tool-args').textContent = argStr;
+  // Follow the block's end only if the reader was already there. Measured BEFORE the
+  // append: after it the block has already grown, so atEnd would read false for every
+  // long result and the newest call would land below the fold.
+  const atEnd = tools.scrollHeight - tools.scrollTop - tools.clientHeight < 40;
   tools.appendChild(card);
+  if (atEnd) tools.scrollTop = tools.scrollHeight;
   scrollBottom();
 }
 
@@ -1460,18 +1555,24 @@ function renderTranscript(s) {
   // bubble per stored row made a fork or reload of a tool-heavy turn read as the
   // model having sent a message for every step. Group consecutive assistant rows
   // into the turn they belong to; a user or summary row starts a new group.
+  // `at` is the row's index in the stored transcript, which is the coordinate the
+  // snapshot marker uses (agent._turn_msg_index). A group carries the index of its
+  // first row, so an undo point lands on the reply that caused it, not on the
+  // step that happened to be written last.
   const groups = [];
-  for (const msg of s.messages) {
+  s.messages.forEach((msg, i) => {
     const last = groups[groups.length - 1];
     if (msg.role === 'assistant' && last && last.role === 'assistant') last.parts.push(msg);
-    else groups.push({ role: msg.role, parts: [msg] });
-  }
+    else groups.push({ role: msg.role, parts: [msg], at: i });
+  });
   for (const g of groups) {
     const head = g.parts[0];
     const text = g.parts.map(p => p.content || '').join('\n\n');
     // head.origin: the sender tag survives a reload, because it rides on the
     // stored row (and agent.transcript_messages strips it before the model).
-    const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''), head.origin);
+    // head.ts: the stored row's own clock. A group's time is the time its first
+    // row was written, which is when the turn started, not when it finished.
+    const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''), head.origin, head.ts, g.at);
     if (g.role !== 'assistant') continue;
     if (text) {
       const c = body.querySelector('.msg-content');
@@ -1515,6 +1616,9 @@ function renderTranscript(s) {
     // nothing at all in it is noise left behind by an interrupted turn.
     if (!text && !reason && !g.parts.some(p => (p.tools || []).length)) body.closest('.msg').remove();
   }
+  // Async on purpose: the transcript paints the instant the rows are known, and
+  // the undo points arrive when the snapshot directory has been read.
+  decorateSnapshots(s.id);
   stickToBottom = true;
   scrollBottom();
 }
@@ -1667,6 +1771,7 @@ async function adoptSession(sid, label) {
 }
 
 function switchSession(id) {
+  closeDrawer();   // before the early return: re-picking the session you are on must still clear it
   if (id === activeId) return;
   activeId = id;
   persist();
@@ -1761,7 +1866,7 @@ function editUserMessage(wrap) {
     editAckTimer = setTimeout(() => {
       if (!pendingEdit) return;
       pendingEdit = null;
-      toast('Edit timed out — nothing changed', true);
+      toast('Edit timed out. Nothing changed', true);
       cleanup();
     }, 6000);
   });
@@ -1779,86 +1884,12 @@ function editUserMessage(wrap) {
 // md()/a renderer and the surrounding try/catch swallows it — the pane just
 // silently loses its content. Latent rather than live (nothing passes a
 // non-string statically), which is why those eight coercions exist at all.
-function esc(t) { return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-
-// inline markdown on already-escaped text: bold, italic, strike, code, links
-function inlineMd(t) {
-  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-       .replace(/(^|[\s>])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-       .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
-       .replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  return t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-
-// pipe-table helpers (GFM-flavoured: header | --- | body rows)
-function splitTableRow(line) {
-  let l = line.trim();
-  if (l.startsWith('|')) l = l.slice(1);
-  if (l.endsWith('|')) l = l.slice(0, -1);
-  return l.split('|').map(c => c.trim());
-}
-const TBL_SEP = /^:?-{3,}:?$/;
-const isTableSepRow = cells => cells.length > 0 && cells.every(c => TBL_SEP.test(c));
-
-function md(src) {
-  const blocks = [];
-  const tables = [];
-  let t = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const i = blocks.length;
-    blocks.push({ lang, code });
-    return `\x00CODE${i}\x00`;
-  });
-  // extract pipe tables before escaping so cells keep their markdown
-  t = t.replace(/(^|\n)((?:[^\S\n]*\|[^\n]*\n?)+)/g, (m, prefix, raw) => {
-    const lines = raw.replace(/\n$/, '').split('\n').filter(l => l.includes('|'));
-    if (lines.length < 2) return m;
-    const head = splitTableRow(lines[0]);
-    const sep = splitTableRow(lines[1]);
-    if (!isTableSepRow(sep) || sep.length > head.length) return m;
-    const aligns = sep.map(c =>
-      c.startsWith(':') && c.endsWith(':') ? 'center'
-      : c.endsWith(':') ? 'right'
-      : c.startsWith(':') ? 'left' : '');
-    const rows = lines.slice(2).map(splitTableRow);
-    const i = tables.length;
-    tables.push({ head, aligns, rows });
-    return prefix + `\x00TBL${i}\x00`;
-  });
-  t = esc(t);
-  t = t.replace(/^#### (.*)$/gm, '<h4>$1</h4>')
-       .replace(/^### (.*)$/gm, '<h3>$1</h3>')
-       .replace(/^## (.*)$/gm, '<h2>$1</h2>')
-       .replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  t = inlineMd(t);
-  t = t.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
-  t = t.replace(/(^(?:[-*] .*(?:\n|$))+)/gm, block => {
-    const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
-    return `<ul>${items}</ul>\n`;
-  });
-  t = t.replace(/(^(?:\d+\. .*(?:\n|$))+)/gm, block => {
-    const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
-    return `<ol>${items}</ol>\n`;
-  });
-  t = t.split(/\n{2,}/).map(p => {
-    const pt = p.trim();
-    if (/^<(h\d|ul|ol|blockquote|pre|table)/.test(pt)) return p;
-    if (/^\x00(?:CODE|TBL)\d+\x00$/.test(pt)) return p;
-    return `<p>${p.replace(/\n/g, '<br>')}</p>`;
-  }).join('\n');
-  t = t.replace(/\x00CODE(\d+)\x00/g, (_, i) => {
-    const b = blocks[+i];
-    return `<div class="code-block"><div class="code-head"><span>${esc(b.lang || 'code')}</span><button class="copy-btn">Copy</button></div><pre><code>${esc(b.code.replace(/\n$/, ''))}</code></pre></div>`;
-  });
-  t = t.replace(/\x00TBL(\d+)\x00/g, (_, i) => {
-    const b = tables[+i];
-    const cell = (c, tag, align) =>
-      `<${tag}${align ? ` style="text-align:${align}"` : ''}>${inlineMd(esc(c))}</${tag}>`;
-    return `<table><thead><tr>${b.head.map((c, j) => cell(c, 'th', b.aligns[j])).join('')}</tr></thead>` +
-      `<tbody>${b.rows.map(r => `<tr>${r.map((c, j) => cell(c, 'td', b.aligns[j])).join('')}</tr>`).join('')}</tbody></table>`;
-  });
-  return t;
-}
+// The renderer itself now lives in static/markdown.js, because /mobile must draw the
+// same markup from the same escaping rules or the two pages drift into different bugs.
+// These wrappers exist so every call site below is unchanged; they delegate, always.
+function esc(t) { return window.TacitMarkdown.esc(t); }
+function inlineMd(t) { return window.TacitMarkdown.inlineMd(t); }
+function md(src) { return window.TacitMarkdown.md(src); }
 
 // delegated: the ONE click handler for the transcript surface. Rows built by
 // appendMsg() carry no listeners of their own — anything clickable inside a
@@ -1881,6 +1912,16 @@ messagesEl.addEventListener('click', e => {
   if (head) { head.closest('.tool-card').classList.toggle('open'); return; }
   // The edit button used to stopPropagation() so its own listener ran alone.
   // There is now only this listener, so there is nothing left to stop.
+  // The undo point this turn left behind. Opens the session's snapshot overlay on
+  // that one card and runs its Compare -- the overlay owns the restore control, so
+  // the transcript never grows one of its own.
+  const snap = e.target.closest('.msg-snap');
+  if (snap) {
+    if (window.TacitPlatform && window.TacitPlatform.openSnapshot) {
+      window.TacitPlatform.openSnapshot(snap.dataset.snap);
+    }
+    return;
+  }
   const edit = e.target.closest('.msg-edit');
   if (edit) {
     // Kept from the per-node listener, for a reason I can name: the file has two
@@ -1898,7 +1939,7 @@ function renderModelChip() {
   const s = cur();
   if (!s) {
     $('#topTitle').textContent = 'Tacit';
-    $('#topMeta').textContent = 'no session — press New session';
+    $('#topMeta').textContent = 'no session. Press New session';
     renderWdChip();
     return;
   }
@@ -1931,7 +1972,7 @@ function renderWdChip() {
   if (chip) {
     chip.title = wd
       ? `Workspace: ${wd}`
-      : 'No workspace — the agent chooses its own paths';
+      : 'No workspace. The agent chooses its own paths';
   }
 }
 
@@ -1992,7 +2033,7 @@ function chooseWorkdir(p) {
     persist();
     renderWdChip();
     reconnect();
-    toast(clearing ? 'No workspace — the agent picks its own paths' : `Workspace → ${wdBase(p)}`);
+    toast(clearing ? 'No workspace. The agent picks its own paths' : `Workspace: ${wdBase(p)}`);
     return;
   }
   const fresh = newSession(true);
@@ -2062,7 +2103,7 @@ function fsInstance(key) {
 }
 
 function fsShowStale(inst) {
-  inst.q('list').innerHTML = '<div class="fs-empty">This backend has no /api/fs routes — it is an older build. Restart Tacit (stop and start the server), then reload this page.</div>';
+  inst.q('list').innerHTML = '<div class="fs-empty">This backend has no /api/fs routes. It is an older build. Restart Tacit (stop and start the server), then reload this page.</div>';
   inst.q('note').textContent = '';
 }
 
@@ -2220,7 +2261,7 @@ function renderTokMeter() {
   tokMeter.classList.toggle('compacting', !!u.compacting);
   const win = ctx.window || 0;
   const pct = ctx.percent;
-  let fillPct = 0, label = 'ctx —';
+  let fillPct = 0, label = 'ctx';
   if (u.compacting) {
     label = 'compacting…';
     fillPct = 100;
@@ -2238,14 +2279,14 @@ function renderTokMeter() {
      : fillPct >= compactAt - 20 ? ' warn' : '');
   const cache = (tok.cacheRead || 0) + (tok.cacheWrite || 0);
   tokMeter.title = [
-    `session tokens — in ${fmtTok(tok.input)} · out ${fmtTok(tok.output)}` +
+    `session tokens: in ${fmtTok(tok.input)} · out ${fmtTok(tok.output)}` +
       (cache ? ` · cache ${fmtTok(cache)}` : ''),
-    win ? `context — ${ctx.tokens != null ? fmtTok(ctx.tokens) + ' / ' + fmtTok(win) : 'unknown (post-compaction)'}`
+    win ? `context: ${ctx.tokens != null ? fmtTok(ctx.tokens) + ' / ' + fmtTok(win) : 'unknown (post-compaction)'}`
         : 'context window unknown for this model',
-    u.speed != null ? `speed — ${fmtTok(u.speed)} tok/s` : '',
+    u.speed != null ? `speed: ${fmtTok(u.speed)} tok/s` : '',
     u.compacting ? 'compaction in progress…' :
-    autoCompactionOn ? `auto-compaction on — triggers near ${compactAt.toFixed(0)}%`
-                     : `auto-compaction off — compacts manually from the ⋮ menu near ${compactAt.toFixed(0)}%`,
+    autoCompactionOn ? `auto-compaction on. Triggers near ${compactAt.toFixed(0)}%`
+                     : `auto-compaction off. Compacts manually from the ⋮ menu near ${compactAt.toFixed(0)}%`,
   ].join('\n');
 }
 
@@ -2274,7 +2315,7 @@ function renderProviderSelect() {
   if (!byProv.size) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'no providers — open Harness';
+    opt.textContent = 'no providers. Open Harness';
     providerSelect.appendChild(opt);
     return;
   }
@@ -2294,7 +2335,7 @@ function renderModelSelect() {
   if (!models.length) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'no models — Re-scan in Settings';
+    opt.textContent = 'no models. Re-scan in Settings';
     modelSelect.appendChild(opt);
     return;
   }
@@ -2368,7 +2409,15 @@ async function loadInfo() {
   // "Default Harness" — a claim about the active profile that no code ever
   // wrote, and that stopped being true the moment a second profile existed.
   const brand = document.getElementById('brandVersion');
-  if (brand) brand.textContent = info.version || 'version unknown';
+  if (brand) {
+    // `hidden` is the pre-fetch state, not the resting one. style.css pins
+    // `[hidden] { display: none !important }`, so writing text into the span is
+    // not enough — the attribute has to be cleared here or the version sits in
+    // the DOM invisible forever, while every source-level assertion about this
+    // element keeps passing.
+    brand.textContent = info.version || 'version unknown';
+    brand.hidden = false;
+  }
   renderModelPickers();
   renderThinkSelect();
   // no permanent status widget — surface problems only, once per outage
@@ -2453,19 +2502,46 @@ $('#modeSeg').addEventListener('click', e => {
   document.querySelectorAll('#modeSeg button').forEach(b =>
     b.classList.toggle('active', b === btn));
   persist(); renderModelChip(); syncSessionMetadata(s);
-  // Stage 1b: a mode change starts a fresh session (the transcript is not
-  // carried across a mode boundary). The server creates it and returns its
-  // id; the rpc_response handler adopts it and opens its socket. This
-  // session keeps its own socket and its own transcript.
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'client_new_session', model: s.model, mode: s.mode }));
-  toast(s.mode === 'agent' ? 'Agent mode: tools on — fresh session'
-                           : 'Chat mode: pure conversation — fresh session');
+  // A mode change changes the session you are looking at. It does not ask for a new
+  // one. Stage 1b made this click also create a session, on the stated theory that
+  // the transcript could not cross a mode boundary; carrying it is what the app did
+  // before Stage 1b and it worked, so the old behaviour is the specification here.
+  // The mode is already set in place above and landed in the store by
+  // syncSessionMetadata(); the next turn builds its prompt from the record.
+  toast(s.mode === 'agent' ? 'Agent mode: tools on'
+                           : 'Chat mode: pure conversation');
 });
+
+// At or under the 760px breakpoint the sidebar is an off-canvas drawer laid over the
+// transcript (style.css: `.sidebar.open`, plus the scrim at `.app:has(.sidebar.open)::after`).
+// The scrim has been painted for ages and nothing ever listened for a tap on it, which is
+// how a panel that only its own button can close ships green. Three ways out, all of them
+// the ones a hand on a phone actually reaches for: tap away, Escape, and picking a session.
+function drawerOpen() {
+  return innerWidth <= 760 && $('#sidebar').classList.contains('open');
+}
+
+function closeDrawer() {
+  if (drawerOpen()) $('#sidebar').classList.remove('open');
+}
 
 $('#sidebarToggle').addEventListener('click', () => {
   const sb = $('#sidebar');
   if (innerWidth <= 760) sb.classList.toggle('open');
   else sb.classList.toggle('hidden');
+});
+
+// Capture phase on purpose. The scrim is a `::after` on `.app`, so a tap on it arrives as a
+// click on the shell; and a row that stops propagation still has to dismiss the drawer that
+// is covering the transcript the person just chose.
+document.addEventListener('click', (e) => {
+  if (!drawerOpen()) return;
+  if (e.target.closest('#sidebar') || e.target.closest('#sidebarToggle')) return;
+  closeDrawer();
+}, true);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeDrawer();
 });
 
 inputEl.addEventListener('input', () => {
@@ -2545,7 +2621,7 @@ function renderPlanStatus(m) {
 function renderPlanQuestions(questions) {
   planStrip.hidden = false;
   let html = `<div class="ps-head"><span class="ps-icon"></span><span class="ps-phase">4 · Clarifying questions</span>
-    <span class="ps-detail">answer to shape the plan — or skip</span></div><div class="pq-list">`;
+    <span class="ps-detail">answer to shape the plan, or skip</span></div><div class="pq-list">`;
   questions.forEach((q, i) => {
     html += `<div class="pq-item" data-q="${i}">
       <div class="pq-q">${esc(q.q)}</div>
@@ -2589,11 +2665,11 @@ function renderPlanQuestions(questions) {
 
   $('#pqSubmit').addEventListener('click', () => {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_answers', answers: formatAnswers(false) }));
-    renderPlanStatus({ phase: 'synthesizing', detail: 'answers received — writing the plan…', explorers: [] });
+    renderPlanStatus({ phase: 'synthesizing', detail: 'answers received. Writing the plan…', explorers: [] });
   });
   $('#pqSkip').addEventListener('click', () => {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_answers', answers: formatAnswers(true) }));
-    renderPlanStatus({ phase: 'synthesizing', detail: 'questions skipped — writing the plan…', explorers: [] });
+    renderPlanStatus({ phase: 'synthesizing', detail: 'questions skipped. Writing the plan…', explorers: [] });
   });
 }
 
@@ -2800,17 +2876,8 @@ function handleRpcResponse(m) {
     if (m.ok && m.data) toast(`command finished (exit ${m.data.code ?? 0})`);
     else toast('command failed: ' + (m.error || ''), true);
   } else if (m.command === 'fork' || m.command === 'clone') {
-    if (m.ok && m.data && m.data.sid) adoptSession(m.data.sid, m.command === 'fork' ? 'Forked — continuing from the copy' : 'Cloned');
+    if (m.ok && m.data && m.data.sid) adoptSession(m.data.sid, m.command === 'fork' ? 'Forked. Continuing from the copy' : 'Cloned');
     else toast((m.command === 'fork' ? 'Fork' : 'Clone') + ' failed: ' + (m.error || ''), true);
-  } else if (m.command === 'new_session' || m.command === 'client_new_session') {
-    // Stage 1b: the server created the session and handed back its id; this
-    // socket stays attached to the session it was born for. The client
-    // adopts the new session and opens a fresh socket for it.
-    if (m.ok && m.data && m.data.sid) {
-      adoptSession(m.data.sid, 'Fresh session started');
-    } else {
-      toast('New session failed: ' + (m.error || ''), true);
-    }
   } else if (m.command === 'plan_implement') {
     if (m.ok && m.data && m.data.sid) {
       adoptSession(m.data.sid, 'Implementing in a fresh session');
@@ -2850,7 +2917,7 @@ function termPrint(text, cls) {
 function openTerminal() {
   termOverlay.hidden = false;
   if (!termOut.childElementCount) {
-    termPrint('Tacit terminal — commands run in the workspace', 'term-note');
+    termPrint('Tacit terminal. Commands run in the workspace', 'term-note');
   }
   const s = cur();
   termCwd.textContent = (s && s.workdir) || '';

@@ -1123,6 +1123,68 @@ class TestAssistant(Isolated):
         self.assertGreater(rich["tokens"]["total"], cheap["tokens"]["total"])
         self.assertEqual(cheap["turns"], 2)
 
+    def test_preview_prices_the_instruction_that_is_actually_sent(self):
+        """The panel's row must equal the string on the wire.
+
+        It used to price PERSONA alone while system_prompt sent persona +
+        capability clause + task contract, so the number understated its own
+        promise. The row is priced from instruction_block, and the capability
+        clause is config-derived, so the two configurations must differ.
+        """
+        rec = self._rec()
+        for tools in (False, True):
+            cfg = {**assistant.DEFAULTS, "tools": tools}
+            with self.subTest(tools=tools):
+                self.assertEqual(
+                    assistant.preview(rec, cfg)["tokens"]["persona"],
+                    tokens.estimate_tokens(assistant.instruction_block(rec, cfg)))
+                self.assertIn(assistant.persona_block(cfg),
+                              assistant.system_prompt(rec, cfg))
+        self.assertNotEqual(
+            assistant.preview(rec)["tokens"]["persona"],
+            assistant.preview(rec, {**assistant.DEFAULTS, "tools": True})["tokens"]["persona"])
+
+    def test_the_capability_clause_matches_what_the_request_arms(self):
+        """The contradiction this replaced: told it cannot act while tools are sent."""
+        rec = self._rec()
+        off = assistant.system_prompt(rec, dict(assistant.DEFAULTS))
+        on = assistant.system_prompt(rec, {**assistant.DEFAULTS, "tools": True})
+        self.assertIn("You cannot take actions.", off)
+        self.assertNotIn("You cannot take actions.", on)
+        self.assertIn("You may read files there", on)
+        self.assertNotIn("You may read files there", off)
+
+    def test_a_swap_of_the_two_contracts_fails(self):
+        """PLAN item 1's Done-when, as a plant.
+
+        Markers, not real text: the point is that the MODE picks the contract, so
+        exchanging the two branches in task_block must break this regardless of
+        what either prompt says. Restored with addCleanup so a failure cannot leak
+        the patched constants into the rest of the suite.
+        """
+        chat = self._rec()
+        auto = self._rec()
+        auto[assistant.AUTONOMY_FIELD] = {"enabled": True}
+        cfg = dict(assistant.DEFAULTS)
+        # Capture BEFORE patching. The first draft of this test registered the
+        # second pair of cleanups after the patch, which captured MARK-* and
+        # would have restored those over the real constants — a leak into every
+        # later test in the process.
+        real_chat, real_auto = assistant.CHAT_TASK, assistant.AUTONOMY_PERSONA
+        self.addCleanup(setattr, assistant, "CHAT_TASK", real_chat)
+        self.addCleanup(setattr, assistant, "AUTONOMY_PERSONA", real_auto)
+        assistant.CHAT_TASK = "MARK-CONVERSATIONAL"
+        assistant.AUTONOMY_PERSONA = "MARK-AUTONOMOUS"
+        self.assertIn("MARK-CONVERSATIONAL", assistant.system_prompt(chat, cfg))
+        self.assertNotIn("MARK-AUTONOMOUS", assistant.system_prompt(chat, cfg))
+        self.assertIn("MARK-AUTONOMOUS", assistant.system_prompt(auto, cfg))
+        self.assertNotIn("MARK-CONVERSATIONAL", assistant.system_prompt(auto, cfg))
+        # The constants must be genuinely different, or the assertions above
+        # would pass on two copies of one string.
+        self.assertNotEqual(real_chat, real_auto)
+        self.assertNotIn(real_chat, real_auto)
+        self.assertNotIn(real_auto, real_chat)
+
     def test_model_defaults_to_the_session(self):
         rec = self._rec()
         self.assertEqual(assistant.settings_of(rec)["model"], "")
@@ -1318,12 +1380,19 @@ class TestSessionCreationRule(Isolated):
 
     def test_the_browser_only_asks_for_one_when_told_to(self):
         from pathlib import Path as _P
-        js = (_P(__file__).parent.parent / "static/app.js").read_text(encoding="utf-8")
+        base = _P(__file__).parent.parent
+        js = (base / "static/app.js").read_text(encoding="utf-8")
         # create=1 is gated. It rides on a session the New-session button just
         # made, and on the single re-attach after the server answered 4404. It
         # must never ride an ordinary connection, or any stale id could put a
         # row in the store.
-        self.assertIn("(s._new || s._adopt) ? '&create=1' : ''", js)
+        #
+        # The builder moved into static/transport.js when /mobile arrived, so the
+        # gate is asserted where it now lives - and app.js is pinned to go through
+        # it rather than keep a second copy that could diverge.
+        wire = (base / "static/transport.js").read_text(encoding="utf-8")
+        self.assertIn("(s._new || s._adopt) ? '&create=1' : ''", wire)
+        self.assertIn("window.TacitTransport.wsUrl(s)", js)
         # adoption is one-shot per session, so a refusal cannot re-create the
         # same row on every retry
         self.assertIn("if (!s._adopted)", js)
@@ -1331,7 +1400,7 @@ class TestSessionCreationRule(Isolated):
         # and the second refusal stops instead of reconnecting forever
         self.assertIn("could not be restored", js)
         # a real disconnect must still retry: the server restarts constantly
-        self.assertIn("disconnected \u2014 retrying", js)
+        self.assertIn("disconnected. Retrying", js)
         # no boot-time creation may remain
         self.assertNotIn("if (!sessions.length) newSession(true)", js)
 

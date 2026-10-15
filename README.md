@@ -142,7 +142,7 @@ machine, not from their marketing.
 | External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
 | Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
 | Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | none | none |
-| Tail kept | **token budget, 4–40 msgs** | none | token budget, floor 8 | none | none |
+| Tail kept | **token budget, 4-40 msgs** | none | token budget, floor 8 | none | none |
 | Cheap pre-pass before summarising | **yes** | none | yes | none | none |
 | Summariser model | **nominatable** | none | cheap auxiliary | none | none |
 | Fallback if summarising fails | **deterministic digest** | none | digest + cooldown | none | none |
@@ -188,7 +188,7 @@ None of this was invented here, and it is worth saying where it came from.
   strategy is possible.
 - **The task strip is read-only.** The Task List plugin keeps the remaining work outside the window
   as data, and it survives compaction because it was never in the transcript. The strip above the
-  composer now draws that list — open over total, ticking items off as the agent finishes them —
+  composer now draws that list, open over total, ticking items off as the agent finishes them,
   but the model owns the list: the interface watches and does not edit. Claude Code's panel lets
   the person reorder and add; that is the part still missing here.
 - **Retrieval is keyword-only.** SQLite full-text search where the build has it, plain matching where
@@ -391,7 +391,7 @@ The default learning mode is `learn-off`: nothing is read, nothing is proposed, 
 worker runs. `propose` is the explicit opt-in, and it still cannot change anything; `auto` and
 `auto-low-risk` exist if you want them, and they are your decision to make, in **Settings >
 Learning**, which also holds the proposals and their approve, reject, edit and delete actions. An
-install from before this default keeps whatever mode it had stored — only the default moved.
+install from before this default keeps whatever mode it had stored, only the default moved.
 
 The analyzer adds no tool to the agent and changes no prompt text. The background worker exists
 only while learning is on: it is not started when learning is off, a mode change starts or stops it,
@@ -404,7 +404,7 @@ and switching learning off stops a running worker rather than leaving it waking 
 Persistent memory records things such as a preferred convention, a decision already made, or how a
 project is structured. It can also consume a large part of a context window if it is not limited.
 
-Memory is built in — not a plugin, and not a second system to enable on top of this one. One
+Memory is built in, not a plugin, and not a second system to enable on top of this one. One
 switch, **Settings > Memory**, decides what is injected at the start of a turn, whether the agent
 gets its memory tools, and what the preview shows. It limits itself:
 
@@ -452,10 +452,10 @@ only (21); `jit` and `full` retrieve mid-turn as well, so they get the search to
 that could only ever answer "not enabled" is not put in front of the model.
 
 The extra cost is those schemas plus whatever the budget lets through, and it is recomputed from
-the live configuration by **Settings > Profile** — the same estimator the dashboard uses — so the
+the live configuration by **Settings > Profile** (the same estimator the dashboard uses) so the
 table cannot drift without the interface disagreeing with it.
 
-No profile turns learning on — not even proposing. That is a deliberate choice: a profile sets cost
+No profile turns learning on, not even proposing. That is a deliberate choice: a profile sets cost
 and containment, and does not decide what Tacit is allowed to remember on its own. Proposing is a
 selection in **Settings > Learning**, made explicitly or not at all.
 
@@ -621,8 +621,8 @@ shown before anything is sent:
 ```
 
 Read-only tools add roughly **1,130 tokens** on their own, which is why they are off by default, and
-they are read-only in fact and not only by label: the switches that write — delegation, `evidence
-add`, and any external tool call — are refused at the point of the call, not merely hidden from the
+they are read-only in fact and not only by label: the switches that write, delegation, `evidence
+add`, and any external tool call, are refused at the point of the call, not merely hidden from the
 schema. Hiding a tool does not stop a model that remembers its name. The
 Assistant has its own provider, model and thinking level as well, so pointing a reasoning-heavy
 model at the thinking and a cheap one at the code is a couple of clicks.
@@ -641,7 +641,7 @@ any executable path, or by providing an HTTP endpoint.
 
 When you connect a server, Tacit discovers its tools and lists them, but does not insert their
 descriptions into your prompt. The agent receives four small helper tools instead, and looks up what
-it needs — and with **no server configured, those four schemas are not offered at all**: they cost
+it needs, and with **no server configured, those four schemas are not offered at all**: they cost
 nothing and appear the moment a server is added, with no restart and no profile switch. The helpers
 are:
 
@@ -742,7 +742,7 @@ outside your machine.
 
 **Settings > Profile** is the profile selector: the named bundles, their measured cost, apply and
 delete, and a box to save the current setup under your own name. Switching applies immediately. The
-token tables that used to sit under it were removed at the operator's request — the accounting still
+token tables that used to sit under it were removed at the operator's request, the accounting still
 happens and is still local, but the tab's job is to choose a bundle, not to report on it.
 
 ---
@@ -756,7 +756,7 @@ workspace picker, opens this session's timeline. For each snapshot you can:
 - **compare** it with the project as it is now, listing changed, added and removed files
 - **restore** it, after a confirmation prompt
 
-The agent takes a snapshot automatically before the first edit of a turn — the first `write_file`,
+The agent takes a snapshot automatically before the first edit of a turn, the first `write_file`,
 `edit_file` or `run_shell` of a turn, once, whether the edit goes through a tool or a shell command.
 It used to be offered the choice and left to take one; across two real sessions it never did, so the
 undo timeline was empty at exactly the moment it would have been needed. It is also not offered the
@@ -774,31 +774,31 @@ Sessions are standalone. Work done in one never appears in another, in the
 backend or in the interface, and the guarantees are enforced rather than
 promised:
 
-- **One session, one running turn.** Live turn state — busy, starting, what kind
-  of work, since when, how many turns the session has started — is held in a
+- **One session, one running turn.** Live turn state - busy, starting, what kind
+  of work, since when, how many turns the session has started, is held in a
   process-local registry keyed by session id (`backend/session_state.py`), not on
   a socket and not in the stored record. A second window attaching to a busy
   session sees the busy flag, and a second prompt for that session is refused
   from any window. The interface reads the registry at `GET /api/sessions/state`
-  — it is also what draws the left bar's activity indicators.
+  - it is also what draws the left bar's activity indicators.
 - **A turn's worker is bound to its session at spawn.** Its events, its metrics
   and its transcript writes go to the session it was started in. Nothing can
-  redirect them to another session afterwards — the worker carries its own
+  redirect them to another session afterwards, the worker carries its own
   session id, and the registry is cleared by the worker's own exit, so a browser
   that disconnects mid-turn cannot mark a running session idle.
 - **Stop is scoped, and it really stops.** Abort on one session cannot touch a
   turn in another; each connection owns its own stop event, and the registry
   carries no stop state at all. The left bar carries a stop control on every
   working session's row, and it stops that session's turn through that
-  session's own socket — including a session you are not currently looking at.
+  session's own socket, including a session you are not currently looking at.
 - **A turn runs in its own process, so it can be killed.** A thread cannot be
   killed in Python under any circumstance, and a turn is a unit of work a
   person must be able to kill: blocked in a model read, a stuck shell command,
   a runaway regex. So the turn runs in a worker process owned by its session
   (`backend/turn_worker.py`), streaming its events back as JSON lines. Stop is
-  two-stage: a cooperative cancel first — the worker stops between events,
+  two-stage: a cooperative cancel first, the worker stops between events,
   closes its model stream, kills its own shell trees and exits cleanly, so the
-  partial transcript is preserved — and if it has not exited within five
+  partial transcript is preserved, and if it has not exited within five
   seconds, the process tree is killed outright (`taskkill /T /F` on Windows,
   `killpg` on POSIX). The interface is told which one ran. The turn's
   background jobs die with it. `TACIT_TURN_WORKER=thread` restores the old
@@ -806,16 +806,16 @@ promised:
 - **A socket is born attached to one session.** The interface holds one
   WebSocket per session, not one per tab: switching sessions opens a different
   socket, and a session with a running turn keeps streaming into its own
-  socket — and its own transcript — while you sit in another one. The in-band
+  socket (and its own transcript) while you sit in another one. The in-band
   `switch` command is deleted from the protocol: a socket is never re-pointed
   at another session, and the server answers the old command with the reason.
 - **The server never rebinds a connection.** Creating a session, changing mode,
   or implementing an approved plan creates the session and returns its id; the
   client opens a fresh socket for it. A running turn's worker keeps writing
-  into the session it was started in regardless — the capture is defence in
+  into the session it was started in regardless, the capture is defence in
   depth, not the mechanism.
 - **The left bar shows what is working.** Every session row carries a state
-  dot — idle, or pulsing while a turn runs — fed by `GET /api/sessions/state`
+  dot (idle, or pulsing while a turn runs) fed by `GET /api/sessions/state`
   (polled lightly) and refined live by the session's own socket events. A
   working row carries its own stop control.
 - **Delegation is per-session.** The sub-agent panel shows the active
@@ -989,7 +989,7 @@ the same port. A detached watcher waits for the port to free, then starts the se
 on it; the exit itself goes through uvicorn's own shutdown, so the analyzer, the MCP servers and the
 pid file are cleaned up. The browser reconnects on its own. A turn that is running is cut off, and
 the button says so before you press it. The restart is recorded in the audit ledger as
-`server_restart`. Every process Tacit spawns — turn workers, the restart watcher, the server itself —
+`server_restart`. Every process Tacit spawns, turn workers, the restart watcher, the server itself,
 carries a `tacit-*` marker in its command line, a `TACIT_ROLE`/`TACIT_SESSION_ID` pair in its
 environment, and a row in the live process registry (`GET /api/processes`, shown in **Settings >
 General**); on Windows each child is also bound to a kill-on-close job object, so a crashed parent
@@ -1000,7 +1000,7 @@ Nothing is ever matched on the executable name.
 | `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
 | `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
-| `TACIT_SHELL_OVERLAP` | `block` | what happens to a shell command that re-implements a tool: `block`, `advise` or `off`. Set it and **Settings > Tools > Shell overlap stops working** — the environment outranks the stored preference, and the switch says so rather than pretending |
+| `TACIT_SHELL_OVERLAP` | `block` | what happens to a shell command that re-implements a tool: `block`, `advise` or `off`. Set it and **Settings > Tools > Shell overlap stops working**, the environment outranks the stored preference, and the switch says so rather than pretending |
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
 
 ---
@@ -1012,22 +1012,22 @@ every push to the default branch is an update, and the updater's job is to make 
 single decision you can see the shape of first.
 
 - **The check is one small GET.** The updater reads the `VERSION` file at the repository root and
-  compares it with the same file upstream. Same version, nothing else is fetched — which is what
+  compares it with the same file upstream. Same version, nothing else is fetched, which is what
   keeps the hourly auto-check cheap.
 - **The update is an archive copy, not a git operation.** When the versions differ, the branch
   tarball is downloaded and unpacked over the checkout: changed files are overwritten, new files are
   created, and the result names what it did. No git, no tokens, no API. An install that was made
   from an archive updates the same way it was installed, and a checkout that happens to be a git
-  repository is left entirely alone — no fetch, no pull, no dirty-tree complaints.
-- **User state is never touched.** The protected list — `models.json`, `prefs.json`, `mcp.json`,
-  `sessions/`, `skills/`, `knowledge/` and the rest of what `~/.tacit` owns — is skipped on every
+  repository is left entirely alone, no fetch, no pull, no dirty-tree complaints.
+- **User state is never touched.** The protected list - `models.json`, `prefs.json`, `mcp.json`,
+  `sessions/`, `skills/`, `knowledge/` and the rest of what `~/.tacit` owns, is skipped on every
   path, and only tracked source extensions are considered.
 - **A file upstream no longer has is reported, never deleted.** The archive cannot tell "upstream
   removed this" from "you added this", so the updater leaves it on disk and says so in the result.
 - **Applying takes a restart.** The running server keeps its loaded code; the result says what was
   updated and the **Restart server** action above applies it.
 
-The check runs on a timer you set — an hour by default — and can be switched off. Nothing is ever
+The check runs on a timer you set (an hour by default) and can be switched off. Nothing is ever
 downloaded or applied without the button.
 
 ---
@@ -1144,7 +1144,7 @@ read access to the session.
 
 The repository includes an automated test suite: no network and no real model. The suite needs no
 container daemon and no benchmark runner, and Tacit installs neither. Run it and see for yourself
-how many there are — the count is whatever the suite says it is, and it is not maintained by hand.
+how many there are, the count is whatever the suite says it is, and it is not maintained by hand.
 
 ```sh
 python -m unittest discover -s tests -t .

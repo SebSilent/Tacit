@@ -87,11 +87,20 @@ GZIP_BASELINE = 115_372
 # lesson the 2026-10-13 note records — a budget that is nearly spent reads as a
 # passing test rather than a warning, so both numbers are re-measured here rather
 # than nudged.
-RAW_BUDGET = 468_500
-GZIP_BUDGET = 120_000
+# Re-measured 2026-10-14, per page (see the budget test). Desktop is the larger page
+# and sets the line; the shipped pair is the union of static/, still asserted because
+# a file nobody loads is dead weight that someone still has to review.
+RAW_BUDGET = 470_000
+GZIP_BUDGET = 124_000
+SHIPPED_RAW_BUDGET = 518_000
+SHIPPED_GZIP_BUDGET = 137_000
 
 # What one delegated handler on the transcript surface is allowed to route.
-ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit"}
+# `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
+# Reviewed as the guard intends — it is built by appendMsg() with no listener of its
+# own, routed by the one handler, and it opens the overlay's existing compare rather
+# than growing a second snapshot surface. The set stays closed against new clickables.
+ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit", ".msg-snap"}
 
 # Classes a transcript row makes clickable. Each one MUST be routed by the
 # delegated handler and MUST NOT get a listener of its own.
@@ -178,11 +187,44 @@ def _delegated_handler(src):
     return hits, _block(code, code.index("{", hits[0].end())) if hits else ""
 
 
-def _served_files():
-    """Every file index.html actually loads."""
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
+PAGES = ("index.html", "mobile.html")   # both are entry points since PLAN item 8
+
+
+def _served_files(page="index.html"):
+    """Every file one page actually loads.
+
+    Takes the page rather than assuming the desktop one. While this read only
+    index.html, a `<script>` that 404s on /mobile was invisible to the suite -
+    the exact failure the asset test below exists to catch - and every byte of
+    the mobile chrome was being charged against the desktop's weight budget.
+    """
+    html = (STATIC / page).read_text(encoding="utf-8")
     refs = re.findall(r'(?:src|href)="(/static/[^"?]+)', html)
     return html, refs
+
+
+def _page_bytes(page):
+    """raw / gzip of what a device loading `page` actually downloads."""
+    raw = gz = 0
+    for name in sorted({r.rsplit("/", 1)[-1] for r in _served_files(page)[1]}):
+        f = STATIC / name
+        if not f.is_file():
+            continue                      # the asset test reports that properly
+        b = f.read_bytes()
+        raw += len(b)
+        gz += len(gzip.compress(b, 9))
+    return raw, gz
+
+
+def _shipped_bytes():
+    """Everything in static/, which is still bytes somebody ships and reviews."""
+    raw = gz = 0
+    for f in sorted(STATIC.iterdir()):
+        if f.suffix in (".js", ".css", ".html"):
+            b = f.read_bytes()
+            raw += len(b)
+            gz += len(gzip.compress(b, 9))
+    return raw, gz
 
 
 class ServedBundleTests(TestCase):
@@ -242,41 +284,60 @@ class ServedBundleTests(TestCase):
 
 class PageWeightTests(TestCase):
     def test_what_the_browser_loads_stays_inside_its_budget(self):
-        raw = gz = 0
-        for f in sorted(STATIC.iterdir()):
-            if f.suffix in (".js", ".css", ".html"):
-                b = f.read_bytes()
-                raw += len(b)
-                gz += len(gzip.compress(b, 9))
-        self.assertLessEqual(raw, RAW_BUDGET,
-                             f"{raw:,} B raw vs budget {RAW_BUDGET:,} (baseline "
-                             f"{RAW_BASELINE:,}) — raise it on purpose, with a note")
-        self.assertLessEqual(gz, GZIP_BUDGET,
-                             f"{gz:,} B gzipped vs budget {GZIP_BUDGET:,} "
-                             f"(baseline {GZIP_BASELINE:,})")
+        """Per page, then per shipment.
+
+        Re-measured 2026-10-14. index.html loads app.js, assistant/delegation/git/
+        harness/platform, the shared transport.js and markdown.js, and style.css:
+        449,290 raw / 118,937 gzip. mobile.html loads mobile.js, those same two
+        shared files and style.css: 157,556 / 36,037. The single number this test
+        used to check summed all of static/, so it charged the phone for the
+        desktop's chrome and the desktop for the phone's - and it went over its
+        line the day the second page landed, without either device loading a byte
+        more than it did before. Budgets are the larger page plus ~4%, the same
+        margin every note above was set with.
+        """
+        for page in PAGES:
+            raw, gz = _page_bytes(page)
+            self.assertLessEqual(
+                raw, RAW_BUDGET,
+                f"{page} loads {raw:,} B raw vs budget {RAW_BUDGET:,} - raise it on "
+                "purpose, with a note")
+            self.assertLessEqual(
+                gz, GZIP_BUDGET,
+                f"{page} loads {gz:,} B gzipped vs budget {GZIP_BUDGET:,}")
+
+        raw, gz = _shipped_bytes()
+        self.assertLessEqual(raw, SHIPPED_RAW_BUDGET,
+                             f"{raw:,} B of static/ shipped vs {SHIPPED_RAW_BUDGET:,}")
+        self.assertLessEqual(gz, SHIPPED_GZIP_BUDGET,
+                             f"{gz:,} B gzipped shipped vs {SHIPPED_GZIP_BUDGET:,}")
 
     def test_nothing_is_loaded_from_a_remote_host(self):
-        html, _ = _served_files()
-        remote = re.findall(r'(?:src|href)="https?://[^"]+', html)
-        self.assertEqual(remote, [],
-                         "the app now needs a network to render its own chrome")
+        for page in PAGES:
+            html, _ = _served_files(page)
+            remote = re.findall(r'(?:src|href)="https?://[^"]+', html)
+            self.assertEqual(remote, [],
+                             f"{page} now needs a network to render its own chrome")
 
     def test_every_referenced_asset_exists(self):
         """A `<script>` that 404s takes its feature down silently.
 
         The plan's own dead-ends list has this shape: a guard that greps a name no
         longer in the file is a false pass. Here the failure mode is the file being
-        renamed and the reference left behind — so resolve references, do not
-        count them.
+        renamed and the reference left behind - so resolve references, do not count
+        them, and resolve them for every page that is an entry point.
         """
-        html, refs = _served_files()
-        for r in refs:
-            self.assertTrue((ROOT / r.lstrip("/")).is_file(), f"{r} is referenced but absent")
+        served = set()
+        for page in PAGES:
+            refs = _served_files(page)[1]
+            for r in refs:
+                self.assertTrue((ROOT / r.lstrip("/")).is_file(),
+                                f"{page} references {r} and it is absent")
+            served |= {Path(r).name for r in refs}
         on_disk = {f.name for f in STATIC.iterdir() if f.suffix in (".js", ".css")}
-        served = {Path(r).name for r in refs}
         self.assertEqual(on_disk - served, set(),
                          f"{sorted(on_disk - served)} sit in static/ and are never "
-                         "loaded — dead weight, or a missing reference")
+                         "loaded by either page - dead weight, or a missing reference")
 
     def test_the_bundle_needs_no_build_step(self):
         """"No new dependencies, no build step, no framework" — checked, not assumed.

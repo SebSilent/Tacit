@@ -50,11 +50,17 @@ STATIC = ROOT / "static"
 JS = {p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC.glob("*.js"))}
 
 NAMESPACES = ["Tacit", "TacitTheme", "TacitAssistant", "TacitDelegation",
-              "TacitGit", "TacitHarness", "TacitPlatform"]
+              "TacitGit", "TacitHarness", "TacitPlatform", "TacitTransport",
+              "TacitMarkdown"]
 
 # The surface as measured on 2026-10-13. Pinned so a dropped or renamed member is a
 # reviewed change rather than a panel that quietly stops responding.
 EXPECTED_EXPORTS = {
+    # The wire contract both frontends load. This set is the module's whole public
+    # surface; adding a member here is a reviewed change, same as every other panel.
+    "TacitTransport": {"EVENTS", "COMMANDS", "wsUrl", "uuid", "openSocket", "getJSON",
+                       "postJSON", "isCommand"},
+    "TacitMarkdown": {"esc", "inlineMd", "md"},
     "Tacit": {"getSid", "getWorkdir", "md", "pickDir", "refreshInfo",
               "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},
     "TacitTheme": {"apply", "current", "endPreview", "preview", "themes"},
@@ -64,10 +70,22 @@ EXPECTED_EXPORTS = {
                         "togglePanel"},
     "TacitGit": {"close", "open", "refresh", "run"},
     "TacitHarness": {"close", "open"},
-    "TacitPlatform": {"openSnapshots", "render"},
+    # `openSnapshot` joined the public surface with item 4: the transcript's
+    # snapshot control has to reach the overlay, and this is the one file that
+    # makes adding a member to a namespace a deliberate act rather than an accident.
+    "TacitPlatform": {"openSnapshot", "openSnapshots", "render"},
 }
 
 EXPECTED_READS = {
+    # app.js keeps its own per-session socket bookkeeping and borrows only the URL
+    # builder from the contract; mobile.js is the fuller reader. Either way the
+    # invariant is the same one this file has always held: every read resolves.
+    # mobile.js reads the contract through a `const T =` alias, which this file
+    # counts; the desktop page borrows only the two builders it delegates to.
+    "TacitTransport": {"wsUrl", "uuid", "openSocket", "getJSON", "postJSON"},
+    # app.js keeps three wrappers around the shared renderer; the wrappers are the
+    # reads, and mobile.js reads the same three names.
+    "TacitMarkdown": {"esc", "inlineMd", "md"},
     "Tacit": {"getSid", "getWorkdir", "md", "pickDir", "refreshInfo",
               "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},
     # `preview`/`endPreview` reviewed in the hover-preview change: the Appearance
@@ -79,7 +97,10 @@ EXPECTED_READS = {
     "TacitDelegation": {"handle", "maybeLaunch", "sessionChanged"},
     "TacitGit": set(),
     "TacitHarness": set(),
-    "TacitPlatform": {"render"},
+    # `openSnapshot` is read by the transcript's undo-point control (item 4): the
+    # renderer owns no snapshot UI of its own, so the row asks the overlay to open
+    # itself on one card. Both names are read across files, which is the point.
+    "TacitPlatform": {"openSnapshot", "render"},
 }
 
 

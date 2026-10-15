@@ -3,7 +3,7 @@
 The store (``backend/store.py``) holds the transcript; this holds what is true
 *right now*: whether a turn is running in a session, since when, and how many
 turns that session has started. It is deliberately not part of the session
-record — a busy flag written into the record would be persisted as truth and
+record, a busy flag written into the record would be persisted as truth and
 then lie after a crash. This state is process-local by design: a session is
 busy because a worker in *this* process is running its turn, and for no other
 reason.

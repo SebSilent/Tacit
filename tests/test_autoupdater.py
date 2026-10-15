@@ -179,6 +179,34 @@ class AutoupdaterTest(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("VERSION", r.get("error", ""))
 
+    def test_pull_refuses_an_empty_remote_version(self):
+        """The empty-remote alignment: pull is now as honest as check.
+
+        A blank VERSION body used to answer "Already up to date" with ok=True,
+        which is indistinguishable from a genuinely current checkout - and pull is
+        the path that writes files.
+        """
+        self._gets = {autoupdater.VERSION_URL: b"\n"}
+        r = asyncio.run(autoupdater.pull_updates())
+        self.assertFalse(r["ok"], str(r)[:200])
+        self.assertIn("empty", r.get("error", ""))
+        self.assertFalse(r.get("updated", False))
+        self.assertEqual((config.ROOT / "static" / "app.js").read_text(encoding="utf-8"),
+                         "console.log('v1')\n")
+
+    def test_pull_local_equals_remote_is_still_up_to_date(self):
+        """The branch above must not have swallowed this one.
+
+        Only VERSION_URL is armed, so if pull had decided there was an update it
+        would reach for the tarball and fake_get would raise on an unstubbed URL.
+        Passing therefore also proves the up-to-date answer still costs one GET.
+        """
+        self._gets = {autoupdater.VERSION_URL: b"1.0.0\n"}
+        r = asyncio.run(autoupdater.pull_updates())
+        self.assertTrue(r["ok"], str(r)[:200])
+        self.assertFalse(r["updated"])
+        self.assertIn("Already up to date", r.get("message", ""))
+
     def test_the_surface_survives_the_transport_swap(self):
         self.assertTrue(autoupdater.set_enabled(False)["ok"])
         self.assertFalse(autoupdater.get_status()["enabled"])
@@ -205,6 +233,52 @@ class AutoupdaterTest(unittest.TestCase):
         autoupdater.save_state(state)
         self.assertIsNone(asyncio.run(autoupdater.auto_check_if_needed()),
                           "the switch off is honoured even when the interval has passed")
+
+
+class TestCompareVersions(unittest.TestCase):
+    """PLAN item 6's Done-when, which was unmet until now.
+
+    The comparator had ZERO direct coverage - grep for compare_versions across
+    tests/ found nothing - so its only tests were the transport tests above. That
+    is how an inverted sign in the two parseable branches survived: every one of
+    them failed loudly instead of pinning the direction itself.
+
+    The contract (autoupdater.py:173): -1 remote is older, 0 the same,
+    1 remote is newer.
+    """
+
+    def cmp(self, local, remote):
+        return autoupdater.compare_versions(local, remote)
+
+    def test_newer_remote_is_one_and_ordering_is_numeric_not_lexical(self):
+        # the case a string compare gets wrong: "1.10.0" sorts before "1.9.0"
+        self.assertEqual(self.cmp("1.9.0", "1.10.0"), 1)
+        self.assertEqual(self.cmp("1.10.0", "1.9.0"), -1)
+
+    def test_a_release_is_newer_than_its_own_prerelease(self):
+        self.assertEqual(self.cmp("1.0.0-rc.1", "1.0.0"), 1)
+        self.assertEqual(self.cmp("1.0.0", "1.0.0-rc.1"), -1)
+
+    def test_the_first_semver_is_an_update_for_a_date_install(self):
+        # the migration: a legacy value must never read as major=2026
+        self.assertEqual(self.cmp("2026-10-09", "0.1.0"), 1)
+        # and never the reverse: a SemVer checkout is not behind a date
+        self.assertEqual(self.cmp("0.1.0", "2026-10-09"), -1)
+
+    def test_two_identical_legacy_values_are_zero(self):
+        self.assertEqual(self.cmp("2026-10-09", "2026-10-09"), 0)
+
+    def test_equal_and_empty_inputs(self):
+        self.assertEqual(self.cmp("1.0.0", "1.0.0"), 0)
+        self.assertEqual(self.cmp("", ""), 0)
+
+    def test_the_direction_is_antisymmetric(self):
+        # the cheapest possible guard against the sign coming un-done again:
+        # swap the arguments and the answer must flip.
+        for a, b in [("1.0.0", "2.0.0"), ("1.0.0", "1.0.0-rc.1"),
+                     ("2026-10-09", "0.1.0"), ("1.9.0", "1.10.0")]:
+            with self.subTest(pair=(a, b)):
+                self.assertEqual(self.cmp(a, b), -self.cmp(b, a))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ Design:
 * Heuristics first, always. A regex pass over the *user's* turns costs nothing and
   is the only thing that runs by default. The model pass is a separate module
   (`proposal_pass.py`), off until a person turns it on, and it only ever produces
-  proposals — and it runs the model's findings through the same gates this file
+  proposals, and it runs the model's findings through the same gates this file
   runs its own through, so a confident hallucination is dropped for the same
   reason a stray sentence is.
 * Nothing here touches the agent. No tool is registered, no prompt text is added,
@@ -334,7 +334,7 @@ def _evidence(messages: list[dict], idx: int) -> list[dict]:
 
 
 def _prior_answer(messages: list[dict], idx: int) -> str:
-    """The nearest agent answer before this turn — what a restatement echoes."""
+    """The nearest agent answer before this turn, what a restatement echoes."""
     for back in range(idx - 1, max(-1, idx - 4), -1):
         if messages[back].get("role") == "assistant":
             return str(messages[back].get("content") or "")
@@ -685,7 +685,7 @@ def sync_worker() -> dict:
 
     The startup check is authoritative: learning off means the worker is not
     even started, and a mode change to off stops a running one. A change back
-    to on starts it again — start() is idempotent while the thread is alive.
+    to on starts it again, start() is idempotent while the thread is alive.
     Every path that changes the learning mode calls this.
     """
     if enabled():
@@ -735,7 +735,7 @@ class Worker:
                 # Learning is off (or the analyzer is switched off): the
                 # worker is not needed, so it ends itself instead of waking
                 # every interval to do nothing. A later mode change starts it
-                # again — sync_worker() is the one hook for that.
+                # again, sync_worker() is the one hook for that.
                 return
             try:
                 self._last = run_once()

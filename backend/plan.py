@@ -22,7 +22,7 @@ What you found while exploring:
 {findings}
 
 Ask at most {limit} questions whose answers would change the plan. Reply with a JSON array only,
-each {{"q": "the question", "options": ["option", "option"]}} — 2-4 concrete options each.
+each {{"q": "the question", "options": ["option", "option"]}} - 2-4 concrete options each.
 No prose, no code fences."""
 
 SYNTHESISE = """You are writing an implementation plan for a coding task.
@@ -36,7 +36,7 @@ The user's answers:
 {answers}
 
 Write the plan as markdown. Use these sections: Goal, Approach, Files to change, Steps, Risks.
-Be specific and concrete — name real files and functions. Do not write the code, describe the
+Be specific and concrete, name real files and functions. Do not write the code, describe the
 changes. Keep it tight."""
 
 FALLBACK_TASK = {"label": "codebase", "task": "map the files most relevant to the request"}
@@ -92,9 +92,9 @@ def snapshot(p: Plan) -> dict:
     """The plan as data, so it can live somewhere other than this process.
 
     Plan mode used to exist only inside one socket's memory, which made a page
-    reload a lost plan. Everything the interface needs to redraw the strip —
+    reload a lost plan. Everything the interface needs to redraw the strip,
     phase, the explorers and what they were doing, the questions, the answers
-    given, the plan text, where it was saved — is here, and it is all plain
+    given, the plan text, where it was saved, is here, and it is all plain
     JSON so it can go into the session record and come back as the same shape.
     """
     return {"phase": p.phase, "detail": p.detail, "prompt": p.prompt,
@@ -110,7 +110,7 @@ def restore(data: dict, sid: str, ref: str | None = None) -> Plan:
 
     After a server restart the questions a person is looking at are still on
     disk; without this, submitting them would find nothing to answer. The model
-    reference is not in the snapshot — it comes from the session, which is the
+    reference is not in the snapshot, it comes from the session, which is the
     thing that outlived the restart in the first place.
     """
     data = data or {}
@@ -191,7 +191,7 @@ def explore(plan: Plan, limit: int | None = None):
         yield plan.status("cancelled", "plan cancelled")
         return
     if not plan.questions:
-        yield plan.status("synthesizing", "nothing to ask — writing the plan")
+        yield plan.status("synthesizing", "nothing to ask, writing the plan")
         yield from synthesise(plan, {})
         return
     yield plan.status("awaiting_answers", f"{len(plan.questions)} question(s)")
@@ -217,14 +217,14 @@ def synthesise(plan: Plan, answers: dict):
 # The file an approved plan becomes in the project. project_context.NAMES lists
 # what it injects, and this is the one name plan mode writes first: an approved
 # plan is an instruction the project has agreed to, which is exactly what that
-# module is for. It has to be in NAMES, not DOCS — DOCS is only ever *listed*, and
+# module is for. It has to be in NAMES, not DOCS, DOCS is only ever *listed*, and
 # a plan nobody reads is a plan nobody implements.
 CONTEXT_NAME = "PLAN.md"
 
 # Written at the top of every file this produces. The string is owned by
-# project_context because that module is the reader — it is the one that has to
+# project_context because that module is the reader, it is the one that has to
 # decide whether a PLAN-*.md in the root is an approved plan or somebody else's
-# file with a similar name — and a contract between writer and reader does not get
+# file with a similar name, and a contract between writer and reader does not get
 # to have two copies of itself. It is also what tells a re-approve from a first
 # write: a file carrying it was made here and may be replaced.
 MARKER = project_context.PLAN_MARK_LINE
@@ -244,7 +244,7 @@ def _target(root: Path, plan: Plan) -> tuple[Path, bool]:
         return path, False
     try:
         existing = path.read_text(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: BLE001 — unreadable is not "ours to overwrite"
+    except Exception:  # noqa: BLE001, unreadable is not "ours to overwrite"
         existing = ""
     if MARKER in existing:
         return path, False
@@ -257,7 +257,7 @@ def write_context(plan: Plan) -> dict:
     The point of plan mode is that the planning survives the conversation that
     produced it. Saving markdown under ``~/.tacit/plans/`` alone left the agent
     implementing in a fresh session with nothing in its prompt but a copy of the
-    text — no record of it in the project, and nothing for the next session to
+    text, no record of it in the project, and nothing for the next session to
     find. Writing PLAN.md makes the plan part of the project the way AGENTS.md
     is: discovered, indexed, and injectable by the module that already does that.
 
@@ -287,7 +287,7 @@ def write_context(plan: Plan) -> dict:
         existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
         if existing and MARKER not in existing:
             return {"written": False, "refused": True, "path": str(path),
-                    "message": f"{path} already exists and was not written by plan mode — "
+                    "message": f"{path} already exists and was not written by plan mode - "
                                f"move or rename it to let the approved plan in"}
         body = (f"{MARKER}\n"
                 f"# Approved plan\n\n"
@@ -304,16 +304,16 @@ def write_context(plan: Plan) -> dict:
         # The name is said out loud because the person is looking at PLAN.md in
         # their project and this plan is not in it.
         return {"written": True, "path": str(path), "fallback": True,
-                "message": f"written to {path.name} — the project's own PLAN.md is not "
+                "message": f"written to {path.name}, the project's own PLAN.md is not "
                            f"ours to overwrite, so this session's plan took its own name"}
     return {"written": True, "path": str(path),
-            "message": f"written to {path} — the project's own context now carries it"}
+            "message": f"written to {path}, the project's own context now carries it"}
 
 
 def approve(plan: Plan, approved: bool) -> dict:
     if not approved:
         plan.saved = False
-        return {"saved": False, "message": "plan rejected — refine the request and plan again"}
+        return {"saved": False, "message": "plan rejected, refine the request and plan again"}
     if not plan.text.strip():
         return {"saved": False, "message": "there was no plan to save"}
     path = config.PLANS_DIR / f"{plan.sid}.md"
@@ -330,12 +330,12 @@ def approve(plan: Plan, approved: bool) -> dict:
     # saved in only one place needs to say which.
     ctx = write_context(plan)
     if ctx.get("written"):
-        message = (f"saved to {path} and written to {ctx['path']} — "
+        message = (f"saved to {path} and written to {ctx['path']} - "
                    f"Implement runs it in a fresh session")
     elif ctx.get("refused"):
         message = f"saved to {path}. {ctx['message']}"
     else:
-        message = f"saved to {path}. {ctx.get('message') or ''} — " \
+        message = f"saved to {path}. {ctx.get('message') or ''} - " \
                   f"Implement runs it in a fresh session"
     return {"saved": True, "plan_file": str(path), "context_file": plan.context_file,
             "context_written": bool(ctx.get("written")), "message": message}

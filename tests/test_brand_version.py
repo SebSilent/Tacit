@@ -122,6 +122,19 @@ class TestBrandSlot(unittest.TestCase):
         self.assertRegex(js, r"""brand\.textContent\s*=\s*info\.version\s*\|\|""")
         self.assertIn("version unknown", js)
 
+    def test_the_slot_is_actually_made_visible(self):
+        # The span ships `hidden`, and style.css:787 makes `[hidden]`
+        # `display: none !important`. A writer that only sets textContent puts
+        # the version in the DOM where nobody can ever see it — and nothing in
+        # this file would notice, because these assertions read source text.
+        # That is the shape of bug this pins: the feature is written, tested and
+        # permanently invisible.
+        js = self._read("static/app.js")
+        self.assertRegex(js, r"brand\.hidden\s*=\s*false")
+        css = self._read("static/style.css")
+        self.assertRegex(css, r"\[hidden\]\s*\{[^}]*display:\s*none",
+                         "if [hidden] stopped hiding, this test's premise moved")
+
     def test_the_panel_shows_which_checkout_was_checked(self):
         js = self._read("static/platform.js")
         self.assertIn("au.local_version", js)

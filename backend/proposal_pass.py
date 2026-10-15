@@ -1,7 +1,7 @@
 """The optional model pass over finished transcripts.
 
 Heuristics find the sentences that *look* like rules. A model can find the ones
-that only *mean* like them — a rule the user stated obliquely, or a preference
+that only *mean* like them, a rule the user stated obliquely, or a preference
 they showed three times without ever naming. That is the only reason this file
 exists, and it is also the reason it is off by default: a model will find a rule
 in anything if you ask it hard enough, and every thing it invents costs somebody
@@ -63,7 +63,7 @@ def _transcript(messages: list[dict]) -> tuple[str, list[int]]:
     lines: list[str] = []
     valid: list[int] = []
     used = 0
-    start = max(0, len(messages) - MAX_TURNS)
+    start = max(0, len(messages), MAX_TURNS)
     # The real index into `messages` is carried through the loop rather than
     # recovered with messages.index(): a transcript routinely contains two
     # identical messages ("ok" twice), and index() would report the first one for

@@ -68,7 +68,7 @@ async def info():
         "default_thinking": config.prefs().get("thinking", "default"),
         # the deleted plan item 5: the brand slot says which checkout this is. This is the
         # same string the auto-updater compares against, read through the same
-        # function — empty when the install predates version tracking, and the
+        # function, empty when the install predates version tracking, and the
         # client says so rather than showing a blank that looks like a bug.
         "version": autoupdater.local_version(),
     }
@@ -331,7 +331,7 @@ def _enrich_projects(items: list[dict]) -> list[dict]:
 
 @router.get("/api/projects")
 async def projects(full: int = 0):
-    """Recent workspaces only — a folder is a workspace because the user
+    """Recent workspaces only, a folder is a workspace because the user
     pointed at it, never because it sits under some guessed root."""
     rows = store.list_sessions()
     recent, seen = [], set()
@@ -385,7 +385,7 @@ async def token_dashboard(sid: str = "", project: str = ""):
 
     The baseline is *our own* full-context estimate (every discovered MCP schema
     and every enabled memory injected directly). No competitor numbers are
-    guessed — the two figures compared are both Tacit's.
+    guessed, the two figures compared are both Tacit's.
     """
     rec = store.get(sid) if sid else None
     base_prompt = token_mod.estimate_tokens(prompts.system_prompt(project or None, False, chat=False))
@@ -396,7 +396,7 @@ async def token_dashboard(sid: str = "", project: str = ""):
     mem_stats = memory_store.stats(project)
     # Both figures come from the mode, because the mode is the one switch that
     # decides memory. `memory_store.startup_selection` selects on budget alone
-    # — it would happily report a startup block for a session in `off` mode —
+    #, it would happily report a startup block for a session in `off` mode,
     # while `memory_modes.startup` is what the turn actually injects. The
     # dashboard used to gate on the retired Memory Vault plugin, which let it
     # describe a setting nobody had just changed.
@@ -416,7 +416,7 @@ async def token_dashboard(sid: str = "", project: str = ""):
     if not mem_on:
         dash["actual_startup"] -= dash["memory_tokens"]
         dash["memory_tokens"] = 0
-        dash["saved_by_discipline"] = max(0, dash["full_context_baseline"] - dash["actual_startup"])
+        dash["saved_by_discipline"] = max(0, dash["full_context_baseline"], dash["actual_startup"])
     for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
                 "base_prompt_tokens",
                 "tool_schema_tokens", "mcp_discovered_tokens", "mcp_injected_tokens",
@@ -454,16 +454,16 @@ async def token_dashboard(sid: str = "", project: str = ""):
             "automatic": kind == "openai",
             # "active" means caching is in play by some mechanism, not that Tacit
             # sent markers. An OpenAI-compatible endpoint caches its prefix on its
-            # own — a measured 71% hit rate on one — and reporting that as inactive
+            # own (a measured 71% hit rate on one) and reporting that as inactive
             # would understate what the user is actually getting.
             "active": bool(markers or kind == "openai"),
             "sends_markers": bool(markers),
             "summary": {
-                "anthropic": "native Messages API — cache breakpoints sent on tools, "
+                "anthropic": "native Messages API, cache breakpoints sent on tools, "
                              "system and the last message",
-                "openrouter": "OpenAI shape — one breakpoint on the system block, "
+                "openrouter": "OpenAI shape, one breakpoint on the system block, "
                               "forwarded to Anthropic models",
-                "openai": "OpenAI shape — the provider caches the prefix itself; "
+                "openai": "OpenAI shape, the provider caches the prefix itself; "
                           "nothing added to the request",
             }.get(kind, ""),
         }
@@ -615,7 +615,7 @@ async def autonomy_post(sid: str, request: Request):
 
 @router.post("/api/assistant/{sid}/autonomy/reset")
 async def autonomy_reset(sid: str):
-    """Zero the tally without touching the switch — the person is about to
+    """Zero the tally without touching the switch, the person is about to
     judge the run against a fresh budget, not start a new one."""
     from .. import assistant
     rec = store.get(sid)
@@ -657,7 +657,7 @@ async def sessions_state():
 
     This is the interface's source for the per-session indicators (plan stage
     2): busy, starting, the kind of work, when it began, and how many turns
-    the session has started. Process-local by design — a session is busy
+    the session has started. Process-local by design, a session is busy
     because a worker in this process is running its turn, and for no other
     reason.
     """
@@ -725,8 +725,8 @@ async def get_thinking(ref: str = "", ensure: int = 0):
     detected = False
     if ensure and chosen and not thinking.known(chosen):
         # ensure() is several synchronous probe requests (up to 120s each against a
-        # dead endpoint). Awaiting it here blocks uvicorn's whole event loop — the
-        # interface, every socket and every poll with it — so it is run in a spare
+        # dead endpoint). Awaiting it here blocks uvicorn's whole event loop, the
+        # interface, every socket and every poll with it, so it is run in a spare
         # thread instead: this request answers at once with what is already known,
         # and the picker re-reads the cache once the probe lands.
         import threading as _threading
@@ -887,7 +887,7 @@ async def toggle_tool(request: Request):
     name = body.get("name")
     if not name:
         return _fail("name required")
-    # shellOverlap is not a tool — it is a three-state behaviour switch that
+    # shellOverlap is not a tool, it is a three-state behaviour switch that
     # lives on this endpoint because the Tools tab is its only home. It takes a
     # `mode`, never an `enabled`: a boolean cannot say "advise", and silently
     # coercing one would turn "off" into "block" on the way through.
@@ -919,8 +919,8 @@ async def skills_list():
                 "tokens": s.get("tokens") or 0}
 
     # One list: every skill and knowledge note, distinguished by the `kind`
-    # tag alone. The old shape split them into three lists — one of them
-    # (`tool_skills`) hardcoded empty — and the panel rendered the empties as
+    # tag alone. The old shape split them into three lists, one of them
+    # (`tool_skills`) hardcoded empty, and the panel rendered the empties as
     # sections. Nothing external consumes this shape, so the API and the
     # panel moved together.
     return {"skills": [row(s) for s in rows],
@@ -952,14 +952,14 @@ async def server_restart():
 
 @router.get("/api/server/status")
 async def server_status():
-    """Where this process listens and which pid it is — the General tab's Server section."""
+    """Where this process listens and which pid it is, the General tab's Server section."""
     from .. import agent as agent_mod
     from .. import extras
     helpers = [t["function"]["name"] for t in agent_mod.tools_for()
                if t["function"]["name"] in agent_mod.MCP_HELPER_NAMES]
     # `last_restart` is the restart that just happened, successful or not. The
     # watcher that knows a restart failed has no server to report through, so it
-    # leaves the outcome on disk and this reports it — which also means a server
+    # leaves the outcome on disk and this reports it, which also means a server
     # started by hand after a failure reports the failure it replaced.
     return _ok(host=config.HOST, port=config.PORT, pid=os.getpid(),
                mcp_helpers=len(helpers),
@@ -972,7 +972,7 @@ async def processes():
     """Everything Tacit has spawned and not yet reaped, from the live registry.
 
     The point is attribution: on a machine full of python.exe, this says which
-    pids are Tacit's, what role each plays, and which session owns it — so a
+    pids are Tacit's, what role each plays, and which session owns it, so a
     stuck child can be killed deliberately instead of guessed at.
     """
     from .. import proctools

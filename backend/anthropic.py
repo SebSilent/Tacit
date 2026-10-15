@@ -10,14 +10,14 @@ a sequence of typed events rather than OpenAI's delta chunks.
 The reason to speak it natively at all is caching. Anthropic does not cache
 automatically; a request has to mark where the cacheable prefix ends with
 ``cache_control``. Without that, an agent loop re-pays for its tools and standing
-prompt on every single step — which is the exact cost this project exists to make
+prompt on every single step, which is the exact cost this project exists to make
 visible. With two breakpoints, the stable prefix is written once and read back.
 
 Everything else stays as it was: OpenAI-compatible endpoints keep automatic prefix
 caching (which needs no markers) and get nothing added to their requests, because a
 server that has never seen ``cache_control`` may reject the body outright. Which
 strategy applies is decided by :func:`flavour`, reported to the interface, and can
-be overridden — and a rejection is always retried once without the markers, so
+be overridden, and a rejection is always retried once without the markers, so
 turning caching on can never be the reason a turn fails.
 """
 
@@ -133,8 +133,8 @@ def translate(messages: list[dict]) -> tuple[list[dict], list[dict]]:
 
     Two structural rules do the work. ``system`` messages are lifted out into the
     top-level parameter, because Anthropic has no system role. And a ``tool``
-    message is not a role of its own — it is a ``tool_result`` block inside a user
-    message — so a run of consecutive results has to be merged into one turn, or the
+    message is not a role of its own, it is a ``tool_result`` block inside a user
+    message, so a run of consecutive results has to be merged into one turn, or the
     API rejects the sequence.
     """
     system: list[dict] = []
@@ -195,7 +195,7 @@ def _mark_cache(system: list[dict], messages: list[dict], tools: list[dict]) -> 
     tools, system, messages, and allows four marks. Two are enough and two is the
     documented pattern for an agent loop: one on the system block, which caches the
     tools and the standing prompt together — the part re-paid on every step
-    otherwise — and one on the last message, so each step extends the cached
+    otherwise, and one on the last message, so each step extends the cached
     transcript instead of rewriting it.
     """
     placed = 0

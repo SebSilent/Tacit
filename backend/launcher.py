@@ -3,7 +3,7 @@
 Item 4's complaint in one line: the button started the server *itself*
 (`python -m backend.main`, inheriting whatever environment the dying process
 happened to have, with no console), while a human started it with run.bat /
-run.sh. Two launch paths means the one you can read is not the one that runs —
+run.sh. Two launch paths means the one you can read is not the one that runs,
 and section 0.4 of the deleted plan recorded what that costs: four Tacit processes on
 two interpreters in one chain, the pid file naming a process that is not the one
 holding the port. So the scripts are authoritative now: they stop every Tacit
@@ -12,12 +12,12 @@ the foreground. The button hands the watcher the same script.
 
 Why a module instead of batch logic in run.bat: proving ownership means the argv
 marker, and reading a command line is a PowerShell round trip per pid plus the
-registry file — code that has to behave identically on Windows, macOS and Linux,
+registry file, code that has to behave identically on Windows, macOS and Linux,
 and that a test can actually run. The scripts stay three lines of intent.
 
 The rule that keeps a kill safe: a candidate comes from the registry, and it is
 touched only when its *current* command line still carries one of Tacit's own
-markers. Never the exe name — that is how `restart.ps1` used to be able to hit
+markers. Never the exe name, that is how `restart.ps1` used to be able to hit
 an unrelated `python.exe`, and it is why this module can be pointed at a machine
 running other people's Python.
 """
@@ -33,7 +33,7 @@ from . import config, proctools
 
 # The token a launcher passes to the server, and the token `proctools.spawn`
 # inserts for anything it starts. `_marked_argv` puts it where the interpreter
-# ignores it — after `-m backend.main` — so a server started by a script looks
+# ignores it (after `-m backend.main`) so a server started by a script looks
 # exactly like one started by the watcher, and one proof covers both.
 SERVER_MARKER = proctools.ROLE_SERVER
 
@@ -59,7 +59,7 @@ def find_running(roles: tuple[str, ...] = (proctools.ROLE_SERVER,),
                  exclude_pid: int | None = None) -> list[dict]:
     """Tacit processes we can prove are ours, and may therefore stop.
 
-    Candidates are the registry rows — a process that never registered is not
+    Candidates are the registry rows, a process that never registered is not
     ours to hunt through the OS process list for. Each one is then *proved* by
     its current command line carrying a marker, which is what guards against pid
     reuse: a row whose pid now belongs to someone else's program reads as
@@ -125,7 +125,7 @@ def prelaunch(host: str | None = None, port: int | None = None,
 
     Stop what is ours, then wait for the port. The result says which of the two
     happened and, when the port is still held, names the processes holding the
-    registry — the information a person standing at a console needs, because the
+    registry, the information a person standing at a console needs, because the
     alternative is a second server that loses the bind race and vanishes.
     """
     host = config.HOST if host is None else host

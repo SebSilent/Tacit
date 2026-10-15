@@ -13,7 +13,7 @@ def _temperature(model: dict | None, explicit) -> float | None:
     """Sampling temperature, in priority order: this call, the operator, the model, the default.
 
     None means send nothing, so the gateway picks. Kimi / Moonshot gateways manage temperature
-    server-side for their thinking models - the reference client for this model family omits the
+    server-side for their thinking models, the reference client for this model family omits the
     key outright rather than sending a number. Our own default of 0.2 was measured to beat the
     vendor default on the hard set, but that arm ran while the thinking level was still being sent
     under a name the endpoint ignored, so it is not evidence about a thinking model: 0.2 stays the
@@ -42,7 +42,7 @@ class EngineError(RuntimeError):
 def _target(ref: str | None):
     m = config.resolve_model(ref)
     if not m:
-        raise EngineError("no model configured — add a provider in Settings", 0, "")
+        raise EngineError("no model configured, add a provider in Settings", 0, "")
     if not m["baseUrl"]:
         raise EngineError(f"no endpoint for {m['ref']}", 0, "")
     return m
@@ -87,7 +87,7 @@ def _payload(model: dict, messages: list[dict], stream: bool, tools=None,
 # instead. Measured on ollama_cloud/kimi-k2.7-code with one prompt and one shape:
 # reasoning_effort=medium gave 0 reasoning characters and finish_reason=length, while
 # thinking=medium gave 7,147 reasoning characters and finish_reason=stop. Same value,
-# different key, opposite behaviour - so the level we pin has to be sent under the name
+# different key, opposite behaviour, so the level we pin has to be sent under the name
 # the endpoint actually listens to, or every graded level is silently off.
 THINKING_KEY = {"ollama", "ollama_cloud"}
 
@@ -190,12 +190,12 @@ def _usage(raw) -> dict:
     # A turn re-sends its whole transcript on every step, so the fixed prefix and
     # everything before the last message is the same bytes each time. Whether the
     # provider actually charged for that again is the difference between a cheap
-    # long session and an expensive one, and it is reported — then discarded here,
+    # long session and an expensive one, and it is reported, then discarded here,
     # which is why the interface's cache figures were always blank.
     details = raw.get("prompt_tokens_details") or {}
     if not isinstance(details, dict):
         details = {}
-    # ``input`` is the whole prompt, cache reads included — see
+    # ``input`` is the whole prompt, cache reads included, see
     # ``anthropic.usage_of`` for the basis this normalizes to. ``prompt_tokens``
     # already satisfies it: OpenAI's ``cached_tokens`` is a subset of that number,
     # so adding it here would bill the same bytes twice and compact too early.
@@ -206,7 +206,7 @@ def _usage(raw) -> dict:
     # A gateway that passes Anthropic's cache fields through an OpenAI-shaped body
     # reports them *outside* prompt_tokens. The tell is arithmetic: a subset can
     # never exceed the whole. Where it does, the cached bytes were left out of the
-    # prompt count, so they are added rather than dropped — otherwise the meter
+    # prompt count, so they are added rather than dropped, otherwise the meter
     # under-reads and the session never looks full enough to compact.
     if int(cache_read or 0) > int(prompt or 0):
         prompt = int(prompt or 0) + int(cache_read or 0) + int(cache_write or 0)
@@ -357,7 +357,7 @@ def _consume_openai_stream(r, model: dict | None = None):
     
     if use_raw:
         # Real httpx response: read decompressed bytes and decode with error
-        # handling. iter_bytes (not iter_raw) so content-encoding is honoured —
+        # handling. iter_bytes (not iter_raw) so content-encoding is honoured,
         # a gzip response iterated raw accumulates compressed bytes and only
         # becomes parseable at the very end, which reads as a stream that
         # "appears at the end only".

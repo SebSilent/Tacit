@@ -2,7 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- viewport-fit=cover is not cosmetic: without it the browser clamps the
+     layout viewport inside the notch/home-indicator area and every
+     env(safe-area-inset-*) resolves to 0, so the insets in style.css's mobile
+     block do nothing. No maximum-scale / user-scalable=no - pinch zoom stays
+     on, and a 16px floor on inputs (see style.css) is what stops iOS from
+     zooming the page on focus instead. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
 <title>Tacit</title>
 <link rel="stylesheet" href="/static/style.css?v=33">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
@@ -13,7 +21,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <svg viewBox="0 0 24 24" class="brand-icon"><path d="M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z"/></svg>
-      <div class="brand-text"><span class="brand-name">Tacit</span><span class="brand-sub" id="brandVersion" title="version of this checkout"></span></div>
+      <div class="brand-text"><span class="brand-name">Tacit</span><span class="brand-sub" id="brandVersion" title="version of this checkout" hidden></span></div>
     </div>
 
     <button class="new-chat-btn" id="newChatBtn">
@@ -51,7 +59,7 @@
         </button>
         <div class="wd-menu" id="wdMenu" hidden></div>
       </div>
-      <button class="icon-btn" id="snapBtn" title="Snapshots — this session's undo timeline">
+      <button class="icon-btn" id="snapBtn" title="Snapshots, this session's undo timeline">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v4.5l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="tok-meter" id="tokMeter" hidden>
@@ -83,7 +91,7 @@
       <button class="icon-btn" id="harnessBtn" title="Settings">
         <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.7V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
       </button>
-      <button class="icon-btn" id="dgToggle" title="Delegation — what sub-agents are doing">
+      <button class="icon-btn" id="dgToggle" title="Delegation, what sub-agents are doing">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"/></svg>
       </button>
       <button class="icon-btn" id="asToggle" title="Assistant">
@@ -153,7 +161,7 @@
     <div class="as-context" id="dgSettingsWrap" hidden>
       <div id="dgSettings"></div>
       <div class="as-note">Sub-agents and research run on this model. Empty means the session's
-        own model — which is what they used to inherit, at the session's thinking level too.</div>
+        own model, which is what they used to inherit, at the session's thinking level too.</div>
     </div>
     <div class="as-messages" id="dgMessages"></div>
   </aside>
@@ -174,7 +182,7 @@
          outside the thread and is never deleted by clear. -->
     <div class="as-run" id="asRun">
       <textarea id="asGoal" rows="2" spellcheck="false"
-        placeholder="Goal — what the agent should keep working toward…"></textarea>
+        placeholder="Goal, what the agent should keep working toward…"></textarea>
       <div class="as-run-row">
         <label class="chk as-chk" title="After each turn the assistant writes the agent's next prompt and the run continues on its own">
           <input type="checkbox" id="asAuto"> Autonomous
@@ -214,7 +222,7 @@
         <div id="snapNote" class="ho-sub"></div>
         <div id="snapList"></div>
       </div>
-      <footer class="ho-foot"><span>This session's snapshots only — the agent takes one automatically before its first edit of a turn.</span></footer>
+      <footer class="ho-foot"><span>This session's snapshots only, the agent takes one automatically before its first edit of a turn.</span></footer>
     </div>
   </div>
   <div class="term-overlay" id="termOverlay" hidden>
@@ -270,7 +278,7 @@
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="10" r="2.4"/><path d="M6 8.4v7.2M8.4 6h3.6a3 3 0 0 1 3 3v1" stroke-linecap="round"/></svg>
           <span>Git</span>
         </div>
-        <div class="git-repo" id="gitRepo" title="repository">—</div>
+        <div class="git-repo" id="gitRepo" title="repository">-</div>
         <button class="icon-btn ho-close" id="gitClose" title="Close">
           <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
@@ -363,7 +371,9 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=45"></script>
+<script src="/static/transport.js?v=45"></script>
+  <script src="/static/markdown.js?v=1"></script>
+  <script src="/static/app.js?v=45"></script>
 <script src="/static/git.js?v=15"></script>
 <script src="/static/harness.js?v=21"></script>
 <script src="/static/platform.js?v=15"></script>

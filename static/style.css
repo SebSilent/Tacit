@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════════
-   Tacit Web — one token layer drives every surface and every theme.
+   Tacit Web - one token layer drives every surface and every theme.
    8 themes via [data-theme] on <html>. Colour, type, tracking, spacing,
    elevation and motion are all tokens; a theme may recolour and re-shade,
    and may never re-space, re-type or re-time.
@@ -27,9 +27,9 @@
   --sidebar-w: 264px;
   --content-w: 800px;
 
-  /* ── scale: type, spacing, radius, tracking. :root only — no [data-theme]
+  /* ── scale: type, spacing, radius, tracking. :root only, no [data-theme]
      block redefines these, so a theme can never move the layout. ── */
-  /* Type ladder: 9 steps, adjacent ratio 1.125 — the band operate.md prescribes for
+  /* Type ladder: 9 steps, adjacent ratio 1.125, the band operate.md prescribes for
      an Operate surface (1.125-1.2). --fs-5 is exactly 1rem; 10px is the floor.
      Roles: 1 micro-badge, 2 dense UI, 3 UI default + code, 4 reading, 5 emphasis,
             6 heading small, 7 heading, 8 display, 9 hero number. */
@@ -67,8 +67,8 @@
   --rd-5: 12px;
   --rd-6: 16px;
 
-  /* Tracking ladder: 4 steps, in em and not px. It was 13 raw values mixing both —
-     `.2px .3px .4px .5px .7px .8px 1.1px 1.4px .04em .05em .06em .07em 0` — which is
+  /* Tracking ladder: 4 steps, in em and not px. It was 13 raw values mixing both.
+     `.2px .3px .4px .5px .7px .8px 1.1px 1.4px .04em .05em .06em .07em 0` - which is
      a continuum dressed as a scale, the same defect the spacing ladder replaced.
      px tracking is wrong in principle as well as in variety: 1.4px is 0.14em at the
      10px it was set on, but 0.07em at 20px, so one declaration meant two things.
@@ -93,7 +93,7 @@
   --ease-in-out: cubic-bezier(.65, 0, .35, 1);
 
   /* Elevation: three levels, each an offset plus a soft blur, mixed from --shade so
-     the shadow belongs to the theme's own ground. Two layers on the upper two —
+     the shadow belongs to the theme's own ground. Two layers on the upper two,
      a tight contact shadow under a wide ambient one is what reads as height; a
      single wide blur reads as a glow, which is decoration. In-flow surfaces take a
      border and no shadow; only what floats above the page casts one. */
@@ -111,10 +111,14 @@
   --sp-row: var(--sp-5);
   --sp-turn: var(--sp-5);
   --sp-gap: var(--sp-10);
+  /* How much of a long, collapsible thing you get before it scrolls. The reasoning
+     body and the tool-call block read this because they make the same promise: one
+     turn cannot grow the transcript without limit. */
+  --peek-h: 300px;
   --radius-pill: 999px;
 }
 
-/* ── theme: graphite (default dark) — warm graphite ground, petrol accent ── */
+/* ── theme: graphite (default dark), warm graphite ground, petrol accent ── */
 :root, [data-theme="graphite"] {
   color-scheme: dark;
   --bg: #1a1712;
@@ -147,40 +151,7 @@
   --dim: rgba(18, 16, 12, .62);
 }
 
-/* ── theme: vellum (light) — warm paper, printer's ink, ultramarine ── */
-[data-theme="vellum"] {
-  color-scheme: light;
-  --bg: #f1f0ed;
-  --bg-2: #fbfaf9;
-  --bg-3: #e9e8e3;
-  --bg-hover: #dedcd6;
-  --line: rgba(26, 23, 16, .11);
-  --line-2: rgba(26, 23, 16, .20);
-  --text: #221e14;
-  --muted: #615a4b;
-  --fadetext: #888171;
-  --accent: #3e58ab;
-  --accent-rgb: 62, 88, 171;
-  --on-accent: #fff;
-  --accent-2: #006776;
-  --accent2-rgb: 0, 103, 118;
-  --user-bubble: #e5e3de;
-  --user-bubble-text: #3b3527;
-  --err: #b12725;
-  --err-rgb: 177, 39, 37;
-  --warn: #864f00;
-  --warn-rgb: 134, 79, 0;
-  --ok: #346729;
-  --code-bg: #e5e3de;
-  --code-text: #272218;
-  --scroll: #bebab1;
-  --scroll-hover: #a09b8f;
-  --select-arrow: rgba(97, 90, 75, .9);
-  --shade: #1a1710;
-  --dim: rgba(26, 23, 16, .38);
-}
-
-/* ── theme: verdigris (cool dark) — grey-green ground, copper accent ── */
+/* ── theme: vellum (light), warm paper, printer's ink, ultramarine ── */
 [data-theme="verdigris"] {
   color-scheme: dark;
   --bg: #111918;
@@ -213,73 +184,7 @@
   --dim: rgba(11, 17, 17, .62);
 }
 
-/* ── theme: oxide (dark) — iron ground, chalk accent; semantics own every hue ── */
-[data-theme="oxide"] {
-  color-scheme: dark;
-  --bg: #1e1511;
-  --bg-2: #281c18;
-  --bg-3: #31241f;
-  --bg-hover: #3e2e29;
-  --line: rgba(255, 255, 255, .10);
-  --line-2: rgba(255, 255, 255, .19);
-  --text: #eee6e3;
-  --muted: #b19a92;
-  --fadetext: #846d64;
-  --accent: #e6ded8;
-  --accent-rgb: 230, 222, 216;
-  --on-accent: #000;
-  --accent-2: #72b5cf;
-  --accent2-rgb: 114, 181, 207;
-  --user-bubble: #372923;
-  --user-bubble-text: #d3c4be;
-  --err: #d15b58;
-  --err-rgb: 209, 91, 88;
-  --warn: #cda655;
-  --warn-rgb: 205, 166, 85;
-  --ok: #72a66c;
-  --code-bg: #160e0a;
-  --code-text: #e2d6d2;
-  --scroll: #483831;
-  --scroll-hover: #604e47;
-  --select-arrow: rgba(177, 154, 146, .9);
-  --shade: #150d09;
-  --dim: rgba(21, 13, 9, .62);
-}
-
-/* ── theme: signal (light) — chart series: colour encodes, never decorates ── */
-[data-theme="signal"] {
-  color-scheme: light;
-  --bg: #eef0f2;
-  --bg-2: #f9fafb;
-  --bg-3: #e5e8ea;
-  --bg-hover: #d9dde0;
-  --line: rgba(20, 26, 30, .11);
-  --line-2: rgba(20, 26, 30, .20);
-  --text: #181f24;
-  --muted: #525d63;
-  --fadetext: #78848b;
-  --accent: #046382;
-  --accent-rgb: 4, 99, 130;
-  --on-accent: #fff;
-  --accent-2: #68476f;
-  --accent2-rgb: 104, 71, 111;
-  --user-bubble: #e0e3e6;
-  --user-bubble-text: #2d373d;
-  --err: #b01f1c;
-  --err-rgb: 176, 31, 28;
-  --warn: #804e00;
-  --warn-rgb: 128, 78, 0;
-  --ok: #356630;
-  --code-bg: #e0e3e6;
-  --code-text: #1c2429;
-  --scroll: #b5bcc0;
-  --scroll-hover: #949da2;
-  --select-arrow: rgba(82, 93, 99, .9);
-  --shade: #141a1e;
-  --dim: rgba(20, 26, 30, .38);
-}
-
-/* ── theme: mono — neutral greyscale; status stays saturated ── */
+/* ── theme: verdigris (cool dark), grey-green ground, copper accent ── */
 [data-theme="mono"] {
   color-scheme: dark;
   --bg: #171717;
@@ -312,7 +217,7 @@
   --dim: rgba(16, 16, 16, .62);
 }
 
-/* ── theme: amethyst (dark) — plum ground, iris accent; a stone, not a lamp ── */
+/* ── theme: oxide (dark), iron ground, chalk accent; semantics own every hue ── */
 [data-theme="amethyst"] {
   color-scheme: dark;
   --bg: #19161c;
@@ -345,106 +250,7 @@
   --dim: rgba(16, 12, 20, .62);
 }
 
-/* ── theme: celadon (light) — jade-glaze ground, deep celadon accent ── */
-[data-theme="celadon"] {
-  color-scheme: light;
-  --bg: #eef1f0;
-  --bg-2: #f9fafa;
-  --bg-3: #e5e9e8;
-  --bg-hover: #d8dedc;
-  --line: rgba(16, 26, 26, .11);
-  --line-2: rgba(16, 26, 26, .20);
-  --text: #16211e;
-  --muted: #4f5f5b;
-  --fadetext: #768682;
-  --accent: #126b74;
-  --accent-rgb: 18, 107, 116;
-  --on-accent: #fff;
-  --accent-2: #5c5382;
-  --accent2-rgb: 92, 83, 130;
-  --user-bubble: #dfe4e3;
-  --user-bubble-text: #2b3935;
-  --err: #b12725;
-  --err-rgb: 177, 39, 37;
-  --warn: #864f00;
-  --warn-rgb: 134, 79, 0;
-  --ok: #386626;
-  --code-bg: #dfe4e3;
-  --code-text: #1b2523;
-  --scroll: #b3bdba;
-  --scroll-hover: #929f9b;
-  --select-arrow: rgba(79, 95, 91, .9);
-  --shade: #101a1a;
-  --dim: rgba(16, 26, 26, .38);
-}
-
-/* ── theme: contrast (AAA dark) — an accessibility instrument, not a taste ── */
-[data-theme="contrast"] {
-  color-scheme: dark;
-  --bg: #000000;
-  --bg-2: #0a0a0a;
-  --bg-3: #171717;
-  --bg-hover: #242424;
-  --line: rgba(255, 255, 255, .45);
-  --line-2: rgba(255, 255, 255, .75);
-  --text: #ffffff;
-  --muted: #e8e8e8;
-  --fadetext: #c4c4c4;
-  --accent: #ffd60a;
-  --accent-rgb: 255, 214, 10;
-  --on-accent: #000;
-  --accent-2: #4ad9ff;
-  --accent2-rgb: 74, 217, 255;
-  --user-bubble: #141414;
-  --user-bubble-text: #ffffff;
-  --err: #ff5c5c;
-  --err-rgb: 255, 92, 92;
-  --warn: #ff9500;
-  --warn-rgb: 255, 149, 0;
-  --ok: #3ef07a;
-  --code-bg: #000000;
-  --code-text: #ffffff;
-  --scroll: #3a3a3a;
-  --scroll-hover: #5c5c5c;
-  --select-arrow: rgba(232, 232, 232, .9);
-  --shade: #000;
-  --dim: rgba(0, 0, 0, .62);
-}
-
-/* ── theme: contrast-light (AAA light) — the other half of the pair ── */
-[data-theme="contrast-light"] {
-  color-scheme: light;
-  --bg: #ffffff;
-  --bg-2: #f4f4f4;
-  --bg-3: #e6e6e6;
-  --bg-hover: #d9d9d9;
-  --line: rgba(0, 0, 0, .55);
-  --line-2: rgba(0, 0, 0, .85);
-  --text: #000000;
-  --muted: #1f1f1f;
-  --fadetext: #3d3d3d;
-  --accent: #0033cc;
-  --accent-rgb: 0, 51, 204;
-  --on-accent: #fff;
-  --accent-2: #004d40;
-  --accent2-rgb: 0, 77, 64;
-  --user-bubble: #ededed;
-  --user-bubble-text: #000000;
-  --err: #b30000;
-  --err-rgb: 179, 0, 0;
-  --warn: #8a5000;
-  --warn-rgb: 138, 80, 0;
-  --ok: #006b2e;
-  --code-bg: #f7f7f7;
-  --code-text: #000000;
-  --scroll: #8a8a8a;
-  --scroll-hover: #5c5c5c;
-  --select-arrow: rgba(31, 31, 31, .9);
-  --shade: #000;
-  --dim: rgba(0, 0, 0, .38);
-}
-
-/* ── theme: nocturne (dark) — indigo-slate ground, one brass lamp ── */
+/* ── theme: signal (light), chart series: colour encodes, never decorates ── */
 [data-theme="nocturne"] {
   color-scheme: dark;
   --bg: #14171d;
@@ -477,7 +283,7 @@
   --dim: rgba(14, 12, 20, .62);
 }
 
-/* ── theme: lagoon (dark) — deep teal-slate ground, water cyan ── */
+/* ── theme: mono, neutral greyscale; status stays saturated ── */
 [data-theme="lagoon"] {
   color-scheme: dark;
   --bg: #11191a;
@@ -510,7 +316,7 @@
   --dim: rgba(10, 18, 22, .62);
 }
 
-/* ── theme: rosewood (dark) — plum-rose ground, dusty mauve ── */
+/* ── theme: amethyst (dark), plum ground, iris accent; a stone, not a lamp ── */
 [data-theme="rosewood"] {
   color-scheme: dark;
   --bg: #1c1518;
@@ -543,7 +349,7 @@
   --dim: rgba(21, 14, 18, .62);
 }
 
-/* ── theme: absinthe (dark) — green-slate ground, chartreuse ── */
+/* ── theme: celadon (light), jade-glaze ground, deep celadon accent ── */
 [data-theme="absinthe"] {
   color-scheme: dark;
   --bg: #121915;
@@ -576,7 +382,7 @@
   --dim: rgba(12, 18, 14, .62);
 }
 
-/* ── theme: iris (dark) — cool neutral ground, deep violet-blue ── */
+/* ── theme: contrast (AAA dark), an accessibility instrument, not a taste ── */
 [data-theme="iris"] {
   color-scheme: dark;
   --bg: #14181b;
@@ -609,7 +415,7 @@
   --dim: rgba(13, 14, 19, .62);
 }
 
-/* ── theme: slate (MID-TONE) — cool grey at L*0.45, amber indicator ── */
+/* ── theme: contrast-light (AAA light), the other half of the pair ── */
 [data-theme="slate"] {
   color-scheme: dark;
   --bg: #3d4246;
@@ -642,7 +448,172 @@
   --dim: rgba(21, 23, 26, .62);
 }
 
-/* ── theme: frost (light) — blue-white ground, deep cyan ── */
+/* ── theme: nocturne (dark), indigo-slate ground, one brass lamp ── */
+[data-theme="oxide"] {
+  color-scheme: dark;
+  --bg: #1e1511;
+  --bg-2: #281c18;
+  --bg-3: #31241f;
+  --bg-hover: #3e2e29;
+  --line: rgba(255, 255, 255, .10);
+  --line-2: rgba(255, 255, 255, .19);
+  --text: #eee6e3;
+  --muted: #b19a92;
+  --fadetext: #846d64;
+  --accent: #e6ded8;
+  --accent-rgb: 230, 222, 216;
+  --on-accent: #000;
+  --accent-2: #72b5cf;
+  --accent2-rgb: 114, 181, 207;
+  --user-bubble: #372923;
+  --user-bubble-text: #d3c4be;
+  --err: #d15b58;
+  --err-rgb: 209, 91, 88;
+  --warn: #cda655;
+  --warn-rgb: 205, 166, 85;
+  --ok: #72a66c;
+  --code-bg: #160e0a;
+  --code-text: #e2d6d2;
+  --scroll: #483831;
+  --scroll-hover: #604e47;
+  --select-arrow: rgba(177, 154, 146, .9);
+  --shade: #150d09;
+  --dim: rgba(21, 13, 9, .62);
+}
+
+/* ── theme: lagoon (dark), deep teal-slate ground, water cyan ── */
+[data-theme="contrast"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #0a0a0a;
+  --bg-3: #171717;
+  --bg-hover: #242424;
+  --line: rgba(255, 255, 255, .45);
+  --line-2: rgba(255, 255, 255, .75);
+  --text: #ffffff;
+  --muted: #e8e8e8;
+  --fadetext: #c4c4c4;
+  --accent: #ffd60a;
+  --accent-rgb: 255, 214, 10;
+  --on-accent: #000;
+  --accent-2: #4ad9ff;
+  --accent2-rgb: 74, 217, 255;
+  --user-bubble: #141414;
+  --user-bubble-text: #ffffff;
+  --err: #ff5c5c;
+  --err-rgb: 255, 92, 92;
+  --warn: #ff9500;
+  --warn-rgb: 255, 149, 0;
+  --ok: #3ef07a;
+  --code-bg: #000000;
+  --code-text: #ffffff;
+  --scroll: #3a3a3a;
+  --scroll-hover: #5c5c5c;
+  --select-arrow: rgba(232, 232, 232, .9);
+  --shade: #000;
+  --dim: rgba(0, 0, 0, .62);
+}
+
+/* ── theme: rosewood (dark), plum-rose ground, dusty mauve ── */
+[data-theme="vellum"] {
+  color-scheme: light;
+  --bg: #f1f0ed;
+  --bg-2: #fbfaf9;
+  --bg-3: #e9e8e3;
+  --bg-hover: #dedcd6;
+  --line: rgba(26, 23, 16, .11);
+  --line-2: rgba(26, 23, 16, .20);
+  --text: #221e14;
+  --muted: #615a4b;
+  --fadetext: #888171;
+  --accent: #3e58ab;
+  --accent-rgb: 62, 88, 171;
+  --on-accent: #fff;
+  --accent-2: #006776;
+  --accent2-rgb: 0, 103, 118;
+  --user-bubble: #e5e3de;
+  --user-bubble-text: #3b3527;
+  --err: #b12725;
+  --err-rgb: 177, 39, 37;
+  --warn: #864f00;
+  --warn-rgb: 134, 79, 0;
+  --ok: #346729;
+  --code-bg: #e5e3de;
+  --code-text: #272218;
+  --scroll: #bebab1;
+  --scroll-hover: #a09b8f;
+  --select-arrow: rgba(97, 90, 75, .9);
+  --shade: #1a1710;
+  --dim: rgba(26, 23, 16, .38);
+}
+
+/* ── theme: absinthe (dark), green-slate ground, chartreuse ── */
+[data-theme="signal"] {
+  color-scheme: light;
+  --bg: #eef0f2;
+  --bg-2: #f9fafb;
+  --bg-3: #e5e8ea;
+  --bg-hover: #d9dde0;
+  --line: rgba(20, 26, 30, .11);
+  --line-2: rgba(20, 26, 30, .20);
+  --text: #181f24;
+  --muted: #525d63;
+  --fadetext: #78848b;
+  --accent: #046382;
+  --accent-rgb: 4, 99, 130;
+  --on-accent: #fff;
+  --accent-2: #68476f;
+  --accent2-rgb: 104, 71, 111;
+  --user-bubble: #e0e3e6;
+  --user-bubble-text: #2d373d;
+  --err: #b01f1c;
+  --err-rgb: 176, 31, 28;
+  --warn: #804e00;
+  --warn-rgb: 128, 78, 0;
+  --ok: #356630;
+  --code-bg: #e0e3e6;
+  --code-text: #1c2429;
+  --scroll: #b5bcc0;
+  --scroll-hover: #949da2;
+  --select-arrow: rgba(82, 93, 99, .9);
+  --shade: #141a1e;
+  --dim: rgba(20, 26, 30, .38);
+}
+
+/* ── theme: iris (dark), cool neutral ground, deep violet-blue ── */
+[data-theme="celadon"] {
+  color-scheme: light;
+  --bg: #eef1f0;
+  --bg-2: #f9fafa;
+  --bg-3: #e5e9e8;
+  --bg-hover: #d8dedc;
+  --line: rgba(16, 26, 26, .11);
+  --line-2: rgba(16, 26, 26, .20);
+  --text: #16211e;
+  --muted: #4f5f5b;
+  --fadetext: #768682;
+  --accent: #126b74;
+  --accent-rgb: 18, 107, 116;
+  --on-accent: #fff;
+  --accent-2: #5c5382;
+  --accent2-rgb: 92, 83, 130;
+  --user-bubble: #dfe4e3;
+  --user-bubble-text: #2b3935;
+  --err: #b12725;
+  --err-rgb: 177, 39, 37;
+  --warn: #864f00;
+  --warn-rgb: 134, 79, 0;
+  --ok: #386626;
+  --code-bg: #dfe4e3;
+  --code-text: #1b2523;
+  --scroll: #b3bdba;
+  --scroll-hover: #929f9b;
+  --select-arrow: rgba(79, 95, 91, .9);
+  --shade: #101a1a;
+  --dim: rgba(16, 26, 26, .38);
+}
+
+/* ── theme: slate (MID-TONE), cool grey at L*0.45, amber indicator ── */
 [data-theme="frost"] {
   color-scheme: light;
   --bg: #eef0f1;
@@ -675,7 +646,7 @@
   --dim: rgba(17, 22, 28, .38);
 }
 
-/* ── theme: monotype (light) — neutral ground, the accent is ink ── */
+/* ── theme: frost (light), blue-white ground, deep cyan ── */
 [data-theme="monotype"] {
   color-scheme: light;
   --bg: #f0f0f0;
@@ -708,7 +679,7 @@
   --dim: rgba(0, 0, 0, .38);
 }
 
-/* ── theme: foxglove (light) — warm neutral ground, muted plum ── */
+/* ── theme: monotype (light), neutral ground, the accent is ink ── */
 [data-theme="foxglove"] {
   color-scheme: light;
   --bg: #f1f0ed;
@@ -741,7 +712,7 @@
   --dim: rgba(26, 22, 16, .38);
 }
 
-/* ── theme: sorrel (light) — pale clay ground, deep olive-bronze ── */
+/* ── theme: foxglove (light), warm neutral ground, muted plum ── */
 [data-theme="sorrel"] {
   color-scheme: light;
   --bg: #f1f0ed;
@@ -772,6 +743,39 @@
   --select-arrow: rgba(95, 91, 75, .9);
   --shade: #191710;
   --dim: rgba(25, 23, 16, .38);
+}
+
+/* ── theme: sorrel (light), pale clay ground, deep olive-bronze ── */
+[data-theme="contrast-light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-2: #f4f4f4;
+  --bg-3: #e6e6e6;
+  --bg-hover: #d9d9d9;
+  --line: rgba(0, 0, 0, .55);
+  --line-2: rgba(0, 0, 0, .85);
+  --text: #000000;
+  --muted: #1f1f1f;
+  --fadetext: #3d3d3d;
+  --accent: #0033cc;
+  --accent-rgb: 0, 51, 204;
+  --on-accent: #fff;
+  --accent-2: #004d40;
+  --accent2-rgb: 0, 77, 64;
+  --user-bubble: #ededed;
+  --user-bubble-text: #000000;
+  --err: #b30000;
+  --err-rgb: 179, 0, 0;
+  --warn: #8a5000;
+  --warn-rgb: 138, 80, 0;
+  --ok: #006b2e;
+  --code-bg: #dcdcdc;
+  --code-text: #000000;
+  --scroll: #8a8a8a;
+  --scroll-hover: #5c5c5c;
+  --select-arrow: rgba(31, 31, 31, .9);
+  --shade: #000;
+  --dim: rgba(0, 0, 0, .38);
 }
 
 /* ── reset / base ─────────────────────────────────────────────── */
@@ -1053,7 +1057,7 @@ input, textarea {
   height: 12px;
 }
 /* The pulse above is switched off by the blanket `prefers-reduced-motion` rule at
-   the bottom of this file — one rule for every animation, not one per selector. */
+   the bottom of this file - one rule for every animation, not one per selector. */
 
 /* inline session rename input (sidebar + topbar) */
 .rename-input {
@@ -1119,7 +1123,7 @@ input, textarea {
   gap: var(--sp-4);
 }
 
-/* compact control card — provider / model / thinking in one tile */
+/* compact control card, provider / model / thinking in one tile */
 .ctl-card {
   margin: var(--sp-5) var(--sp-7) var(--sp-7);
   padding: var(--sp-3);
@@ -1247,7 +1251,7 @@ input, textarea {
   background: rgba(var(--warn-rgb), .12);
 }
 
-/* token meter — cumulative tokens + live context-fill bar (topbar) */
+/* token meter, cumulative tokens + live context-fill bar (topbar) */
 .tok-meter {
   flex: none;
   display: flex;
@@ -1449,12 +1453,41 @@ input, textarea {
   margin-bottom: var(--sp-3);
   letter-spacing: var(--tr-4);
   text-transform: uppercase;
+  /* A row, not a label: the role name on the left and the clock pinned to the
+     right edge of the same column the message body ends at. Both roles share
+     .msg-body's width, so every time lands in one place and the column can be
+     scanned top to bottom. */
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+}
+.msg-role-name {
+  flex: none;
+}
+.msg-time {
+  /* Always shown, never behind a pointer: a hover-only time does not exist on
+     touch, and this is metadata a reader should be able to check without asking.
+     It borrows the tool counter's rung rather than inventing one -- same mono,
+     same --fs-meta, same --muted, same tabular figures, because a proportional
+     time is the one thing that makes a column of times unreadable. HH:MM only:
+     a date on every row is noise, and the full stamp is on title=. The tracking
+     and weight are reset because they are inherited from an uppercase label and
+     both would spread the digits apart. */
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  letter-spacing: var(--tr-2);
+  text-transform: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .msg.assistant .msg-role {
   color: var(--accent);
 }
 /* Who sent this row, when it was not the person. A tag on the side of the
-   role line: the row is still a user row, still reads as the user's turn —
+   role line: the row is still a user row, still reads as the user's turn,
    the agent has no idea an Assistant exists, and neither should the layout. */
 .msg-tag {
   display: inline-block;
@@ -1471,6 +1504,31 @@ input, textarea {
   background: rgba(var(--accent-rgb), .08);
 }
 .msg-tag.autonomous {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), .45);
+}
+/* The undo point a turn left behind, on the row that caused it (PLAN item 4). It
+   is the role line's third member and it borrows the sender tag's pill so the
+   line reads as one piece of furniture: same radius, same hairline, same muted
+   ink, taking the accent only under the pointer because it is a control and not a
+   label. Deliberately NOT margin-left:auto -- the clock owns the right edge, and
+   a column of times that drifts with the width of a button is not a column. */
+.msg-snap {
+  flex: none;
+  margin-left: var(--sp-4);
+  padding: var(--sp-1) var(--sp-4);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  font-weight: 700;
+  letter-spacing: var(--tr-3);
+  text-transform: uppercase;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(var(--accent-rgb), .08);
+  cursor: pointer;
+}
+.msg-snap:hover, .msg-snap:focus-visible {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), .45);
 }
@@ -1666,12 +1724,44 @@ input, textarea {
   font-size: var(--fs-3);
   line-height: 1.6;
   white-space: pre-wrap;
-  max-height: 300px;
+  max-height: var(--peek-h);
   overflow-y: auto;
   font-style: italic;
 }
 .reason-block.open .reason-body {
   display: block;
+}
+
+/* The tool-call block. `.tools` had no rule at all before this one: every call a
+   turn emitted stacked into an unbounded column, so a turn with twenty calls pushed
+   the transcript twenty cards tall and the newest call - the one you are actually
+   waiting for - landed below the fold. From the third card up it is a fixed-height
+   box that scrolls, the same promise the reasoning body makes about a long thing.
+   The recessed ground is what sells the containment: the cards are --bg-2 on a
+   --bg-2 panel, so a box of them needs a channel of its own or it reads as a list
+   with a scrollbar attached by accident. */
+.tools:has(.tool-card:nth-of-type(3)) {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--rd-4);
+  padding: var(--sp-4);
+  max-height: var(--peek-h);
+  overflow-y: auto;
+  /* Scrolling off the end must not hand the wheel to the transcript behind it. While
+     the pointer is in this box, the box is the end of the line. */
+  overscroll-behavior: contain;
+}
+/* One call in a bordered box inside a message that is already a box is a frame around
+   a frame, and two is still a list rather than a pile - so the box only appears when
+   there is something to contain. */
+.tools:has(.tool-card:nth-of-type(3)) > .tool-card {
+  /* The card's own turn margin is right in transcript flow and wrong in a padded
+     scroll area, where it fattens the top and bottom of the box. In here, the gap
+     between cards is the box's business. */
+  margin: 0;
+}
+.tools:has(.tool-card:nth-of-type(3)) > .tool-card + .tool-card {
+  margin-top: var(--sp-4);
 }
 
 /* tool call cards */
@@ -1715,14 +1805,14 @@ input, textarea {
    A turn's tool calls read as a bar chart of time, not a list of text. Each card
    carries a bar whose length is that call's elapsed time on a FIXED log scale
    (300ms..30s, set in app.js) so a 40ms file read and a 20s build stay comparable
-   across turns — normalizing each turn against its own slowest call would make a
+   across turns - normalizing each turn against its own slowest call would make a
    fast turn and a slow turn look identical, which is the one thing a readout is
    for. scaleX, not width: animate.md bans animating layout-driving properties, and
    a transcript that reflowed on every tool_end would be worse than no chart. It
    sits below the head rather than inside it because .tool-args already owns the
    flex space and truncating the command to buy a chart would be a bad trade.
    Colour only where a state needs attention: a finished call is neutral, because
-   green on every card is noise (colorize.md — don't spend the accent on
+   green on every card is noise (colorize.md, don't spend the accent on
    decoration, and the strongest colour owns a deliberate region). */
 .tool-rail {
   position: relative;
@@ -1774,7 +1864,7 @@ input, textarea {
   /* so the ticking seconds do not jitter */
 }
 .tool-spin {
-  /* static pending marker — no motion */
+  /* static pending marker, no motion */
   width: 9px;
   height: 9px;
   flex: none;
@@ -1786,8 +1876,8 @@ input, textarea {
   display: none;
   /* It already had a 280px cap, but a cap nobody can see reads as "the card got
      taller": a border-top made the output look like more card rather than like
-     something inside one. So it becomes a sunk well in its own right — its own
-     ground, a border all round, a corner, and an inset from the card's edges —
+     something inside one. So it becomes a sunk well in its own right - its own
+     ground, a border all round, a corner, and an inset from the card's edges,
      which is the same treatment the reasoning block gets and the reason that one
      reads as contained. The scroll inside it is now obvious instead of implied. */
   margin: var(--sp-5) var(--sp-7) var(--sp-7);
@@ -1796,7 +1886,7 @@ input, textarea {
   background: var(--code-bg);
   box-shadow: inset 0 1px 2px color-mix(in srgb, var(--shade) 22%, transparent);
   padding: var(--sp-6) var(--sp-8);
-  max-height: 280px;
+  max-height: var(--peek-h);
   overflow: auto;
 }
 .tool-card.open .tool-body {
@@ -1955,7 +2045,7 @@ input, textarea {
 .send-btn.stop:hover {
   background: rgba(var(--err-rgb), .12);
 }
-/* busy: send becomes "steer the running turn" — amber outline cue */
+/* busy: send becomes "steer the running turn", amber outline cue */
 .send-btn.steer {
   background: transparent;
   color: var(--warn);
@@ -2738,7 +2828,38 @@ input, textarea {
   background: var(--accent);
 }
 
-/* appearance panel — theme cards */
+/* appearance panel, theme cards */
+/* Theme groups. Twenty equal cards in one grid is a wall: there is no way to rule
+   out half of them, so every scan re-reads the whole set. The label is sentence-case
+   and quiet on purpose -- a shouty tracked-caps section header would be the loudest
+   thing in a panel whose job is to show swatches, and the rule after it is what
+   actually closes the group off. */
+.theme-group + .theme-group { margin-top: var(--sp-8); }
+.theme-group-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--fs-3);
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: var(--sp-5);
+}
+.theme-group-label::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.theme-group-count {
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+  color: var(--muted);
+  /* --sp-1 is 1px, and the scale exists so that a stray literal cannot creep back
+     in: this file's own test rejects a raw px in padding. */
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
 .theme-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -2991,6 +3112,133 @@ input, textarea {
   .empty h2 {
   font-size: var(--fs-7);
 }
+}
+
+/* ════════════════ MOBILE (finishes the block above) ════════════════
+   The 760px block already turns the sidebar into an off-canvas panel and
+   app.js:2594 already picks `.open` vs `.hidden` by innerWidth, so the drawer
+   half-exists. What it does not have: anything to tap to close it, any height
+   that survives a mobile URL bar, any allowance for a notch or a home
+   indicator, and touch targets sized for a finger. There is no
+   env(safe-area-inset-*) anywhere in this file, and index.html's viewport meta
+   lacked viewport-fit=cover - without that token every env() resolves to zero,
+   so the insets are added here AND in the meta, or they do nothing.
+
+   Deliberately NOT done: no `overflow-x: hidden` on body. The off-canvas
+   sidebar lives at a negative margin, so clipping an ancestor would clip the
+   drawer's own transition, and a blanket clip hides the real offender instead
+   of fixing it. Overflow is handled per-container below. */
+@media (max-width: 760px) {
+  /* 100vh on a phone is the layout viewport, which is taller than what you can */
+  .app {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  /* drawer: fixed, scrollable, and with a scrim to tap away ───────── */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    height: 100dvh;
+    max-width: 84vw;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    /* the home indicator sits over the bottom of the drawer, exactly where the */
+    padding-bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+    padding-left: env(safe-area-inset-left);
+  }
+  .sidebar.open {
+    margin-left: 0;
+    box-shadow: var(--sh-3);
+  }
+  .app:has(.sidebar.open)::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--shade) 42%, transparent);
+    z-index: 45;   /* under the drawer (50), over everything else */
+  }
+
+  /* header ─────────────────────────────────────────────────────────── */
+  .topbar {
+    padding-left: calc(var(--sp-5) + env(safe-area-inset-left));
+    padding-right: calc(var(--sp-5) + env(safe-area-inset-right));
+  }
+  .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The workspace chip and the mode segment are the two things a thumb has to */
+  .wd-chip, .seg button, .new-chat-btn, .ho-btn.small, .jump-btn {
+    min-height: 44px;
+  }
+  .ctl-select, .sess-menu button {
+    min-height: 40px;
+    font-size: var(--fs-5);   /* 16px exactly; below it iOS zooms on focus */
+  }
+  .sess-menu {
+    max-width: calc(100vw - 2 * var(--sp-5));
+  }
+
+  /* message list: no sideways page scroll ──────────────────────────── */
+  .messages {
+    padding-left: calc(var(--sp-5) + env(safe-area-inset-left));
+    padding-right: calc(var(--sp-5) + env(safe-area-inset-right));
+  }
+  .msg img, .msg video, .msg svg, .msg canvas, .msg table {
+    max-width: 100%;
+    height: auto;
+  }
+  .msg pre, .msg code {
+    max-width: 100%;
+  }
+  .ho-shell, .snap-shell, .term-shell {
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  /* composer: full width, clear of the home indicator and the keyboard ─ */
+  .composer {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding-left: calc(var(--sp-5) + env(safe-area-inset-left));
+    padding-right: calc(var(--sp-5) + env(safe-area-inset-right));
+    padding-bottom: calc(var(--sp-5) + env(safe-area-inset-bottom));
+  }
+  .composer textarea, .composer input {
+    font-size: var(--fs-5);
+  }
+  #sendBtn, #stopBtn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Toast and jump button are both bottom-anchored fixed elements, which is */
+  .toast {
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 2 * var(--sp-6));
+    white-space: normal;
+  }
+  .jump-btn {
+    bottom: calc(100px + env(safe-area-inset-bottom));
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* A pointer-driven layout must not be assumed when there is no hover: the
+   assistant pane's action row is already revealed on (hover: none) at :4826,
+   and the transcript's hover-revealed meta line (item 5's note) is the other
+   place where "hover" is a thing that does not exist here. */
+@media (hover: none) and (pointer: coarse) {
+  .msg-turn-meta, .msg-tools-meta {
+    opacity: 1;
+  }
 }
 
 /* ── message edit (go back in time) ─────────────────────────────── */
@@ -4697,7 +4945,7 @@ input, textarea {
 }
 /* The budget line is the only place a run says what it is doing. It gets the
    width the switch and reset do not need, and it truncates rather than
-   wrapping — a run that pushes the strip apart on every cycle is worse than
+   wrapping - a run that pushes the strip apart on every cycle is worse than
    one that clips a long reason. */
 .as-run-budget {
   flex: 1 1 90px;
@@ -4914,14 +5162,14 @@ input, textarea, .ctl-select, .as-input, .rename-input, .mcp-in {
 /* ── reduced motion ───────────────────────────────────────────────────────
    the deleted plan, item 5: "Respect prefers-reduced-motion: every animation has an off
    state." One blanket rule at the end, rather than a `@media` bolted onto each
-   animated selector — the per-selector version is the one that rots, and it had
+   animated selector - the per-selector version is the one that rots, and it had
    already rotted here: the session dot's pulse had an off state and the token
    meter (`tokPulse`), the delegation dot (`dgPulse`) and every width/opacity/
    transform transition did not.
 
    `.01ms` + `iteration-count: 1` instead of `animation: none` so an animation
    still *ends*: anything waiting on animationend/transitionend keeps working,
-   it just happens instantly. Nothing in `static/` listens for those today — the
+   it just happens instantly. Nothing in `static/` listens for those today - the
    idiom is chosen so this stays correct when something does. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

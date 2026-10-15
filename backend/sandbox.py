@@ -74,7 +74,7 @@ def platform_capabilities() -> dict:
     mech = mechanism()
     if mech == "container":
         # A container runtime enforces all of it, on every platform including
-        # Windows — which is the whole reason it is offered as an option.
+        # Windows, which is the whole reason it is offered as an option.
         return {"mechanism": "container", "timeout": True, "cpu_limit": True,
                 "memory_limit": True, "file_size_limit": False, "network": True,
                 "readonly_project": True, "overlay_writes": False,
@@ -222,7 +222,7 @@ def _spawn(command: str, cwd: str, timeout: int, limits: dict, network: bool,
             env[key] = "http://127.0.0.1:0"
         env["NO_PROXY"] = ""
 
-    # stdin: DEVNULL for the same reason as _run_captured — nothing a turn spawns
+    # stdin: DEVNULL for the same reason as _run_captured, nothing a turn spawns
     # may inherit the worker's control pipe.
     kwargs = {"cwd": cwd, "stdin": subprocess.DEVNULL, "capture_output": True,
               "text": True, "timeout": timeout, "env": env}
@@ -301,7 +301,7 @@ def _kill_tree(proc) -> None:
 
     Killing only the direct child is not enough. On Windows a ``.bat`` or
     ``cmd /c`` wrapper leaves its grandchildren running, and they keep the captured
-    pipe open, so the reader blocks long after the timeout fired — measured here as
+    pipe open, so the reader blocks long after the timeout fired, measured here as
     two orphaned processes still alive minutes later. A timeout that a command can
     outrun is not a timeout, and this is the one guarantee the sandbox makes on a
     platform where it can enforce nothing else.
@@ -410,7 +410,7 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     and then abandoned rather than waited on indefinitely.
 
     ``on_output(kind, text)`` is optional and only ever called from a reader
-    thread. Leaving it None keeps `communicate()` — the one path every non-viewed
+    thread. Leaving it None keeps `communicate()`, the one path every non-viewed
     command has always taken.
     """
     # stdin is DEVNULL, never inherited. A turn runs in the worker process, whose
@@ -471,7 +471,7 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
         res = _result(False, note, backend="none", cwd=str(root))
         if partial:
             # Whatever the command printed before the kill is usually exactly the state the next
-            # attempt needs - diffs collected, candidates ranked. This used to be discarded, so a
+            # attempt needs, diffs collected, candidates ranked. This used to be discarded, so a
             # 90%-done computation looked identical to a hung no-op.
             res["stdout"] = partial[-2000:]
         audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
@@ -576,7 +576,7 @@ def container_settings() -> dict:
     """Image and pull policy, from the capability registry.
 
     Pulling defaults to off. Downloading an image is installing something, and the
-    rule everywhere else in Tacit is that nothing is installed for you — so a
+    rule everywhere else in Tacit is that nothing is installed for you, so a
     missing image is reported with the exact command rather than fetched silently.
     """
     cfg = (providers.load() or {}).get("sandbox") or {}
@@ -662,7 +662,7 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
         if not settings["auto_pull"]:
             return _result(False, f"ERROR: the image '{image}' is not present locally, and "
                                   f"Tacit does not download images for you. Run: "
-                                  f"{_runtime_label(runtime)} pull {image}  — or set a "
+                                  f"{_runtime_label(runtime)} pull {image}  - or set a "
                                   f"different image in Settings.",
                            backend="container", cwd=str(root))
         try:

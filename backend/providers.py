@@ -133,7 +133,7 @@ def _container_available() -> tuple[bool, str]:
 
     Asking the sandbox layer rather than repeating the probe keeps one source of
     truth: a runtime the registry calls available is a runtime the executor can
-    actually find. A second ``shutil.which`` here as a fallback defeats that — it
+    actually find. A second ``shutil.which`` here as a fallback defeats that, it
     would report the backend available even when the executor's own probe said
     otherwise, which is how the registry came to promise a backend that then
     refused. If the sandbox layer cannot be imported, the honest answer is

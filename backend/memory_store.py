@@ -396,7 +396,7 @@ def stats(project: str = "") -> dict:
     pinned = [r for r in rows if r["pinned"]]
     # The injected figures come from the mode, because the mode is what decides
     # injection. `startup_selection` selects on the store's budget alone, so it
-    # reported a full startup block for a session whose memory mode is `off` —
+    # reported a full startup block for a session whose memory mode is `off`,
     # a number describing an injection the turn would never make.
     # `memory_modes.startup` is the function the runtime calls, so this cannot
     # disagree with what a turn actually pays. Imported inside the function
@@ -415,7 +415,7 @@ def stats(project: str = "") -> dict:
         "mode": block.get("mode") or "off",
         "startup_tokens": injected,
         "budget": cap,
-        "budget_remaining": max(0, cap - injected),
+        "budget_remaining": max(0, cap, injected),
         "excluded_by_budget": int(block.get("held_back") or 0),
         "fts": has_fts(),
         "exact": tokens.exact(),
@@ -432,7 +432,7 @@ def record_compression(before: str, after: str, approved: bool = False) -> dict:
         con.execute("INSERT INTO compressions (ts, before_tokens, after_tokens, before_text, "
                     "after_text, approved) VALUES (?,?,?,?,?,?)",
                     (_now(), b, a, before, after, int(bool(approved))))
-    return {"before_tokens": b, "after_tokens": a, "saved": max(0, b - a)}
+    return {"before_tokens": b, "after_tokens": a, "saved": max(0, b, a)}
 
 
 def compressions(limit: int = 50) -> list[dict]:

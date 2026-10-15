@@ -10,7 +10,7 @@ Modes:
   jit        the smallest useful set: always-relevant items go in, everything
              else is fetched per turn by relevance rather than carried around
   full       every approved note competes for the startup block, and mid-turn
-             retrieval stays on — the union of the two above, still budgeted
+             retrieval stays on, the union of the two above, still budgeted
 
 The rule is the same in all four: an item that is injected can be pointed at,
 and explained, and measured.
@@ -25,7 +25,7 @@ HEADER = "Memory (durable notes you chose to keep):"
 JIT_SHARE = 0.5          # jit and full keep half the budget for mid-turn retrieval
 # The modes that retrieve mid-turn. `explicit` injects what you approved and
 # fetches nothing else by design, so a recall tool under it could only ever
-# answer "not enabled" — and a tool that cannot do its job is not offered.
+# answer "not enabled", and a tool that cannot do its job is not offered.
 RETRIEVAL_MODES = ("jit", "full")
 
 
@@ -144,7 +144,7 @@ def recall_for(query: str, project: str = "", limit: int = 5,
             memory_store.reinforce(item["id"], ttl_days=0)
     # Report the mode that actually served the call. This used to hardcode
     # "jit", so a retrieval answered under "full" was labelled as the other
-    # mode — and the label is what the provenance UI quotes back.
+    # mode, and the label is what the provenance UI quotes back.
     return {"mode": mode(), "items": items, "query": query,
             "tokens": sum(i["tokens"] for i in items)}
 
@@ -157,7 +157,7 @@ def report(project: str = "") -> dict:
         "mode": started["mode"],
         "budget": started["budget"],
         "used": started["tokens"],
-        "remaining": max(0, started["budget"] - started["tokens"]),
+        "remaining": max(0, started["budget"], started["tokens"]),
         "retrieval_budget": started["retrieval_budget"],
         "injected": started["items"],
         "held_back": started["held_back"],

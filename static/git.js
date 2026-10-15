@@ -1,4 +1,4 @@
-/* Tacit Web — Git panel.
+/* Tacit Web, Git panel.
  *
  * Manual version control for the operator. The LLM can never run git (the
  * extensions/git-guard veto blocks every shell tool that mentions it); this
@@ -18,7 +18,7 @@ let consoleLines = [];
 const MAX_CONSOLE_LINES = 400;
 let busy = false;
 let wdOverride = '';   // panel-scoped project folder (any repo), blank = session folder
-let projects = [];      // recent workspaces only — no assumed project layout
+let projects = [];      // recent workspaces only - no assumed project layout
 
 const esc = t => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -70,11 +70,11 @@ async function runCommand(cmd, { silent = false } = {}) {
   if (out) logLine(out);
   if (!r.ok && r.error) logLine('! ' + r.error);
   if (!r.ok && r.needs_identity) {
-    // a commit was refused because there is no identity — send them to the field
+    // a commit was refused because there is no identity, send them to the field
     const field = $('#gitIdName');
     if (field) field.focus();
   }
-  if (!silent) note(r.ok ? cmd + ' — ok' : (r.error || 'command failed'), !r.ok);
+  if (!silent) note(r.ok ? cmd + ', ok' : (r.error || 'command failed'), !r.ok);
   return r;
 }
 
@@ -134,7 +134,7 @@ function renderChanges() {
     const { g, cls } = statusGlyph(f);
     const staged = f.index !== ' ' && f.index !== '?';
     const action = staged
-      ? `<button class="git-file-btn" data-i="${i}" data-act="unstage" title="Unstage">–</button>`
+      ? `<button class="git-file-btn" data-i="${i}" data-act="unstage" title="Unstage">-</button>`
       : `<button class="git-file-btn" data-i="${i}" data-act="stage" title="Stage">+</button>`;
     return `<div class="git-file"><span class="git-glyph ${cls}">${g}</span>
       <span class="git-file-path" data-i="${i}" data-act="diff" title="${esc(f.path)}">${esc(f.path)}</span>
@@ -245,7 +245,7 @@ async function refreshIdentity() {
   const r = await api('/api/git/identity?' + qs());
   if (!r.ok) { status.textContent = r.error || 'unknown'; return; }
 
-  const label = (i, tag) => `${i.name} <${i.email}> — ${tag}`;
+  const label = (i, tag) => `${i.name} <${i.email}>, ${tag}`;
   idOptions = [];
   if (r.default) idOptions.push({ text: label(r.default, 'default'), ident: r.default });
   if (r.github) idOptions.push({ text: label(r.github, 'your account'), ident: r.github });
@@ -349,7 +349,7 @@ function renderProjectStatus() {
   const el = $('#gitProjectStatus');
   if (!el) return;
   if (!state.isRepo) {
-    el.innerHTML = `<span class="git-badge none">not a repository — Initialize to start version control</span>`;
+    el.innerHTML = `<span class="git-badge none">not a repository, Initialize to start version control</span>`;
     return;
   }
   const gh = ghFullName();
@@ -359,7 +359,7 @@ function renderProjectStatus() {
     parts.push(`<span class="git-badge gh" id="gitProjVis" data-repo="${esc(gh)}">checking…</span>`);
     parts.push(`<a class="git-badge link" href="https://github.com/${esc(gh)}" target="_blank" rel="noopener">${esc(gh)} ↗</a>`);
   } else {
-    parts.push(`<span class="git-badge none">local only — not on GitHub</span>`);
+    parts.push(`<span class="git-badge none">local only, not on GitHub</span>`);
   }
   el.innerHTML = parts.join(' ');
   const vis = $('#gitProjVis');
@@ -414,7 +414,7 @@ async function createRepo() {
 }
 
 /** Rebuild the current working tree as one commit on `branch` and force-push
- * it, dropping the previous history — the case where a past agent committed
+ * it, dropping the previous history - the case where a past agent committed
  * non-stop and the operator wants a clean re-publish. Files are preserved. */
 async function freshHistoryPush(branch) {
   const tmp = 'tacit-fresh-start';
@@ -422,7 +422,7 @@ async function freshHistoryPush(branch) {
   await runCommand(`git checkout --orphan ${tmp}`);
   await runCommand('git add -A');
   const c = await runCommand('git commit -m "Initial commit"');
-  if (!c.ok) { note('fresh commit failed — nothing to commit?', true); return; }
+  if (!c.ok) { note('fresh commit failed, nothing to commit?', true); return; }
   await runCommand(`git branch -M ${branch}`);
   await runCommand(`git push -u origin ${branch} --force`);
 }
@@ -467,13 +467,13 @@ async function pullRemote() {
  * the plain push is rejected, so integrate it with a rebase pull and retry once. */
 async function pushRemote() {
   const { remote, branch, hasUpstream, hasRemote } = await remoteAndBranch();
-  if (!hasRemote) { note('no remote configured — add one below first', true); return { ok: false }; }
+  if (!hasRemote) { note('no remote configured, add one below first', true); return { ok: false }; }
   const push = () => runCommand(hasUpstream ? 'git push' : `git push -u ${remote} ${branch}`);
   let r = await push();
   if (!r.ok && /rejected|fetch first|non-fast-forward|behind/i.test((r.output || '') + ' ' + (r.error || ''))) {
-    note('the remote has changes you do not have — pulling (rebase) then pushing…');
+    note('the remote has changes you do not have, pulling (rebase) then pushing…');
     const p = await pullRemote();
-    if (!p.ok) { note('pull stopped (conflict?) — fix it in the console, then push again', true); return p; }
+    if (!p.ok) { note('pull stopped (conflict?), fix it in the console, then push again', true); return p; }
     r = await push();
   }
   return r;
@@ -491,7 +491,7 @@ function renderGhAccount(a) {
       + (a.avatar ? ` <img class="git-gh-av" src="${esc(a.avatar)}" alt="">` : '');
   } else {
     el.innerHTML = `<span class="git-gh-dot off"></span>not connected`
-      + (a && a.error ? ` — <span class="git-gh-err">${esc(a.error)}</span>` : '');
+      + (a && a.error ? `, <span class="git-gh-err">${esc(a.error)}</span>` : '');
   }
 }
 function renderGhList() {
@@ -547,7 +547,7 @@ function wireGithub() {
     });
     if (!r.ok) { note(r.error || 'invalid token', true); return; }
     $('#gitGhToken').value = '';
-    note('token saved — connected as ' + r.login);
+    note('token saved, connected as ' + r.login);
     refreshGithub();
   });
   const out = $('#gitGhSignout');
@@ -556,7 +556,7 @@ function wireGithub() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clear: true }),
     });
-    note('signed out — falls back to the credential manager');
+    note('signed out, falls back to the credential manager');
     refreshGithub();
   });
   const cl = $('#gitGhClone');
@@ -634,9 +634,9 @@ function wireActions() {
   $('#gitPushBtn').addEventListener('click', async () => { await pushRemote(); refresh(); });
   const syncBtn = $('#gitSyncBtn');
   if (syncBtn) syncBtn.addEventListener('click', async () => {
-    note('syncing — pulling the remote changes, then pushing yours…');
+    note('syncing, pulling the remote changes, then pushing yours…');
     const p = await pullRemote();
-    if (!p.ok) { note('pull stopped — resolve it in the console, then Sync again', true); refresh(); return; }
+    if (!p.ok) { note('pull stopped, resolve it in the console, then Sync again', true); refresh(); return; }
     await pushRemote();
     refresh();
   });
@@ -660,7 +660,7 @@ function wireActions() {
 function open() {
   overlay.hidden = false;
   note('');
-  $('#gitRepo').textContent = workdir() || '—';
+  $('#gitRepo').textContent = workdir() || '-';
   loadProjects();
   refresh();
   refreshGithub();

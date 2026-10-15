@@ -14,7 +14,7 @@ async def account():
     a = await hosting.auth()
     if not a["token"]:
         return {"ok": False, "connected": False, "source": "none",
-                "error": "no GitHub credentials found — paste a token below, or sign in "
+                "error": "no GitHub credentials found, paste a token below, or sign in "
                          "with the GitHub CLI (its session is picked up automatically)"}
     r = await hosting.api("/user", a["token"])
     if not r["ok"]:
@@ -48,7 +48,7 @@ async def set_account(request: Request):
 async def repos(q: str = ""):
     a = await hosting.auth()
     if not a["token"]:
-        return {"ok": False, "error": "not connected — no GitHub credentials"}
+        return {"ok": False, "error": "not connected, no GitHub credentials"}
     r = await hosting.api(
         "/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member",
         a["token"])
@@ -115,7 +115,7 @@ async def create(request: Request):
     body = await request.json()
     a = await hosting.auth()
     if not a["token"]:
-        return {"ok": False, "error": "not connected — no GitHub credentials"}
+        return {"ok": False, "error": "not connected, no GitHub credentials"}
     name = re.sub(r"^-+|-+$", "", re.sub(r"[^\w.-]+", "-", str(body.get("name") or "").strip()))
     if not name:
         return {"ok": False, "error": "repository name required"}
@@ -150,5 +150,5 @@ async def delete(request: Request):
     body = await request.json()
     a = await hosting.auth()
     if not a["token"]:
-        return {"ok": False, "error": "not connected — no GitHub credentials"}
+        return {"ok": False, "error": "not connected, no GitHub credentials"}
     return await hosting.delete_repo(body.get("repo"), a["token"])

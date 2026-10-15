@@ -37,7 +37,7 @@ DANGER_WORDS = ("delete", "remove", "drop", "destroy", "kill", "exec", "shell",
                 "truncate", "reset", "overwrite", "send", "post", "install")
 
 DEFAULT_SETTINGS = {
-    "direct_mode": False,      # inject every enabled tool — OFF by default
+    "direct_mode": False,      # inject every enabled tool, OFF by default
     "default_ttl_turns": 3,    # how long an activated tool stays visible
     "auto_start": False,       # do not launch servers until asked
     "max_restarts": 3,
@@ -189,7 +189,7 @@ def start(sid: str) -> dict:
     if not spec:
         return {"ok": False, "error": f"no MCP server '{sid}'"}
     if not spec.get("enabled"):
-        return {"ok": False, "error": "server is disabled — enable it first"}
+        return {"ok": False, "error": "server is disabled, enable it first"}
     if not spec.get("command"):
         return {"ok": False, "error": "server has no command"}
     transport = str(spec.get("transport") or "stdio").lower()
@@ -453,7 +453,7 @@ def injection_report() -> dict:
     return {
         "discovered_tokens": discovered if not direct else enabled_total,
         "injected_tokens": enabled_total if direct else injected,
-        "saved_tokens": 0 if direct else max(0, discovered - injected),
+        "saved_tokens": 0 if direct else max(0, discovered, injected),
         "direct_mode": bool(direct),
         "active": [e["key"] for e in active_tools()],
         "exact": tokens.exact(),

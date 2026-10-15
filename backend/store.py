@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -68,14 +69,14 @@ def get(sid: str) -> dict | None:
 # Fields a long-lived in-memory copy must never overwrite. A turn's record is
 # held in memory for minutes while the person keeps using the interface, and
 # the settings panel writes the same file from a fresh read: without this, the
-# turn's next save silently reverted whatever they had just changed — which is
+# turn's next save silently reverted whatever they had just changed, which is
 # exactly how the assistant's "last 5 turns" came back as 20.
 # The Goal and the autonomous run's counters join them for the same reason, and
 # a sharper one: the harness writes them from a driver thread while the panel
 # writes them from REST, and the in-memory record a turn holds is minutes old.
 # Without preservation, the turn's next save would rewind the cycle count and
 # silently re-enable a run the person had just stopped.
-# planState joins them because plan mode writes it the same way — from a driver
+# planState joins them because plan mode writes it the same way, from a driver
 # thread, while the websocket handler holds a record loaded before the plan
 # existed. A stale save there would not just rewind progress; it would delete the
 # snapshot a reload reads back, which is the whole reason the plan survives a
@@ -83,24 +84,56 @@ def get(sid: str) -> dict | None:
 PRESERVED = ("assistantSettings", "assistantGoal", "assistantAutonomy", "planState")
 
 
+# One writer at a time through the two halves of the store. `save()` reads the
+# index, edits one row and writes the whole list back; `remove()` unlinks the
+# record and then rebuilds the index from a fresh read. Interleaved, they leave a
+# row whose file is gone, and that is exactly what a ghost session is: a row in
+# the list that opens with no transcript. In-process is the whole blast radius,
+# because a turn worker never writes a session (tests/test_claims.py pins
+# `store.save` absent from turn_worker.py), so no cross-process lock is needed.
+_write_lock = threading.Lock()
+
+
 def save(rec: dict, *, preserve=PRESERVED) -> dict:
-    rec["updated"] = _now()
-    if preserve:
-        disk = config.read_json(_path(rec["id"]), None) or {}
-        for key in preserve:
-            if key in disk:
-                rec[key] = disk[key]
-    config.write_json(_path(rec["id"]), rec)
-    rows = index()
-    for i, r in enumerate(rows):
-        if r.get("id") == rec["id"]:
-            rows[i] = {k: rec.get(k, r.get(k)) for k in
-                       ("id", "title", "model", "mode", "thinking", "project", "created", "updated")}
-            break
-    else:
-        rows.append({k: rec.get(k) for k in
-                     ("id", "title", "model", "mode", "thinking", "project", "created", "updated")})
-    _write_index(rows)
+    sid = rec["id"]
+    with _write_lock:
+        disk = config.read_json(_path(sid), None)
+        # A record whose file AND index row are both gone was deleted while
+        # something still held a copy of it: the turn's driver, a socket's `rec`
+        # (chat.py keeps one for the life of the connection and saves it from
+        # set_model / set_session_name / truncate / compact / assistant_*), a plan
+        # runtime. Every one of those writes minutes after the delete, all of them
+        # through this function, and each would recreate the file AND re-append the
+        # index row below, which is the resurrection, and why it read as
+        # "sometimes": it only happened when something was still live.
+        # Refuse only when BOTH halves are missing. File gone / row present is a
+        # half-written record this call should heal, and row gone / file present is
+        # a lost index row it should restore. `create()` never comes through here
+        # (it writes both halves itself), so refusing cannot block a real session.
+        if disk is None and not any(r.get("id") == sid for r in index()):
+            return rec
+        rec["updated"] = _now()
+        # `and disk` because the heal path above reaches here with nothing on
+        # disk: `key in None` is a TypeError, and it would fire on exactly the
+        # half-written record this call is supposed to repair.
+        if preserve and disk:
+            for key in preserve:
+                if key in disk:
+                    rec[key] = disk[key]
+        config.write_json(_path(sid), rec)
+        # The index read-edit-write stays inside the lock: it is the second half
+        # of the pair, and a `remove()` that lands between this read and this write
+        # is the interleaving that puts a deleted row back.
+        rows = index()
+        for i, r in enumerate(rows):
+            if r.get("id") == sid:
+                rows[i] = {k: rec.get(k, r.get(k)) for k in
+                           ("id", "title", "model", "mode", "thinking", "project", "created", "updated")}
+                break
+        else:
+            rows.append({k: rec.get(k) for k in
+                         ("id", "title", "model", "mode", "thinking", "project", "created", "updated")})
+        _write_index(rows)
     return rec
 
 
@@ -141,13 +174,18 @@ def duplicate(sid: str, suffix: str = " (copy)", up_to=None) -> dict | None:
 
 
 def remove(sid: str) -> bool:
-    try:
-        _path(sid).unlink(missing_ok=True)
-    except Exception:
-        return False
-    rows = [r for r in index() if r.get("id") != sid]
-    _write_index(rows)
-    return True
+    # Both halves under one lock. The unlink and the index rebuild were two
+    # separate writes, so a `save()` landing between them could read an index that
+    # still held the row and write it back, a row with no file, which opens as an
+    # empty session. Same reason `save()` holds the lock across its own pair.
+    with _write_lock:
+        try:
+            _path(sid).unlink(missing_ok=True)
+        except Exception:
+            return False
+        rows = [r for r in index() if r.get("id") != sid]
+        _write_index(rows)
+        return True
 
 
 def registry(rows: list[dict] | None = None) -> dict:
@@ -156,9 +194,15 @@ def registry(rows: list[dict] | None = None) -> dict:
     for r in sorted(rows, key=lambda s: s.get("updated") or 0, reverse=True)[:200]:
         rec = get(r.get("id", ""))
         msgs = (rec or {}).get("messages") or []
+        # `ts` is in the projection because the transcript's clock is a display
+        # row, not a model row: it is written on every append (:121) and the
+        # browser cannot draw a time it never receives. It is display metadata
+        # only, agent.transcript_messages rebuilds every row as {role, content}
+        # on the way to a provider, so nothing here reaches the model.
         out.append({**r, "messages": [
             {"role": m.get("role"), "content": m.get("content"),
-             "reason": m.get("reason"), "tools": m.get("tools")} for m in msgs[-200:]
+             "reason": m.get("reason"), "tools": m.get("tools"),
+             "ts": m.get("ts")} for m in msgs[-200:]
         ]})
     return {"sessions": out, "active": (out[0]["id"] if out else "")}
 

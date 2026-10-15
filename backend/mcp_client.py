@@ -7,7 +7,7 @@ client is both sufficient and more in keeping with Tacit's minimal dependency
 surface. Newer MCP revisions drop the ``initialize`` handshake; we still send it
 because servers detect the client's era and fall back.
 
-Nothing here decides *policy* — that lives in ``mcp_registry``. This module only
+Nothing here decides *policy*, that lives in ``mcp_registry``. This module only
 speaks the protocol and redacts secrets on the way to logs.
 """
 

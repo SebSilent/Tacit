@@ -1,4 +1,4 @@
-"""Task List plugin — the turn's remaining work, kept outside the context window.
+"""Task List plugin, the turn's remaining work, kept outside the context window.
 
 A long turn holds its task list in the transcript, which means two things go wrong
 at once: every step re-pays for it, and a compaction can summarise it into prose the
@@ -9,7 +9,7 @@ Kept here as a plugin rather than a built-in tool because it enlarges the starti
 prompt, and the rule this project sets for such a feature is that it must be
 optional and must show its cost. It is off by default; **Settings > Plugins**
 reports the schema tokens before you enable it, and the block it injects appears
-only once there is something in it — an unused task list costs nothing at all.
+only once there is something in it, an unused task list costs nothing at all.
 
 The list lives on the session, not in the messages, so it survives compaction by
 construction rather than by being summarised well.
@@ -126,7 +126,7 @@ def render(session: str) -> str:
     for i, r in enumerate(rows, 1):
         lines.append(f"{i}. [{'x' if r.get('done') else ' '}] {r['text']}")
     open_n = sum(1 for r in rows if not r.get("done"))
-    head = (f"Task list for this session — {open_n} open of {len(rows)}. "
+    head = (f"Task list for this session, {open_n} open of {len(rows)}. "
             "This is your own record; mark items done as you finish them.")
     return head + "\n" + "\n".join(lines)
 
@@ -150,7 +150,7 @@ def block(session: str) -> dict:
 def render_from(rows: list[dict]) -> str:
     lines = [f"- [{'x' if r.get('done') else ' '}] {r['text']}" for r in rows]
     open_n = sum(1 for r in rows if not r.get("done"))
-    return (f"Task list for this session — {open_n} open of {len(rows)} (finished items "
+    return (f"Task list for this session, {open_n} open of {len(rows)} (finished items "
             "trimmed to stay inside the budget).\n" + "\n".join(lines))
 
 

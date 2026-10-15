@@ -2,7 +2,7 @@
 context_budget, keyed by model reference.
 
 Renamed from ``benchmarks.py`` in stage 5 (plan item 10): the name described
-who used to write these rows — the benchmark harness — not what they are. The
+who used to write these rows (the benchmark harness) not what they are. The
 ``benchmark`` agent tool that managed them is deleted; per-model settings are
 configuration, not an agent capability, so they are managed from the interface
 (Providers / General) instead. The mechanism itself is load-bearing:
@@ -64,6 +64,6 @@ def set_profile(ref: str, temperature=None, max_tokens=None, context_budget=None
 def listing() -> str:
     rows = all_profiles()
     if not rows:
-        return (f"no per-model settings yet - stored in {config.MODEL_SETTINGS_FILE}\n"
+        return (f"no per-model settings yet, stored in {config.MODEL_SETTINGS_FILE}\n"
                 "set them from the interface (Providers), or in the file directly")
     return "\n".join(f"{k}: {json.dumps(v)}" for k, v in sorted(rows.items()))

@@ -93,7 +93,7 @@ SUBAGENT_RESULT_LIMIT = int(os.environ.get("TACIT_SUBAGENT_RESULT_LIMIT", "4000"
 SUBAGENT_MAX_DEPTH = int(os.environ.get("TACIT_SUBAGENT_DEPTH", "1"))
 
 COMPACT_AT = float(os.environ.get("TACIT_COMPACT_AT", "0"))
-# What has to stay free is room for the next turn's work — the summary the model
+# What has to stay free is room for the next turn's work, the summary the model
 # has to write plus whatever the current step still produces. That is roughly
 # CONSTANT in tokens, not a fraction of the window, so a flat percentage is wrong
 # at both ends: 0.65 compacted a 1M-token model at 650K (throwing away 350K of
@@ -102,7 +102,7 @@ COMPACT_AT = float(os.environ.get("TACIT_COMPACT_AT", "0"))
 # TACIT_COMPACT_AT explicitly to go back to a flat fraction.
 CONTEXT_RESERVE_TOKENS = int(os.environ.get("TACIT_CONTEXT_RESERVE", "33000"))
 # A floor, not a ceiling. On a large window the reserve is the binding constraint
-# and needs no cap on top — leaving 33K free *is* the safety margin, and capping at
+# and needs no cap on top, leaving 33K free *is* the safety margin, and capping at
 # 95% would override the reserve model exactly where it works best. The floor only
 # matters where the reserve exceeds the window itself, so a small model still gets
 # half its context to work in rather than a negative budget.
@@ -175,7 +175,7 @@ BROWSER_SEARCH_TIMEOUT = int(os.environ.get("TACIT_BROWSER_SEARCH_TIMEOUT", "120
 RESEARCH_ASPECTS = int(os.environ.get("TACIT_RESEARCH_ASPECTS", "3"))
 # Retuned for what this tool actually is: a bounded read-only sweep, not an
 # unbounded investigation. Ten steps per aspect was sized for work nobody asks
-# research for — an ordinary check is two or three fetches and a browse, and the
+# research for, an ordinary check is two or three fetches and a browse, and the
 # steps past that are a sub-agent wandering. The wall clock came down with it:
 # 600s of a card that looked frozen was indistinguishable from a hang, and the
 # cap fires a *partial report* rather than an error, so a shorter cap costs a
@@ -257,7 +257,7 @@ def ensure_home() -> None:
 
 # A state file is read constantly and rewritten by a driver thread while those
 # reads happen. Windows refuses either side of that for the length of an open
-# handle — and a handle on a small JSON file is open for milliseconds — so the
+# handle (and a handle on a small JSON file is open for milliseconds) so the
 # answer is to wait a moment, not to report the file as missing or drop the
 # write. Bounded, because a genuine lock (antivirus, an editor) should surface
 # as a warning rather than hang the turn.
@@ -276,7 +276,7 @@ def read_json(path: Path, fallback):
     A missing file is the normal case and stays quiet. A file that is there but
     will not read is not: it used to be swallowed into the same fallback, so a
     session that was merely being rewritten looked identical to a session that
-    had never existed — and the caller then behaved as if the person's work had
+    had never existed, and the caller then behaved as if the person's work had
     been deleted. Say so on stderr rather than pretend it was never there.
     """
     path = Path(path)
@@ -557,7 +557,7 @@ def resolve_model(ref: str | None = None) -> dict | None:
 
 
 def project_roots() -> list[str]:
-    """Explicitly configured workspace roots only — never an assumed layout.
+    """Explicitly configured workspace roots only, never an assumed layout.
 
     There is deliberately no auto-scan of ~/Projects, ~/Dev and friends: a
     folder becomes a workspace only because the user pointed at it. With

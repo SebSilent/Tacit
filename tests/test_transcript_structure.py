@@ -18,8 +18,9 @@ Two things this guard is *not*:
   * It does not judge pixels. Every assertion is on a declaration that exists in
     `static/style.css` or an assignment that exists in `static/app.js`. The
     collapsed/expanded *experience* stays a browser call; what is pinned is the
-    structure that makes the behaviour what it is — `display: none` by default, and
-    the only thing that flips it is the click.
+    structure that makes the behaviour what it is — `display: none` by default, open
+    while a turn is streaming (TestReasoningIsLive), closed again at the end of it,
+    and after that the only thing that flips it is the click.
   * It does not trust prose. Comments in both files *describe* these properties
     (`app.js:1136-1139` explains why no listener sits on `.reason-toggle`;
     `style.css:994-996` explains the `.msg-tag` rationale), so comments are stripped
@@ -162,6 +163,37 @@ def reason_never_written_into_answer(js):
     return any(".reason-body'" in ln and "textContent" in ln for ln in js)
 
 
+def fn_body(js, name: str):
+    """The lines of a top-level `function name(...)` body.
+
+    Scoping the match to the function that does the work is the point: a bare
+    file-wide search for `classList.add('open')` would have passed on this file
+    before the fix too, because the delegated click handler already contained
+    one. A predicate that matches an unrelated line is a predicate that cannot
+    fail.
+    """
+    out, seen = [], False
+    for ln in js:
+        if not seen:
+            if re.match(r"function %s\(" % re.escape(name), ln):
+                seen = True
+            continue
+        if ln.startswith("}"):
+            break
+        out.append(ln)
+    return out
+
+
+def reason_opens_while_streaming(js) -> bool:
+    """The trace arriving *now* is expanded, not parked in a hidden box."""
+    return any(".classList.add('open')" in ln for ln in fn_body(js, "appendReason"))
+
+
+def reason_closes_at_turn_end(js) -> bool:
+    """...and goes back to collapsed once the answer is on screen."""
+    return any(".classList.remove('open')" in ln for ln in fn_body(js, "endStream"))
+
+
 def roles_are_separate(css):
     """User and assistant rows differ in avatar paint, role colour, and bubble."""
     ua = decl(rule(css, ".msg.user .avatar"), "background")
@@ -228,6 +260,31 @@ class TestReasoningNotInterleaved(TestCase):
 class TestRoleSeparation(TestCase):
     def test_user_and_assistant_rows_are_painted_apart(self):
         self.assertTrue(roles_are_separate(css_code()))
+
+
+class TestReasoningIsLive(TestCase):
+    """Collapsed by default is the rule for a *finished* turn — the trace must
+    not bury the answer. It was never meant to apply while the trace is
+    arriving, and applying it there made the thinking invisible until clicked,
+    which read as the model not streaming at all."""
+
+    def test_the_arriving_trace_is_expanded(self):
+        self.assertTrue(reason_opens_while_streaming(js_lines()))
+
+    def test_it_is_collapsed_again_when_the_turn_ends(self):
+        self.assertTrue(reason_closes_at_turn_end(js_lines()))
+
+    def test_a_stream_left_in_a_hidden_box_is_caught(self):
+        self.assertTrue(reason_opens_while_streaming(js_lines()))
+        self.assertFalse(reason_opens_while_streaming(
+            js_lines(APP.replace("blk.classList.add('open')",
+                                 "blk.classList.add('x')", 1))))
+
+    def test_a_trace_left_open_over_the_answer_is_caught(self):
+        self.assertTrue(reason_closes_at_turn_end(js_lines()))
+        self.assertFalse(reason_closes_at_turn_end(
+            js_lines(APP.replace("blk.classList.remove('open')",
+                                 "blk.classList.remove('x')", 1))))
 
 
 class TestGuardHasTeeth(TestCase):

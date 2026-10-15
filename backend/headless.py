@@ -3,7 +3,7 @@
 Tacit's front door is a server-side session: ``session_runtime`` owns the turn and its
 stream, and the WebSocket in ``routers/chat.py`` is a viewer of it rather than the thing
 running it. Benchmarks and scripts need a process that takes an instruction, does the
-work, and exits with a number they can read — which is the same agent loop with no
+work, and exits with a number they can read, which is the same agent loop with no
 browser, no uvicorn, no event bus and no analyzer.
 
 This module reproduces the server's turn path rather than inventing a second one: the
@@ -60,7 +60,7 @@ def resolve_ref(wanted: str) -> str:
     ``provider/id``, and the provider's own id may carry a version or a date suffix.
 
     Validation here is deliberately stricter than ``config.resolve_model``, which answers
-    an unknown ref by falling back to ``model_list()[0]`` — a silent substitution. That
+    an unknown ref by falling back to ``model_list()[0]``, a silent substitution. That
     behaviour is tolerable in the UI, which only ever offers real refs, and fatal in a
     benchmark: a pin that does not match would run some other model and report the pinned
     name, which is how a same-model comparison becomes fiction. So the ref must match an
@@ -91,7 +91,7 @@ def resolve_ref(wanted: str) -> str:
         raise SystemExit(
             f"{wanted!r} matches more than one provider: {', '.join(sorted(by_tail))}. "
             "Pass a full provider/id so the pin is unambiguous.")
-    # 3. one-sided prefix, so "deepseek-v4-flash" can reach "…/deepseek-v4-flash-0731" —
+    # 3. one-sided prefix, so "deepseek-v4-flash" can reach "…/deepseek-v4-flash-0731",
     #    but only if exactly one candidate exists, and the substitution is reported.
     prefix = [a for a in available
               if a.lower().split("/")[-1].startswith(tail) or tail.startswith(
@@ -113,7 +113,7 @@ def _accumulate(totals: dict, u: dict) -> None:
     Shared arithmetic, not a copy of it: both this and the server's live meter
     (``session_runtime._usage_event``) read ``metrics.normalize_usage``, so a
     benchmark row and the number on screen can never disagree about what a token
-    is. ``fresh`` is the figure a harness comparison turns on — cache reads are
+    is. ``fresh`` is the figure a harness comparison turns on, cache reads are
     re-reads of bytes already paid for, so it is uncached input plus output, which
     is OpenBench's stated basis.
     """
@@ -205,7 +205,7 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
             if deadline and time.time() > deadline:
                 timed_out = True
                 break
-    except Exception as exc:  # noqa: BLE001  — a harness crash must still produce a row
+    except Exception as exc:  # noqa: BLE001  - a harness crash must still produce a row
         error = f"{type(exc).__name__}: {exc}"
     finally:
         store_save(rec)

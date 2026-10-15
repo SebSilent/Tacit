@@ -96,7 +96,7 @@ def open_page(url: str, limit: int | None = None) -> str:
     r = BROWSER.call("open", url=str(url).strip())
     if not r.get("ok"):
         return f"ERROR: {r.get('error')}"
-    head = f"{r.get('title') or '(no title)'} - {r.get('url')} [{r.get('status')}]"
+    head = f"{r.get('title') or '(no title)'}, {r.get('url')} [{r.get('status')}]"
     body = _clip(r.get("text") or "", limit or config.BROWSER_TEXT_LIMIT)
     return f"{head}\n\n{body}" if body.strip() else head
 

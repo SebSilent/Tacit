@@ -48,7 +48,7 @@
   // The assistant answers in markdown, rendered by the same renderer the main
   // chat uses (shared over window.Tacit.md), so a drafted prompt arrives as a
   // fenced code block with a one-click copy button. If that bridge is missing
-  // — an older cached app.js — the fallback is plain escaped text, never
+  // (an older cached app.js) the fallback is plain escaped text, never
   // nothing and never raw HTML.
   function renderMd(text) {
     if (window.Tacit && typeof window.Tacit.md === 'function') {
@@ -176,7 +176,7 @@
         <span class="as-cost-label">tokens of session context</span>
       </div>
       <div class="as-break">
-        <span>you ${t.session}</span><span>persona ${t.persona}</span>
+        <span>you ${t.session}</span><span>instructions ${t.persona}</span>
         <span>history ${t.history}</span><span>tools ${t.tools}</span>
       </div>`;
   }
@@ -259,7 +259,7 @@
       // control rather than letting the click fail.
       sw.disabled = !autonomy.enabled && !(goal || '').trim();
       sw.title = sw.disabled
-        ? 'set a Goal first — the run needs something to work toward'
+        ? 'set a Goal first, the run needs something to work toward'
         : 'let the assistant drive this session until the budget runs out';
     }
     const el = $('#asBudget');
@@ -269,11 +269,11 @@
     const cap = Math.round((autonomy.max_hours || 0) * 60);
     const time = `${mins}/${cap} min`;
     // Enabling zeroes the reason, so a live run with one set is not "running"
-    // — it is a chain that tried to continue and could not, which is the single
+    //, it is a chain that tried to continue and could not, which is the single
     // most important thing this line can say.
     el.textContent = autonomy.enabled
       ? (autonomy.reason ? `waiting · ${cyc} · ${time}` : `running · ${cyc} · ${time}`)
-      : (autonomy.reason ? `stopped — ${autonomy.reason}` : `ready · ${cyc} · ${time}`);
+      : (autonomy.reason ? `stopped - ${autonomy.reason}` : `ready · ${cyc} · ${time}`);
     el.classList.toggle('on', !!autonomy.enabled);
   }
 
@@ -480,7 +480,7 @@
       case 'assistant_autonomy':
         autonomy = m.autonomy || autonomy;
         renderRun();
-        // The enable can be refused — no Goal, a session that vanished — and
+        // The enable can be refused (no Goal, a session that vanished) and
         // the switch has already snapped back to what the server says. Say why,
         // or the click looks like it was ignored.
         if (autonomy.ok === false) toast(autonomy.error || 'could not start the run', true);

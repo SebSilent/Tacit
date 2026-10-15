@@ -53,7 +53,7 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
     try:
         # Registry-only identity: the user's command must not be corrupted by
         # an argv marker, so the child is identified by TACIT_ROLE /
-        # TACIT_SESSION_ID in its environment and by its registry row — not by
+        # TACIT_SESSION_ID in its environment and by its registry row, not by
         # its command line. The job object still contains it: a crashed parent
         # takes its bg children down too.
         proc = proctools.spawn(
@@ -150,7 +150,7 @@ def fetch(url: str, max_chars: int | None = None) -> str:
     return head + (body[:limit] + f"\n...(truncated, {len(body)} chars total)" if len(body) > limit else body)
 
 
-def snapshot(root: str, label: str = "", session: str = "") -> str:
+def snapshot(root: str, label: str = "", session: str = "", message=None) -> str:
     src = Path(str(root or "")).expanduser()
     if not src.is_dir():
         return f"ERROR: {root} is not a directory"
@@ -191,7 +191,19 @@ def snapshot(root: str, label: str = "", session: str = "") -> str:
             (dest / ".session").write_text(str(session), encoding="utf-8")
         except Exception:
             pass
-    return f"snapshot {dest.name}: {count} file(s)" + (f" - {label}" if label else "")
+    if message is not None:
+        # Which stored row this snapshot belongs to: an index into the session's
+        # message list, written as a sidecar next to .label and .session. It is
+        # metadata *about* the message, never content in it, which is the
+        # constraint agent.py:2047 sets ("snapshots live outside the transcript on
+        # purpose"): the transcript sent to the model and the saved markdown
+        # export are untouched, and a snapshot taken by the agent's own tool --
+        # with no message behind it -- simply has no marker.
+        try:
+            (dest / ".message").write_text(str(int(message)), encoding="utf-8")
+        except Exception:
+            pass
+    return f"snapshot {dest.name}: {count} file(s)" + (f", {label}" if label else "")
 
 
 def list_snapshots() -> str:
@@ -242,9 +254,18 @@ def snapshot_index(limit: int = 200, session: str = "") -> list[dict]:
             marker = ""
         if session and marker != session:
             continue
+        # The row this snapshot belongs to, if it knows. Anything without the
+        # marker -- the agent's own `snapshot` tool, and every snapshot taken
+        # before this existed -- reads as None rather than 0, so the UI draws no
+        # button instead of pointing one at the wrong message.
+        message = None
+        try:
+            message = int((path / ".message").read_text(encoding="utf-8").strip())
+        except Exception:  # noqa: BLE001
+            message = None
         files, total = [], 0
         for f in path.rglob("*"):
-            if f.is_file() and f.name not in (".label", ".session"):
+            if f.is_file() and f.name not in (".label", ".session", ".message"):
                 files.append(str(f.relative_to(path)))
                 try:
                     total += f.stat().st_size
@@ -260,6 +281,7 @@ def snapshot_index(limit: int = 200, session: str = "") -> list[dict]:
             "name": path.name,
             "label": label,
             "session": marker,
+            "message": message,
             "created": created,
             "file_count": len(files),
             "files": sorted(files)[:200],
@@ -296,7 +318,7 @@ def snapshot_compare(name: str, root: str, limit: int = 500) -> dict:
                 rel = path.relative_to(base)
             except ValueError:
                 continue
-            # relative parts only — see the note in snapshot()
+            # relative parts only, see the note in snapshot()
             if any(part in config.SNAPSHOT_SKIP for part in rel.parts):
                 continue
             rel_str = str(rel)
@@ -357,8 +379,8 @@ def restore(name: str, root: str) -> str:
 
 # ── self-restart ─────────────────────────────────────────────────────────
 # Settings > Tools > Restart server. The dying process cannot start its own
-# replacement — a child started before exit dies with the parent on every
-# platform this runs on — so the work is split: this process asks uvicorn to
+# replacement, a child started before exit dies with the parent on every
+# platform this runs on, so the work is split: this process asks uvicorn to
 # exit through its own shutdown (lifespan hooks included), and a small
 # detached watcher waits for the port to free, then starts the server once
 # and blocks on it, which is what keeps the new process alive.
@@ -378,7 +400,7 @@ RESTART_STATE_TTL = 900.0
 def _server_command() -> list[str] | None:
     """The FALLBACK start command: this interpreter, as a module.
 
-    Only for a server with no launcher script to hand the job to — an embedded
+    Only for a server with no launcher script to hand the job to, an embedded
     run, a test client, a checkout that never ran install. Reusing this
     interpreter is right there (it is where the packages are) and the environment
     carries over.
@@ -474,7 +496,7 @@ def restart_server() -> dict:
             # Spawned through proctools: the watcher is the one Tacit child
             # that MUST outlive its parent by design, so it gets no job object
             # (containment would kill it at restart) but keeps the argv marker
-            # and the registry row — it is identifiable, and the next boot's
+            # and the registry row, it is identifiable, and the next boot's
             # sweep reaps it if the restart never came back.
             watcher = proctools.spawn(
                 proctools.ROLE_WATCHER, watcher_cmd, cwd=str(config.ROOT),
@@ -483,8 +505,8 @@ def restart_server() -> dict:
                 **kwargs)
     except Exception as e:  # noqa: BLE001
         (config.HOME / HANDSHAKE_FILE).unlink(missing_ok=True)
-        # This server stays up — the exit is only requested after the watcher is
-        # proved running — but the attempt and its reason are still recorded.
+        # This server stays up, the exit is only requested after the watcher is
+        # proved running, but the attempt and its reason are still recorded.
         record_restart_state("failed", stage="watcher", detail=str(e),
                              via=via, cmd=start_cmd, port=config.PORT)
         return {"ok": False, "error": f"could not start the restart watcher: {e}"}
@@ -498,8 +520,8 @@ def restart_server() -> dict:
     # the analyzer, stops the MCP servers and removes the pid file.
     server.should_exit = True
     # `via` is the point of item 4: the response says which path starts the next
-    # server — the launcher script a person runs, or this interpreter when there
-    # is no script to run — instead of the caller having to wonder.
+    # server, the launcher script a person runs, or this interpreter when there
+    # is no script to run, instead of the caller having to wonder.
     return {"ok": True, "pid": os.getpid(), "watcher": watcher.pid,
             "port": config.PORT, "log": str(config.HOME / RESTART_LOG),
             "via": via, "cmd": start_cmd}
@@ -561,8 +583,8 @@ def record_restart_state(state: str, *, stage: str = "", detail: str = "",
     the browser has nothing to ask. `restart.log` records the running commentary,
     but a log file nobody opens is not making failure visible.
 
-    So the outcome is written where whichever server comes back can read it —
-    including one a person started by hand after the failure — and Settings >
+    So the outcome is written where whichever server comes back can read it,
+    including one a person started by hand after the failure, and Settings >
     Server reports it. Written atomically because a reader must never see half a
     restart; a failed write is not worth failing the restart over.
     """
@@ -600,7 +622,7 @@ def restart_state(max_age: float = RESTART_STATE_TTL) -> dict:
     if raw.get("state") == "starting":
         # A watcher that died mid-flight leaves `starting` behind and nothing
         # corrects it. Past the point where every branch of restart_watch would
-        # have reported, silence IS the failure — so say that instead of letting
+        # have reported, silence IS the failure, so say that instead of letting
         # the panel show a restart in flight forever.
         stall = PORT_FREE_TIMEOUT + COMEBACK_TIMEOUT + 60.0
         if age > stall:
@@ -643,7 +665,7 @@ def restart_watch() -> None:
 
     # The old process was asked to exit, not killed, so the listener drops on
     # its own. If it is still there after the timeout, starting a replacement
-    # would only produce a second process that loses the bind race and exits —
+    # would only produce a second process that loses the bind race and exits,
     # say so in the log and stop.
     end = time.time() + PORT_FREE_TIMEOUT
     while not _can_bind(host, port):
@@ -657,7 +679,7 @@ def restart_watch() -> None:
             return
         time.sleep(0.25)
 
-    # The path the button chose, out of the handshake — so the launcher script
+    # The path the button chose, out of the handshake, so the launcher script
     # that answered the request is the launcher script that runs. A handshake
     # written before this existed has no command in it, and only then does the
     # watcher decide for itself.
@@ -669,14 +691,14 @@ def restart_watch() -> None:
         log_line("could not identify the interpreter to restart with")
         record_restart_state("failed", stage="start", port=port,
                              detail="no launcher script was found and this interpreter could "
-                                    "not be reused — start Tacit with run.bat / run.sh")
+                                    "not be reused, start Tacit with run.bat / run.sh")
         return
     log_line(f"port {port} is free; starting via {via}: {' '.join(cmd)}")
     spawn_kwargs: dict = {}
     if via == "launcher":
         # Two things the launcher path needs that the interpreter path does not.
         # A marker token would be injected into `cmd.exe /c run.bat` and break
-        # it, so the argv goes through untouched — the server the script starts
+        # it, so the argv goes through untouched, the server the script starts
         # registers itself, marker and all. And on Windows the console is the
         # feature: a new window, which run.bat's `pause` keeps open if the
         # server dies. That is the difference between a failed restart a person
@@ -690,7 +712,7 @@ def restart_watch() -> None:
         # proved by the same check. Spawning it with the default `mark=True`
         # injected a second token and left the child reading
         # `backend.main tacit-server tacit-server`. Anything that arrives without
-        # a marker — an older handshake, or one written by a caller that forgot —
+        # a marker, an older handshake, or one written by a caller that forgot,
         # still gets it added, because an unmarked server is one the next stop
         # step cannot see.
         spawn_kwargs["mark"] = False
@@ -710,7 +732,7 @@ def restart_watch() -> None:
     # The watcher's registry row comes off IMMEDIATELY, not once the server is
     # confirmed back: the replacement's own startup sweep runs before its port
     # is bound, so a watcher still registered at that moment looks exactly like
-    # an orphan from a previous crash — and tree-killing it would kill the
+    # an orphan from a previous crash, and tree-killing it would kill the
     # server it just started. The log and the argv marker keep it identifiable
     # regardless; it exits on its own when the server it babysits exits.
     proctools.unregister(os.getpid())
@@ -725,7 +747,7 @@ def restart_watch() -> None:
         detail = (f"the server started by {via or 'the watcher'} (pid {proc.pid}) never "
                   f"accepted on port {port} within {COMEBACK_TIMEOUT:.0f}s")
         log_line(f"server (pid {proc.pid}) did not accept on port {port} within "
-                 f"{COMEBACK_TIMEOUT:.0f}s; it may have failed to start — see the log above")
+                 f"{COMEBACK_TIMEOUT:.0f}s; it may have failed to start, see the log above")
         record_restart_state("failed", stage="bind", detail=detail,
                              via=via, cmd=cmd, port=port)
     code = proc.wait()

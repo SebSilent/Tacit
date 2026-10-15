@@ -1,13 +1,13 @@
 """The session runtime: the server-side owner of every session's work.
 
-A session id is the anchor. Everything a session runs — its agent turn, its
-assistant turn — is started, tracked and finished HERE, keyed by sid, never by
+A session id is the anchor. Everything a session runs, its agent turn, its
+assistant turn, is started, tracked and finished HERE, keyed by sid, never by
 a socket. A WebSocket is a viewer and a control channel: it subscribes to the
 session's streams and forwards a few commands, and it owns nothing. A browser
 that closes, reloads or switches sessions changes nothing about a running
 turn: the worker keeps running, the bus keeps buffering, the transcript is
-saved by the turn's own epilogue, and any window — this one, a second one,
-another device — that opens the session subscribes and is caught up from the
+saved by the turn's own epilogue, and any window, this one, a second one,
+another device, that opens the session subscribes and is caught up from the
 buffer.
 
 A session normally holds two workers, both its own:
@@ -20,13 +20,13 @@ A session normally holds two workers, both its own:
 Sub-agents and research runs are extra workers on top, and there is no limit
 on them: they are read-only and independent, so they run concurrently.
 
-The two workers are independent of each other by design — an assistant reply
+The two workers are independent of each other by design, an assistant reply
 may stream while the agent's turn runs, which is why the assistant is tracked
 here rather than in ``session_state`` (whose single busy row would make the
 two mutually exclusive).
 
-Everything blocking that a start performs — compaction's summariser call, the
-spawn — runs in the caller's executor thread, never on the event loop: a slow
+Everything blocking that a start performs, compaction's summariser call, the
+spawn, runs in the caller's executor thread, never on the event loop: a slow
 summariser or a terminal command must not freeze every other session's
 stream, which is exactly what the old socket-owned path did.
 """
@@ -63,7 +63,7 @@ def assistant_running(sid: str) -> bool:
 
 # ── autonomous mode ────────────────────────────────────────────────────────
 # How much of the transcript a cycle prompt reads. The person's own setting is
-# never touched by it — this is only what the harness asks for when the harness
+# never touched by it, this is only what the harness asks for when the harness
 # is the one asking, which is after every turn. A wide window here is a wide
 # bill multiplied by the cycle count, so the loop reads less than a question.
 CYCLE_TURNS = 5
@@ -120,7 +120,7 @@ def _autonomy_off(sid: str, reason: str) -> bool:
 
     Returns whether the mode was actually running when this happened. The Stop
     button needs the difference between "this ended a run" and "this stopped
-    nothing", and the notify is only worth showing for the first of those — a
+    nothing", and the notify is only worth showing for the first of those, a
     reason is stored either way, because the person may not be watching when it
     stops and will ask later what it stopped on.
     """
@@ -129,10 +129,10 @@ def _autonomy_off(sid: str, reason: str) -> bool:
     if was:
         # publish resolves the bus's own loop, so this is safe to call from a
         # driver thread or from the event loop, and is a no-op when nobody is
-        # streaming this session — the reason is on disk either way.
+        # streaming this session, the reason is on disk either way.
         try:
             turn_bus.publish(sid, {"type": "notify", "level": "info", "sid": sid,
-                                   "message": f"autonomous mode stopped — {reason}"})
+                                   "message": f"autonomous mode stopped, {reason}"})
         except Exception:  # noqa: BLE001
             pass
     return bool(was)
@@ -148,13 +148,13 @@ def _autonomy_note(sid: str, reason: str) -> dict:
 
     The reason is still stored and still shown. A pane that reads "running"
     while nothing has moved for a minute is a pane nobody trusts, so this is
-    not a silent no-op — it is the difference between "waiting" and "dead".
+    not a silent no-op, it is the difference between "waiting" and "dead".
     """
     state = _autonomy_write(sid, reason=reason)
     if state.get("enabled"):
         try:
             turn_bus.publish(sid, {"type": "notify", "level": "info", "sid": sid,
-                                   "message": f"autonomous mode waiting — {reason}"})
+                                   "message": f"autonomous mode waiting, {reason}"})
         except Exception:  # noqa: BLE001
             pass
     return state
@@ -186,7 +186,7 @@ def autonomy_set(sid: str, *, enabled=None, max_cycles=None, max_hours=None,
     rec = store.get(sid) or {}
     # Read the state BEFORE save_autonomy, which mutates rec in place. Deciding
     # "is this a fresh start" from rec afterwards would compare the new value
-    # against itself and never see a transition — and it would only appear to
+    # against itself and never see a transition, and it would only appear to
     # work, because the disk copy still lags until the patch below.
     was_on = bool(assistant.autonomy_of(rec).get("enabled"))
     state = assistant.save_autonomy(rec, changes)
@@ -198,17 +198,17 @@ def autonomy_set(sid: str, *, enabled=None, max_cycles=None, max_hours=None,
             # straight from this payload (assistant.js: `autonomy = m.autonomy`,
             # then renderRun), so a refusal that echoed enabled=True would show an
             # armed run and a live "running" budget line while nothing on disk is
-            # armed — and the code comment claiming the switch "snapped back" would
+            # armed, and the code comment claiming the switch "snapped back" would
             # be describing a thing that never happened.
             state["enabled"] = False
             return dict(state, ok=False,
-                        error="set a Goal first — there is nothing to work toward")
+                        error="set a Goal first, there is nothing to work toward")
         state = assistant.reset_counters(rec)
     store.patch(sid, assistantAutonomy=state)
     if turning_on and state.get("enabled"):
         try:
             turn_bus.publish(sid, {"type": "notify", "level": "info", "sid": sid,
-                                   "message": "autonomous mode is running — the Assistant "
+                                   "message": "autonomous mode is running, the Assistant "
                                               "will hand the agent its next prompt when "
                                               "this turn ends"})
         except Exception:  # noqa: BLE001
@@ -240,7 +240,7 @@ def _autonomy_after_turn(sid: str, rec: dict, loop) -> None:
     if assistant_running(sid):
         # The mirror of the guard in _autonomy_after_assistant: the person asked
         # the Assistant something by hand and that reply is still in flight. It
-        # is not a second chain — its own epilogue is what continues this one,
+        # is not a second chain, its own epilogue is what continues this one,
         # so there is nothing to start and nothing to cancel. Starting anyway
         # would fail with "already running", which reads as a dead run.
         return
@@ -262,7 +262,7 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
     """The Assistant answered: its last fenced block is the next agent prompt.
 
     No block means the model had nothing to say about the work, which the
-    contract reads as "carry on" — so the harness sends a bare continue rather
+    contract reads as "carry on", so the harness sends a bare continue rather
     than ending a run the person started. A block of ``DONE`` ends it.
     """
     state = autonomy_state(sid)
@@ -271,7 +271,7 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
     if turn_running(sid):
         # The race this exists for: the person asked the Assistant something by
         # hand while an agent turn was mid-flight. That turn's own epilogue
-        # continues the chain, so this reply has nothing to hand off to — and
+        # continues the chain, so this reply has nothing to hand off to, and
         # calling start_turn here would fail with "a turn is already running",
         # which the branch below reads as fatal and would end a run the person
         # never stopped. Returning WITHOUT disabling is the whole point: a
@@ -304,20 +304,20 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
         err = (out or {}).get("error") or ""
         # The same race as the guard above, arriving between the check and the
         # spawn: a turn started while this reply was being read. It is not a
-        # dead run — that turn's epilogue continues the chain — so ending the
+        # dead run (that turn's epilogue continues the chain) so ending the
         # mode here would let a person typing a question cost the run its
         # remaining budget, which is the failure this whole branch exists to
         # prevent. Note it, do not stop it.
         if "already running" in err:
             # Not counted as a failure either: nothing went wrong with the run.
-            _autonomy_note(sid, "an agent turn was already in flight — that turn continues the chain")
+            _autonomy_note(sid, "an agent turn was already in flight, that turn continues the chain")
             return
         # One refusal is noted and the loop tries again next cycle; two in a
         # row ends it. The person may not be watching, and a run that cannot
         # launch but keeps being asked to is the worst kind of alive.
         after = _autonomy_launch(sid, ok=False)
         if int(after.get("failures") or 0) >= assistant.MAX_LAUNCH_FAILURES:
-            _autonomy_off(sid, f"{err or 'the agent could not be started'} — twice in a row")
+            _autonomy_off(sid, f"{err or 'the agent could not be started'}, twice in a row")
         else:
             _autonomy_note(sid, err or "the agent could not be started")
         return
@@ -329,7 +329,7 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
     after = _autonomy_bump(sid, cycles=1)
     # A launched cycle used to be silent on the bus: nothing separated "a new
     # cycle started" from the turn events that followed it, so an audible tick had
-    # no moment to attach to. Published once per *successful* launch — a refused
+    # no moment to attach to. Published once per *successful* launch, a refused
     # launch is not new work, and a tick announcing work that never started is
     # worse than no tick.
     turn_bus.publish(sid, {"type": "autonomy_cycle", "sid": sid,
@@ -365,7 +365,7 @@ def _raise_context(rec: dict, messages: list[dict]) -> None:
 
     The provider's figure describes the call that already happened. Between that
     call and this one the transcript gained a user turn, the standing prompt, the
-    project's instructions, the task list and this turn's memory — and a session
+    project's instructions, the task list and this turn's memory, and a session
     that has just been sent a new message cannot honestly be shown as no fuller
     than it was before. So the meter is raised to whichever is larger: what the
     provider billed, or what is assembled here. The provider keeps the seat when
@@ -398,7 +398,7 @@ def _usage_event(rec: dict, usage: dict, subagent: bool = False) -> dict:
     tok["total"] += n["total"]
     # The names the token meter already reads. A turn re-sends its transcript on
     # every step, so these two numbers are the difference between a cheap long
-    # session and an expensive one — and they were always blank.
+    # session and an expensive one, and they were always blank.
     tok["cacheRead"] = int(tok.get("cacheRead") or 0) + n["cache_read"]
     tok["cacheWrite"] = int(tok.get("cacheWrite") or 0) + n["cache_write"]
     if n["cache_read"]:
@@ -412,12 +412,12 @@ def _usage_event(rec: dict, usage: dict, subagent: bool = False) -> dict:
     # local measure of the transcript so the number is never simply absent.
     #
     # `in_tok` is the whole prompt of that call, cached bytes included, because
-    # that is what occupied the window — both producers normalize to that basis
+    # that is what occupied the window, both producers normalize to that basis
     # (`anthropic.usage_of`, `engine._usage`). Adding `out_tok` is what makes the
     # meter read *forward*: the next call re-sends this prompt plus the reply it
     # just got, so the two together are the size of the request about to be made.
     # Measuring only what was billed fresh would leave a cached session reading
-    # near zero forever, and `should_compact` — which reads this same number —
+    # near zero forever, and `should_compact`, which reads this same number,
     # would never fire.
     ctx_tokens = (in_tok + out_tok) or None
     if subagent:
@@ -452,7 +452,7 @@ def _lower_context(rec: dict, saved: int) -> None:
     saved = int(saved or 0)
     if not ctx or not saved:
         return
-    tokens = max(1, int(ctx.get("tokens") or 0) - saved)
+    tokens = max(1, int(ctx.get("tokens") or 0), saved)
     ctx["tokens"] = tokens
     window = ctx.get("window") or 0
     ctx["percent"] = round(tokens / window * 100, 1) if window else None
@@ -548,8 +548,8 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                                  trace=trace))
         for ev in stream:
             kind = ev.get("type")
-            # Delegated work is invisible in the main transcript by design —
-            # the sub-agent's calls never enter it — so the only way the
+            # Delegated work is invisible in the main transcript by design,
+            # the sub-agent's calls never enter it, so the only way the
             # person can see what it is doing is a dedicated event.
             if kind in ("text", "reason", "tool_start", "tool_end", "notify") and \
                     (ev.get("subagent") or ev.get("research")):
@@ -582,12 +582,12 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
             if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
                 session_state.running(sid)
             # One publish, once. The bus is the single fan-out point: every
-            # viewer — the window that started the turn, a reload, a second
-            # device — sees the same stream.
+            # viewer, the window that started the turn, a reload, a second
+            # device, sees the same stream.
             if kind == "done":
                 # Held back until the epilogue has written the record. `done`
                 # is what tells a viewer the transcript is complete, and a
-                # viewer that reloads on it reads the store — so the event
+                # viewer that reloads on it reads the store, so the event
                 # must never outrun the write it announces.
                 terminal = {**ev, "sid": sid}
                 continue
@@ -686,7 +686,7 @@ def _drive_assistant(sid: str, rec: dict, mini: dict, text: str, cfg: dict,
         bus.publish({"type": "assistant_saved", "sid": sid, "preview": preview})
         turn_bus.finish(sid, channel="assistant")
         # The handoff: whatever the Assistant ended with becomes the next agent
-        # turn. Skipped when the person stopped this reply by hand — a Stop on
+        # turn. Skipped when the person stopped this reply by hand, a Stop on
         # the Assistant is a full stop, not a suggestion to carry on.
         if not stop.is_set():
             try:
@@ -703,11 +703,11 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
 
     `origin` says who was at the keyboard: "you" (typed in the composer),
     "assistant" (the Send button) or "autonomous" (the loop). It is display
-    metadata for the person's transcript and nothing more — the agent receives
+    metadata for the person's transcript and nothing more, the agent receives
     a plain user row either way, because it has no idea an Assistant exists.
 
     Runs in the caller's executor thread (the socket handler awaits it), so
-    the blocking parts — a compaction summariser call, the spawn — never sit
+    the blocking parts (a compaction summariser call, the spawn) never sit
     on the event loop. Returns ``{"ok": True}`` or ``{"ok": False, "error"}``;
     the caller turns a refusal into a notify.
     """
@@ -718,7 +718,7 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         loop = asyncio.get_running_loop()
     # The claim is atomic: guard, run row and busy mark under one lock, so two
     # windows prompting the same session at the same instant produce one turn
-    # and one refusal — one session, one running turn.
+    # and one refusal, one session, one running turn.
     with _lock:
         if session_state.busy(sid):
             return {"ok": False, "error": "a turn is already running"}
@@ -761,9 +761,9 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # exactly the row it always was. It cannot reach the model: the wire
         # builder (agent.transcript_messages) rebuilds a user row as
         # {role, content} and drops every other key, which is the whole
-        # point — the agent must not be able to tell the two senders apart.
+        # point, the agent must not be able to tell the two senders apart.
         extra = None if origin == "you" else {"origin": origin}
-        store.append(rec, "user", text, extra)
+        user_row = store.append(rec, "user", text, extra)
         if (rec.get("title") or "New session") == "New session":
             rec["title"] = _title(text)
         store.save(rec)
@@ -774,10 +774,24 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # prompt that did not come from this keyboard never got a row: with no
         # user row to end the previous group, ensureStreamingBubble() reused
         # the last assistant row and every delta of the new turn landed inside
-        # it — one agent bubble growing forever instead of a conversation.
+        # it, one agent bubble growing forever instead of a conversation.
+        # `ts` rides along because this event is the only way a window that did
+        # not type the prompt learns when it was sent. Every viewer stamps its
+        # own clock as a fallback, and a fallback is not the truth: the server's
+        # value is the one that lands in the stored row and survives a reload.
         bus.publish({"type": "user_message", "sid": sid, "text": text,
-                     "origin": origin})
+                     "origin": origin, "ts": user_row.get("ts")})
 
+        # The mode comes off disk, not from this socket's copy of the record.
+        # A CHAT↔AGENT click lands through POST /api/sessions/{sid}/metadata →
+        # store.patch, and the `rec` a socket holds was read when it opened, it
+        # is minutes old, and it is the same shape of staleness that PRESERVED
+        # (store.py:83) exists for. Before Stage 1b was undone, a mode click hid
+        # this by opening a fresh socket, whose URL re-read the record; switching
+        # in place exposes it, so the turn asks the disk which mode it is in.
+        disk_mode = (store.get(sid) or {}).get("mode")
+        if disk_mode:
+            rec["mode"] = disk_mode
         chat = (rec.get("mode") or "agent") == "chat"
         messages = [{"role": "system",
                      "content": prompts.system_prompt(rec.get("project"), False, chat=chat)}]
@@ -800,7 +814,7 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # Assistant holds the objective steady after compaction has rewritten
         # everything else, not so the agent can be told what to want. The agent
         # learns of the Goal only through the prompt the Assistant chose to
-        # write, which arrives as an ordinary user row below — the one channel
+        # write, which arrives as an ordinary user row below, the one channel
         # between them, and the only one that is meant to exist.
         # (The leak this note replaced: assistant.goal_block() was appended to
         # the agent's user turn every turn. It is now a cost report with no
@@ -854,7 +868,7 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
             else:
                 bus.publish({"type": "notify", "level": "warn", "sid": sid,
                              "message": (f"{rec.get('model') or 'this model'} does not accept "
-                                         "images — sent the text only")})
+                                         "images, sent the text only")})
 
         # The meter moves when the request is made, not only when it is billed.
         _raise_context(rec, messages)
@@ -893,7 +907,7 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
 def start_assistant(sid: str, rec: dict, text: str,
                     loop: asyncio.AbstractEventLoop | None = None,
                     turns: int | None = None) -> dict:
-    """Start the session's assistant reply — the session's second worker.
+    """Start the session's assistant reply, the session's second worker.
 
     Independent of the agent turn by design: both may run at once. The user's
     prompt is persisted before the worker exists, so a worker that never
@@ -958,7 +972,7 @@ def cancel(sid: str) -> dict:
     """Stop everything the session is running: its turn, its assistant, its
     background jobs.
 
-    Scoped to sid by construction — the registries are keyed by sid and there
+    Scoped to sid by construction, the registries are keyed by sid and there
     is no code path here that can touch another session. May block up to the
     cancel grace period waiting for a cooperative exit, so callers off the
     event loop (the socket handler runs it in an executor).
@@ -986,7 +1000,7 @@ def cancel(sid: str) -> dict:
     # Instant off. The Stop button is the person saying "no more of this", and a
     # mode that carried on into its next cycle after being stopped had not
     # understood the instruction. Done before the audit rows and before this
-    # returns, so the state a reload reads back is already the stopped state —
+    # returns, so the state a reload reads back is already the stopped state,
     # and every chaining decision re-reads it from disk, so a turn still
     # winding down cannot start a cycle on the strength of a stale "enabled".
     out["autonomy"] = _autonomy_off(sid, "stopped")
@@ -1021,8 +1035,8 @@ def shutdown() -> dict:
     """Lifespan shutdown: stop every worker this server spawned.
 
     A restart that lands the partial transcripts instead of orphaning the
-    children. Each worker gets the two-stage stop; its driver's epilogue —
-    the transcript save — is given a moment to run before the process exits.
+    children. Each worker gets the two-stage stop; its driver's epilogue,
+    the transcript save, is given a moment to run before the process exits.
     """
     with _lock:
         sids = sorted(set(_turns) | set(_assistants))

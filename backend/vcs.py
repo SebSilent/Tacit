@@ -60,7 +60,7 @@ def run_argv(argv: list[str], cwd: str, stdin: str | None = None,
              timeout: int | None = None) -> dict:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        # `input` owns stdin when it is set; otherwise DEVNULL, never inherited —
+        # `input` owns stdin when it is set; otherwise DEVNULL, never inherited,
         # git reading a live handle it was never meant to hold is how a panel
         # call blocks on a prompt GIT_TERMINAL_PROMPT=0 was supposed to kill.
         r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, env=env,

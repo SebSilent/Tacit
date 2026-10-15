@@ -3,7 +3,7 @@
 Plan mode used to be the socket's private business. The ``Plan`` object lived in
 a dict inside the websocket handler, the generator that drove it lived in a
 thread that dict started, and answering a question meant finding that same
-socket again — so a reload during exploration lost the plan, a second window on
+socket again, so a reload during exploration lost the plan, a second window on
 the same session could not see it, and a server restart made the questions
 already on screen unanswerable. That is the same bug the connection rework
 fixed for turns, in its second place: the work outlives the viewer, or the
@@ -137,7 +137,7 @@ def _launch(sid: str, p, gen, loop: asyncio.AbstractEventLoop | None) -> None:
     own thread; its events go to the session's ``plan`` channel rather than to
     whichever socket happened to ask. ``session_state`` carries busy for the
     duration, so the rest of the interface treats a plan the way it treats a
-    turn — including this same session's other windows.
+    turn, including this same session's other windows.
     """
     with _lock:
         entry = _plans.setdefault(sid, {"run": p, "thread": None, "loop": loop})
@@ -248,7 +248,7 @@ def approve(sid: str, rec: dict, approved: bool) -> dict:
     """Approve or reject: save the plan, and put it in the project.
 
     Returns the ``plan.py`` result unchanged so the socket's ``plan_approved``
-    message keeps the shape the strip already draws — plus the persisted
+    message keeps the shape the strip already draws, plus the persisted
     snapshot, which is what makes the approval survive the reload that the
     person will almost certainly do next.
     """

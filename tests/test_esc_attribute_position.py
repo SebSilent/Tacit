@@ -47,6 +47,9 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+# esc() itself now lives in the shared renderer both frontends load; app.js keeps a
+# one-line wrapper (asserted by TheWrapperStillDelegates below) and no body of its own.
+MD = (ROOT / "static" / "markdown.js").read_text(encoding="utf-8")
 
 # A payload that is inert in text position and load-bearing in attribute position.
 PAYLOAD = 'x" onmouseover="fetch(1)'
@@ -56,7 +59,11 @@ PAYLOAD = 'x" onmouseover="fetch(1)'
 ATTR_SITES = ('data-path="${esc(String(p.path))}"',
               'title="${esc(info.message || \'\')}"')
 # Measured 2026-10-13: interpolations inside double-quoted attributes in app.js.
-ATTR_SITE_COUNT = 6
+# Seventh site added with the transcript clock (`title="${esc(d.toLocaleString())}"`
+# in timeHtml): reviewed, and it is the safe shape -- esc() is the shared one from
+# static/markdown.js, which this file already proves escapes `"` and coerces with
+# String(), and the value is a Date method's own output.
+ATTR_SITE_COUNT = 7
 
 # Only `esc` is lifted out — app.js as a whole touches `document` at load and would throw
 # under node. Sliced from the anchor to the end of its line, then checked.
@@ -73,10 +80,14 @@ console.log(JSON.stringify(OUT));
 """
 
 
-def esc_source(source=APP):
-    lines = [ln for ln in source.splitlines() if ln.startswith("function esc(t)")]
+def esc_source(source=MD):
+    # The renderer sits inside markdown.js's IIFE, so its definitions are indented.
+    # Matching the raw line would find nothing and the harness below would then run
+    # an empty payload - the vacuous pass this slice exists to prevent.
+    lines = [ln.strip() for ln in source.splitlines()
+             if ln.lstrip().startswith("function esc(t)")]
     if not lines:
-        raise AssertionError("could not slice app.js's esc() — it no longer starts with "
+        raise AssertionError("could not slice markdown.js's esc() — it no longer starts with "
                              "'function esc(t)'; the harness would be running nothing")
     body = lines[0]
     for needed in ("&amp;", "&lt;", "&gt;"):
@@ -84,8 +95,8 @@ def esc_source(source=APP):
     return body
 
 
-def run_esc(values, source=APP):
-    """Feed `values` through app.js's real `esc()` and render them into attributes."""
+def run_esc(values, source=MD):
+    """Feed `values` through the shared renderer's real `esc()` and render them into attributes."""
     payload = esc_source(source) + _TAIL
     fd, path = tempfile.mkstemp(suffix=".js", prefix="tacit_esc_")
     try:
@@ -103,6 +114,10 @@ def run_esc(values, source=APP):
 
 
 DEF = re.compile(r"function esc\(|const esc = ")
+# app.js's esc is a delegation, not an escaper: counting it as a seventh definition
+# would report it as the one missing the quote and the coercion, which is true of a
+# line whose whole job is to call the thing that has both.
+DELEGATE = re.compile(r"return window\.TacitMarkdown\.esc\(")
 
 
 def static_sources():
@@ -131,6 +146,8 @@ def esc_definitions(sources):
                 raise AssertionError(f"{name}: no closing `;` located for esc() — the "
                                      "definition changed shape and the guard would be "
                                      "silently reading nothing")
+            if DELEGATE.search(body):
+                continue
             found[name] = body[:end]
     return found
 
@@ -154,8 +171,8 @@ console.log(JSON.stringify(out));
 """
 
 
-def run_coercion(source=APP):
-    """Run app.js's real `esc()` over non-strings and report what each one did.
+def run_coercion(source=MD):
+    """Run the shared renderer's real `esc()` over non-strings and report what each one did.
 
     A fresh `new Function` per value set, because `esc()` is a declaration and the point
     of the exercise is which argument throws — a renderer that throws here is caught by
@@ -339,7 +356,7 @@ class TheGuardHasTeeth(unittest.TestCase):
     def test_the_regression_is_caught(self):
         if not shutil.which("node"):
             self.skipTest("node not on PATH")
-        source = APP.replace(esc_source(), self.OLD)
+        source = MD.replace(esc_source(), self.OLD)
         self.assertIn(self.OLD, source, "could not find esc()'s line to revert")
         out = run_esc([PAYLOAD], source=source)
         tag, attrs = attributes_of(out["rendered"][0])[0]
@@ -355,14 +372,14 @@ class TheGuardHasTeeth(unittest.TestCase):
         name it — the same teeth check the quote clause has, because both guards fail
         vacuously if their slice is wrong."""
         sources = static_sources()
-        line = esc_source(sources["app.js"])
+        line = esc_source(sources["markdown.js"])
         self.assertIn(self.UNCOERCED_MARK, line,
                       "app.js's esc() no longer coerces the way this test assumes")
-        planted = sources["app.js"].replace(line, line.replace(self.UNCOERCED_MARK, "t"))
-        sources["app.js"] = planted
+        planted = sources["markdown.js"].replace(line, line.replace(self.UNCOERCED_MARK, "t"))
+        sources["markdown.js"] = planted
         missing = sorted(n for n, body in esc_definitions(sources).items()
                          if not COERCION.search(body))
-        self.assertEqual(["app.js"], missing,
+        self.assertEqual(["markdown.js"], missing,
                          "the coercion was removed and the six-definition guard did not "
                          "notice — it is matching something other than the "
                          "coercion, in whichever dialect the definition is written")
@@ -374,7 +391,7 @@ class TheGuardHasTeeth(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node not on PATH")
         line = esc_source()
-        out = run_coercion(source=APP.replace(line, line.replace(self.UNCOERCED_MARK, "t")))
+        out = run_coercion(source=MD.replace(line, line.replace(self.UNCOERCED_MARK, "t")))
         self.assertTrue(out["null"]["threw"], "the uncoerced esc() did not throw on null — "
                                              "so `test_no_non_string_throws` guards nothing")
         self.assertEqual("TypeError", out["null"]["res"])
@@ -385,14 +402,31 @@ class TheGuardHasTeeth(unittest.TestCase):
         memory and require that guard to name the file. Without this, the six-definition
         check is a regex that could be matching nothing and reporting success."""
         sources = static_sources()
-        planted = sources["app.js"].replace(esc_source(sources["app.js"]), self.OLD)
+        planted = sources["markdown.js"].replace(esc_source(sources["markdown.js"]), self.OLD)
         self.assertIn(self.OLD, planted, "could not plant the regression in app.js")
-        sources["app.js"] = planted
+        sources["markdown.js"] = planted
         missing = sorted(n for n, body in esc_definitions(sources).items()
                          if "&quot;" not in body)
-        self.assertEqual(["app.js"], missing,
+        self.assertEqual(["markdown.js"], missing,
                          "the quote clause was removed from app.js's esc() and the "
                          "six-definition guard did not notice")
+
+
+class TheWrapperStillDelegates(unittest.TestCase):
+    """The move is only safe while app.js has no escaper of its own.
+
+    `EveryEscaperEscapesTheQuote` counts six definitions; if app.js grew a body back,
+    it would be a seventh escaper that nothing audits, and the transcript would be
+    escaping model text in a place the house standard has never looked at.
+    """
+    WRAPPER = "function esc(t) { return window.TacitMarkdown.esc(t); }"
+
+    def test_app_js_calls_the_shared_escaper(self):
+        self.assertIn(self.WRAPPER, APP, "app.js no longer delegates its esc()")
+
+    def test_app_js_holds_no_escaper_body(self):
+        self.assertNotIn("function esc(t) { return String(", APP,
+                         "app.js grew its own esc() body back again")
 
 
 if __name__ == "__main__":

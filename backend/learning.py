@@ -6,7 +6,7 @@ a stored record with its own state, which you can read, accept, edit, reject,
 disable or delete.
 
 The default mode is ``learn-off`` (stage 8): nothing is read, nothing is
-proposed, until the user opts into ``propose`` in Settings — which still
+proposed, until the user opts into ``propose`` in Settings, which still
 cannot change anything on its own.
 
 When a proposal is approved, it is not written into the prompt. It goes to one of

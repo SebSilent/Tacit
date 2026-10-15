@@ -47,9 +47,9 @@ def index(limit: int | None = None) -> str:
     limit = limit or config.SKILL_INDEX_LIMIT
     lines = [f"- {s['name']}: {s['description']}" for s in rows[:limit]]
     if len(rows) > limit:
-        lines.append(f"- ({len(rows) - limit} more not listed)")
+        lines.append(f"- ({len(rows), limit} more not listed)")
     return ("Skills available on demand. When one looks relevant to the task, call skill(name) to "
-            "read it before acting — do not guess at what a skill says.\n" + "\n".join(lines))
+            "read it before acting, do not guess at what a skill says.\n" + "\n".join(lines))
 
 
 def read(name: str) -> str:

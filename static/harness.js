@@ -1,4 +1,4 @@
-/* Tacit Harness — providers · skills · tools manager.
+/* Tacit Harness, providers · skills · tools manager.
  * Talks to /api/providers, /api/skills, /api/tools, /api/harness/*.
  * Edits ~/.tacit/models.json, prefs.json and skills/ on the server;
  * nothing here is injected into the LLM prompt. */
@@ -91,16 +91,27 @@ function renderAppearancePanel() {
   const T = window.TacitTheme;
   if (!T) { panel.innerHTML = '<div class="ho-empty">Theme engine unavailable.</div>'; return; }
   const cur = T.current();
-  panel.innerHTML = `
-    <div class="ho-toolbar"><span class="ho-sub">Pick a look — applies instantly, stored per-browser (<code>tacit.theme</code>).</span></div>
-    <div class="theme-cards">` +
-    T.themes.map(t => `
+  const card = t => `
       <button class="card theme-card ${t.id === cur ? 'active' : ''}" data-theme="${esc(t.id)}">
         <span class="theme-dot sw-${esc(t.id)}"></span>
         <span class="theme-meta"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span>
         <span class="theme-check">${t.id === cur ? 'Active' : ''}</span>
-      </button>`).join('') +
-    `</div>`;
+      </button>`;
+  // Twenty cards in one undifferentiated grid is the problem: the eye has no way to
+  // rule out half of them, so every scan re-reads the whole set. Grouping by tone
+  // lets someone pick a light theme and then only read light themes. Unknown tones
+  // get their own group rather than being silently dropped into one of the others.
+  const tones = [];
+  T.themes.forEach(t => { if (!tones.includes(t.tone)) tones.push(t.tone); });
+  const LABEL = { dark: 'Dark', light: 'Light' };
+  panel.innerHTML = `
+    <div class="ho-toolbar"><span class="ho-sub">Pick a look, applies instantly, stored per-browser (<code>tacit.theme</code>).</span></div>` +
+    tones.map(tone => `
+    <div class="theme-group">
+      <div class="theme-group-label">${esc(LABEL[tone] || tone)}<span class="theme-group-count">${
+        T.themes.filter(t => t.tone === tone).length}</span></div>
+      <div class="theme-cards">${T.themes.filter(t => t.tone === tone).map(card).join('')}</div>
+    </div>`).join('');
   // A repaint destroys the card under the cursor, so no `pointerleave` ever fires
   // for it: drop any live preview by hand first, or the committed theme never comes
   // back and the flag claims there was never a preview.
@@ -178,7 +189,7 @@ async function renderProviders() {
         <div class="model-list">`;
     const models = p.models || [];
     if (!models.length) {
-      html += '<div class="ho-empty sm">No models discovered — hit Re-scan to pull the live list from the endpoint.</div>';
+      html += '<div class="ho-empty sm">No models discovered, hit Re-scan to pull the live list from the endpoint.</div>';
     }
     for (const m of models) {
       const fullId = `${name}/${m.id}`;
@@ -219,9 +230,9 @@ async function renderProviders() {
     const r = await api('/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.ok) {
       const n = (r.discovered || []).length;
-      setNote(n ? `Provider "${body.name}" created — auto-discovered ${n} model(s) from the endpoint`
+      setNote(n ? `Provider "${body.name}" created - auto-discovered ${n} model(s) from the endpoint`
                 : (r.probe_error
-                    ? `Provider created, but auto-discovery failed: ${r.probe_error} — use Re-scan once it's reachable`
+                    ? `Provider created, but auto-discovery failed: ${r.probe_error}, use Re-scan once it's reachable`
                     : `Provider "${body.name}" created`));
       $('#pvForm').hidden = true; renderProviders(); refreshSidebar();
     }
@@ -246,8 +257,8 @@ async function renderProviders() {
       if (!r.ok) { box.innerHTML = `<span class="ho-err">${esc(r.error)}</span>`; return; }
       const fresh = r.new || [];
       const all = r.models || [];
-      if (!all.length) { box.innerHTML = '<span class="ho-sub">The endpoint exposes no models — add them manually below.</span>'; return; }
-      if (!fresh.length) { box.innerHTML = `<span class="ho-sub">Endpoint reachable — ${all.length} model(s), all already added.</span>`; return; }
+      if (!all.length) { box.innerHTML = '<span class="ho-sub">The endpoint exposes no models, add them manually below.</span>'; return; }
+      if (!fresh.length) { box.innerHTML = `<span class="ho-sub">Endpoint reachable, ${all.length} model(s), all already added.</span>`; return; }
       box.innerHTML = `
         <div class="probe-head">Found ${fresh.length} new model(s) on the endpoint:</div>
         <div class="probe-ids">${fresh.map(id => `<label class="chk"><input type="checkbox" class="probe-pick" value="${esc(id)}" checked> ${esc(id)}</label>`).join('')}</div>
@@ -331,13 +342,13 @@ async function renderSkills(container) {
 
   // One list, not three sections: skills and knowledge differ only by the
   // `kind` badge, and the old split rendered two usually-empty lists as if
-  // they were features. Every card is deletable — both kinds live under
+  // they were features. Every card is deletable, both kinds live under
   // ~/.tacit, never inside the repo.
   html += `<div class="ho-section">Skills <span class="ho-count">${(d.skills || []).length}</span></div>
     <div class="skill-grid">`;
   html += (d.skills || []).length
     ? d.skills.map(s => skillCard(s)).join('')
-    : '<div class="ho-empty sm">No skills yet — add one above.</div>';
+    : '<div class="ho-empty sm">No skills yet, add one above.</div>';
   html += '</div>';
 
   panel.innerHTML = html;
@@ -380,7 +391,7 @@ async function renderTools(container) {
     <div class="tool-row ${t.enabled && !gated ? '' : 'off'}" data-name="${esc(t.name)}">
       <span class="tool-name">${esc(t.name)}</span>
       <span class="tool-desc">${esc(t.description || '')}${gated
-        ? ' <b>Hidden from the agent — no MCP server configured.</b> Add one in the MCP tab and this turns on by itself.'
+        ? ' <b>Hidden from the agent - no MCP server configured.</b> Add one in the MCP tab and this turns on by itself.'
         : ''}</span>
       ${gated
         ? '<span class="badge">gated</span>'
@@ -390,14 +401,14 @@ async function renderTools(container) {
     </div>`;
   };
 
-  // Three states, not a toggle — the same shape as Settings > Learning's mode
+  // Three states, not a toggle, the same shape as Settings > Learning's mode
   // select, because a boolean cannot express "run it but tell me". The mode
   // *vocabulary* comes from the server (config.SHELL_OVERLAP_MODES); the words
   // describing each mode are presentation and stay here.
   const OVERLAP_LABEL = {
-    block: 'Block — refuse the command, return the tool call',
-    advise: 'Advise — run it, append one line',
-    off: 'Off — no interception',
+    block: 'Block, refuse the command, return the tool call',
+    advise: 'Advise, run it, append one line',
+    off: 'Off, no interception',
   };
   const ovModes = (d.shellOverlapModes || ['block', 'advise', 'off']);
   const ovCur = d.shellOverlap || 'block';
@@ -417,7 +428,7 @@ async function renderTools(container) {
       <button class="ho-btn small" id="toolOverlapSave">Save</button>
     </div>
     <div class="ho-sub sm">How to handle a shell command whose every segment is a worse version of
-      an existing tool — the command is refused and the tool call returned instead. Applies to new
+      an existing tool - the command is refused and the tool call returned instead. Applies to new
       agent turns; the interception never fires on a chained command, a pipe or a heredoc.</div>
     ${ovPinned}
     <div class="ho-section">Built-in tools <span class="ho-count">${(d.builtin || []).length}</span></div>

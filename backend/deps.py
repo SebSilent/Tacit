@@ -64,7 +64,7 @@ def _probe_fts5() -> tuple[bool, str, str]:
         finally:
             conn.close()
     except Exception:
-        return False, "no FTS5 in this Python build — plain matching only", \
+        return False, "no FTS5 in this Python build, plain matching only", \
             "install a Python build that ships FTS5 (the python.org installers do)"
 
 # Each group declares what it needs, what it unlocks, and how to get it.

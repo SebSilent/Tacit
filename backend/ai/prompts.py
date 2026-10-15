@@ -12,12 +12,12 @@ You have tools for exploring and changing files and for running shell commands. 
 inspecting first, then acting. Prefer small, verifiable steps over large speculative edits.
 
 Shell: {platform}. Relative paths resolve against your working directory, which is not stated
-to you — ask the shell where you are instead of assuming, and never try a utility that does
+to you, ask the shell where you are instead of assuming, and never try a utility that does
 not exist on this platform.
 
 Rules:
 - Read before you write. Never guess at a file's contents.
-- Prefer the file tools over the shell: read_file, edit_file, write_file, not cat, sed or
+- Prefer the file tools over the shell: read_file, edit_file, write_file — not cat, sed or
   heredoc.
 - If a command fails, read the error and change approach. Do not retry variants of a command
   the platform does not have.
@@ -37,11 +37,11 @@ CHAT = """No tools are available in this conversation. Answer directly from what
 user asks you to inspect or change files, tell them to switch to Agent mode."""
 
 ELIDED = """[Earlier steps were elided to conserve context. Continue from the recent context
-using your tools — do NOT restart the task.]"""
+using your tools, do NOT restart the task.]"""
 
 SUBAGENT = """You are a sub-agent with your own fresh context, working for a parent agent.
 
-Investigate and report. Do not make sweeping changes — the parent owns this task.
+Investigate and report. Do not make sweeping changes, the parent owns this task.
 
 The parent cannot see your tool calls or your reasoning; only your final message reaches it.
 So put everything that matters in that final message, and keep it tight: a dense, factual
@@ -76,7 +76,7 @@ Return up to {n} findings, each as:
    "turn": <turn number of the user message it came from>,
    "confidence": <0.0-1.0>}
 
-Worked examples — the first of each pair is a finding, the second is not:
+Worked examples, the first of each pair is a finding, the second is not:
 
   [4] user: no, dont use regex there, always use the tokenizer instead
       -> {"content": "dont use regex there, always use the tokenizer instead",
@@ -105,7 +105,7 @@ Session:
 
 COMPACT = """Compress the work so far into a dense handover note for later reference.
 
-Use these headings exactly, and keep every file path verbatim — a path that is
+Use these headings exactly, and keep every file path verbatim, a path that is
 paraphrased is a path that has to be found again:
 
 ## Task and constraints

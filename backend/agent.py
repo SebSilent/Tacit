@@ -12,7 +12,8 @@ import threading
 from pathlib import Path
 
 from . import (audit, config, extras, guidance, mcp_registry, memory_modes,
-               memory_store, metrics, model_settings, plugin_manager, sandbox, skills)
+               memory_store, metrics, model_settings, plugin_manager, sandbox,
+               skills, store)
 from . import tokens as token_mod
 from .ai import engine, prompts
 
@@ -806,6 +807,32 @@ def deliverables(text: str, project: str | None) -> list:
     return out[:4]
 
 
+def _turn_msg_index(session: str):
+    """The row this turn's answer will be written at, or None.
+
+    The epilogue appends a turn's steps after everything already stored
+    (session_runtime.py:610-618) and the person's prompt is saved before the turn
+    begins (session_runtime.py:766-769), so while a turn runs the number of stored
+    rows *is* the index its first assistant row will land at. Read from the store
+    rather than threaded down as an argument because one code path has to answer
+    for both drivers, the in-process thread and the worker process, which do not
+    share a record. None with no session -- a headless run, a sub-agent -- so the
+    snapshot carries no link rather than a wrong one.
+    """
+    if not session:
+        return None
+    try:
+        rec = store.get(session)
+        if rec is None:
+            # No record means nothing to anchor to. Returning 0 here would point the
+            # undo point at the session's first message, which is a confident wrong
+            # answer -- and the renderer cannot tell it apart from a real index 0.
+            return None
+        return len(rec.get("messages") or [])
+    except Exception:  # noqa: BLE001 - a lost link must never cost the snapshot
+        return None
+
+
 def _auto_snapshot(project: str, tool: str, session: str = "") -> str:
     """Snapshot the project once, before the first edit of a turn.
 
@@ -814,9 +841,15 @@ def _auto_snapshot(project: str, tool: str, session: str = "") -> str:
     model never once called `snapshot`, so the undo timeline was empty at exactly
     the moment it would have been needed. Once per turn keeps it cheap, and a
     failure here must never cost the edit.
+
+    The message index rides along as snapshot metadata so the transcript can show
+    which reply the undo belongs to; it is written beside the snapshot, never into
+    the row, so the transcript sent to the model and the markdown export are
+    unchanged.
     """
     try:
-        out = extras.snapshot(project, f"auto: before {tool}", session=session)
+        out = extras.snapshot(project, f"auto: before {tool}", session=session,
+                              message=_turn_msg_index(session))
     except Exception as exc:  # noqa: BLE001
         return f"could not take an automatic snapshot ({exc}); edits are not undoable"
     audit.record("auto_snapshot", session=session, tool=tool, backend="snapshot",

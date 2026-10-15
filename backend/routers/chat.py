@@ -1,6 +1,6 @@
 """The WebSocket protocol: a viewer and a control channel, nothing more.
 
-Every session's work — its agent turn, its assistant reply — is owned by
+Every session's work (its agent turn, its assistant reply) is owned by
 ``backend/session_runtime.py``, keyed by session id. This handler owns nothing:
 it subscribes to the session's streams when it opens, pumps them to the
 browser, and forwards the few commands a browser may send. A socket that dies
@@ -9,15 +9,15 @@ buffering, and the transcript is saved by the turn's own epilogue. The same
 session opened on two devices sees the same stream, because both are just
 subscribers of the same buffer.
 
-Blocking commands — a turn's start (compaction can call a model), an abort's
-grace wait, a terminal command, a forced compaction — run in the executor,
+Blocking commands, a turn's start (compaction can call a model), an abort's
+grace wait, a terminal command, a forced compaction, run in the executor,
 never on the event loop. One slow summariser or shell command must not freeze
 every other session's stream, which is exactly what the old socket-owned path
 did.
 
 Plan mode is owned the same way, by ``backend/plan_runtime.py``. It used to be
-the exception — its state lived in a dict inside this handler on the argument
-that it is interactive, asking questions and waiting for the answers — but the
+the exception, its state lived in a dict inside this handler on the argument
+that it is interactive, asking questions and waiting for the answers, but the
 answers are the *least* fragile part of it: they arrive minutes later, from a
 socket that may be a different one, after a reload or a laptop sleep. Waiting
 for a person is precisely the thing that must not be owned by a connection.
@@ -58,7 +58,7 @@ def _usage_snapshot(rec: dict) -> dict:
             window = 0
     if window and not ctx.get("window"):
         ctx["window"] = window
-        ctx["reserve"] = max(0, window - config.context_fill_target(window))
+        ctx["reserve"] = max(0, window, config.context_fill_target(window))
     return {
         "tokens": {"input": toks.get("input") or 0,
                    "output": toks.get("output") or 0,
@@ -197,7 +197,7 @@ async def ws_session(ws: WebSocket, sid: str):
 
     # The socket joins the session's streams before it says anything: the
     # subscription is live from this moment, and the replay below covers
-    # everything published before it — no gap, no duplication. The
+    # everything published before it, no gap, no duplication. The
     # subscription outlives turns, because the stream is the session's, not
     # the turn's: the next turn's events arrive on the same queue with
     # nothing to re-open.
@@ -217,7 +217,7 @@ async def ws_session(ws: WebSocket, sid: str):
     # viewer draws the strip from plan_status / plan_questions / plan_ready, and
     # replaying them in order lands on whichever of those it was on. The hello
     # above already carried the authoritative snapshot, so a viewer that
-    # reconnects long after the buffer emptied still gets its state — the replay
+    # reconnects long after the buffer emptied still gets its state, the replay
     # is only what the snapshot cannot show, which is the explorers' live detail.
     for ev in plan_replay:
         await ws.send_text(_json(ev))
@@ -228,7 +228,7 @@ async def ws_session(ws: WebSocket, sid: str):
     async def pump(queue: asyncio.Queue, channel: str):
         """One channel's live events to this socket, for the life of the socket.
 
-        The stream does not end when a turn does — the next turn's events
+        The stream does not end when a turn does, the next turn's events
         arrive on the same queue — so the only exits are the socket dying or
         the handler closing. Either way this viewer's subscription is dropped;
         the stream itself is untouched.
@@ -254,7 +254,7 @@ async def ws_session(ws: WebSocket, sid: str):
         The transcript and the title stay here because this socket owns the
         conversation those belong to: a plan request is a user message first and
         a plan second. Everything after that — the thread, the events, whether a
-        second plan may start — is the session's business, so it goes to
+        second plan may start, is the session's business, so it goes to
         ``plan_runtime``, which returns as soon as the run exists rather than
         driving it to the end. This handler does not await a plan.
 
@@ -295,7 +295,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 else:
                     # The start runs in the executor: compaction may call a
                     # model, and the spawn takes real time. This socket's
-                    # message loop waits, its pumps do not — and no other
+                    # message loop waits, its pumps do not, and no other
                     # session's stream waits with it.
                     res = await loop.run_in_executor(
                         None, session_runtime.start_turn,
@@ -387,7 +387,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 # The Send button on an offered prompt: straight to the agent.
                 # Steering is the instant path when it is mid-turn; otherwise
                 # this is a normal turn start, and the transcript shows it as
-                # one — an autonomous prompt and a typed one must not be two
+                # one, an autonomous prompt and a typed one must not be two
                 # different kinds of thing.
                 # An index means "the prompt inside that stored reply". The
                 # extraction stays here in Python, next to extract_prompt, so a
@@ -413,7 +413,7 @@ async def ws_session(ws: WebSocket, sid: str):
                             rec["id"], rec, text, None, loop, "assistant")
                         # start_turn answers {"ok": False, "error": ...} instead
                         # of raising. Swallowing it meant a prompt that never
-                        # reached the agent left no trace anywhere — the pane
+                        # reached the agent left no trace anywhere, the pane
                         # showed the message, the transcript showed nothing, and
                         # the person had no way to know the agent was idle.
                         if not (out or {}).get("ok"):
@@ -427,14 +427,14 @@ async def ws_session(ws: WebSocket, sid: str):
                 # session and stays attached; switching is the client opening
                 # a different socket. The command is kept only to answer old
                 # clients with the reason, instead of the generic
-                # "not supported" — and it must never rebind this
+                # "not supported", and it must never rebind this
                 # connection's session record, which is how a turn started in
                 # session A came to be steered, stopped and saved into
                 # session B.
                 await ws.send_text(_json({
                     "type": "error", "sid": rec["id"],
                     "message": ("switch is no longer supported: every session has its "
-                                "own socket now — reload the page to pick up the new "
+                                "own socket now, reload the page to pick up the new "
                                 "interface")}))
 
             elif kind == "set_model":
@@ -514,7 +514,7 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind == "bash":
                 # A terminal command can run for minutes; it must not hold the
-                # event loop — every other session's stream would freeze with it.
+                # event loop, every other session's stream would freeze with it.
                 res = await loop.run_in_executor(
                     None, agent.run_terminal, msg.get("command") or "",
                     rec.get("project") or None)
@@ -539,7 +539,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 # Handing back the answers starts the synthesiser in the
                 # runtime's thread. This handler does not wait for it, so a
                 # socket closed while the model is writing the plan loses a
-                # viewer and nothing else — which is the case that used to
+                # viewer and nothing else, which is the case that used to
                 # discard a plan the person had already paid for.
                 res = plan_runtime.answers(rec["id"], rec, msg.get("answers") or "", loop)
                 if not res.get("ok"):
@@ -573,7 +573,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 # Stage 1b, per the deleted plan's decision: no server-side rebinding.
                 # The implementation runs in a fresh session (the approval
                 # notice promises a clean context, leaving the planning
-                # discussion behind), and the client opens a socket for it —
+                # discussion behind), and the client opens a socket for it,
                 # this connection stays attached to the planning session.
                 res = plan_runtime.implement(rec["id"], rec)
                 if res.get("ok"):
@@ -610,6 +610,6 @@ async def ws_session(ws: WebSocket, sid: str):
     finally:
         # The viewer leaves; the stream stays. Cancelling the pumps drops
         # this socket's subscriptions (each pump unsubscribes in its own
-        # finally) — the turn, the buffer and the transcript are untouched.
+        # finally), the turn, the buffer and the transcript are untouched.
         for t in pumps:
             t.cancel()

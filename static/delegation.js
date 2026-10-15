@@ -50,7 +50,7 @@
       return;
     }
     // Every event re-renders the whole card set, so anything the person has
-    // *done* to a card — expanded its trace — has to live on the card object or
+    // *done* to a card (expanded its trace) has to live on the card object or
     // it is lost on the next one. With research ticking once a second, a trace
     // that collapses under the reader is the failure mode here.
     box.innerHTML = mine.map((k) => {
@@ -220,8 +220,8 @@
     }
     const existing = cards.get(key);
     const trace = (existing && existing.trace) || [];
-    // A heartbeat tick is a timer, not history. It has to reach the card — that
-    // is the whole point of sending it — without piling up to 240 invisible
+    // A heartbeat tick is a timer, not history. It has to reach the card, that
+    // is the whole point of sending it, without piling up to 240 invisible
     // entries onto the trace of a run that hits its cap.
     if (m.type !== 'tool_progress') trace.push(m);
     // Determine done state: explicit done flag, or tool_end without error,

@@ -1,36 +1,17 @@
+# local virtualenv, caches and editor droppings
+.venv/
 __pycache__/
 *.pyc
-*.pyo
 .pytest_cache/
-
-# `.venv*/`, not `.venv/`: the swap to a standalone interpreter leaves `.venv.old`
-# behind, and a rebuilt one may be `.venv-312`. Neither belongs in the repo, and a
-# committed venv is a machine's absolute paths written into everyone's checkout.
-.venv*/
-venv/
-*.egg-info/
-build/
-dist/
-
 node_modules/
+.playwright-mcp/
 
-.tacit/
-.env
-*.log
-sandbox/
-
-# working notes, not for upload
-PLAN.md
-PLAN2.md
-
-# design scratch: the OKLCH palette lab, the render probe and its screenshots.
-# Tooling for an appearance pass, not part of the app, and never served.
+# scratch: palette lab, headless probes, throwaway scripts
 .shots/
 
-# a restore point taken before the frontend was rebuilt from scratch. Kept on disk
-# on purpose -- it is the way back -- and kept out of the repo for the same reason:
-# a second copy of every served file is a fork nobody meant to create.
-.backups/static-*/
+# design notes and the local safety-net folder are working copies, not shipped
+# artefacts
+DESIGN.md
+PLAN.md
 
-.DS_Store
-Thumbs.db
+.backups/

@@ -17,7 +17,7 @@ Lifecycle:
    worker's stdin: the worker stops between events, closes its model stream,
    kills its own shell trees and exits cleanly, so the partial transcript is
    preserved. If it has not exited within the grace period, the parent kills
-   the process tree outright — ``taskkill /T /F`` on Windows, ``killpg`` on
+   the process tree outright, ``taskkill /T /F`` on Windows, ``killpg`` on
    POSIX. Stop is prompt in the normal case and guaranteed in the worst one.
 
 The thread path (``TACIT_TURN_WORKER=thread``) is the old in-process
@@ -108,14 +108,14 @@ class TurnWorker:
         worker's stdin watcher treats the first line as the handshake and
         everything after it as control lines; a steer written before the
         parent's driver thread first called events() would be consumed AS the
-        handshake and the turn would run without it — measured in
+        handshake and the turn would run without it, measured in
         test_steer.py, which steers immediately after spawn. Writing it at
         spawn closes that race: from this moment on, every line on stdin is a
         control line.
 
         A handshake that cannot be written means the pipe is already gone; the
         process is killed here rather than returned as False with a live child
-        nobody will ever read — which is exactly how an orphan is made.
+        nobody will ever read, which is exactly how an orphan is made.
         """
         proc = self.proc
         if proc is None:
@@ -154,7 +154,7 @@ class TurnWorker:
         return self._handshake({"transcript": messages})
 
     def start_assistant(self, *, session: str, state: dict, trace: list) -> bool:
-        """Spawn the assistant's worker process — the session's second worker.
+        """Spawn the assistant's worker process, the session's second worker.
 
         The handshake carries the assistant's own state (its history as it
         stands, its settings, the prompt, and the session facts its persona
@@ -225,14 +225,14 @@ class TurnWorker:
         finally:
             # The registry row dies with the process, however consumption ends.
             # The reap used to live after the read loop, so a parent that
-            # abandoned the generator mid-turn — an exception in the pump, a
-            # browser gone mid-turn — left the row behind forever: the listing
+            # abandoned the generator mid-turn, an exception in the pump, a
+            # browser gone mid-turn, left the row behind forever: the listing
             # then showed workers that had exited, which is exactly the lie
             # that sent an operator hunting for zombies that were not there.
             # The row is dropped before the error events above are consumed,
             # which is fine: the row describes the process, not the events.
             # `self.proc` stays: a consumed worker is an exited worker, and
-            # the caller still owns it — `wait()`, `cancel()`'s honest
+            # the caller still owns it, `wait()`, `cancel()`'s honest
             # already-exited answer and `alive()`'s poll() all read it. Nulling
             # it here turned every clean exhaustion into a lost handle (the
             # Popen fell to the GC with its pipes unclosed) and broke every
@@ -319,7 +319,7 @@ def spawn(sid: str) -> TurnWorker:
 # ── the worker process itself ─────────────────────────────────────────────
 def _reconfigure_streams() -> None:
     # Windows pipes default to cp1252, not UTF-8. The worker writes model
-    # output — reasoning full of em dashes and curly quotes — straight onto
+    # output (reasoning full of em dashes and curly quotes) straight onto
     # this pipe, and the parent reads it as UTF-8, so every non-ASCII
     # character came back as a decode error that killed the turn mid-thought
     # on ANY model, reading exactly like an abort. Reconfigure both ends of
@@ -411,7 +411,7 @@ def _run_worker(argv: list[str]) -> int:
                                  reasoning=config.reasoning_for(reasoning) if reasoning else None,
                                  max_steps=max_steps, trace=trace):
             # No accounting here. The parent owns the usage meter, the tool
-            # counter and the metrics for both paths — doing it in the worker
+            # counter and the metrics for both paths, doing it in the worker
             # too would bill every turn twice. The worker's only job is to
             # run the turn and stream what happened.
             kind = ev.get("type")
@@ -420,7 +420,7 @@ def _run_worker(argv: list[str]) -> int:
             # Kill-safe trace: after every step, the cumulative trace rides
             # along as its own event. A hard kill cannot reach the finally
             # below, so this per-step copy is what lets a killed turn keep
-            # the steps it completed — the parent takes the last one it saw.
+            # the steps it completed, the parent takes the last one it saw.
             if kind in ("tool_end", "done", "error"):
                 out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
                 out.flush()
@@ -433,7 +433,7 @@ def _run_worker(argv: list[str]) -> int:
         crashed["flag"] = True
     finally:
         # The trace goes back even on a clean cancel. A hard kill cannot
-        # reach the finally — which is why the parent also accepts the
+        # reach the finally, which is why the parent also accepts the
         # cumulative trace after every step (see the per-step event below),
         # so a killed turn keeps what streamed to the interface.
         out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
@@ -526,7 +526,7 @@ def main() -> int:
     # The stdin watcher is a daemon thread still blocked on the pipe; a normal
     # interpreter shutdown trips over it and prints `Fatal Python error:
     # _enter_buffered_busy ...  possibly due to daemon threads` on every
-    # cancelled turn. Everything that matters — events, trace, audit — was
+    # cancelled turn. Everything that matters (events, trace, audit) was
     # already flushed by the worker's own paths, so the process exits hard and
     # skips the shutdown that a dead reader cannot survive.
     os._exit(code)

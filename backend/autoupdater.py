@@ -2,24 +2,25 @@
 
 Tacit is an open-source project with no releases; every push to the default
 branch is an update. The transport is two plain GETs: the remote VERSION file
-(a few bytes — the cheap check), and, when it differs from the local one, the
+(a few bytes, the cheap check), and, when it differs from the local one, the
 branch tarball, which is unpacked over the checkout honouring the protected
 paths and the tracked-extension filter. An archive install updates exactly
 the way it was installed. If the checkout happens to be a git repository it
-is left entirely alone — no fetch, no pull, no dirty-tree complaints; the
+is left entirely alone, no fetch, no pull, no dirty-tree complaints; the
 archive copy is the only mechanism, and "version control is a human action"
 is why this module never shells out to anything.
 
 What an update may touch is narrower than what git would: user state is
 never touched (PROTECTED_PATHS), only tracked source extensions are
-considered, and a file the upstream tree no longer contains is reported —
-never deleted — because the archive cannot distinguish "upstream removed
+considered, and a file the upstream tree no longer contains is reported,
+never deleted, because the archive cannot distinguish "upstream removed
 this" from "the user added this".
 """
 import asyncio
 import hashlib
 import io
 import os
+import re
 import tarfile
 import time
 from pathlib import Path, PurePosixPath
@@ -124,6 +125,85 @@ def local_version() -> str:
     return _local_version()
 
 
+# ── version comparison ──────────────────────────────────────────────────────
+# The transport used to decide "update available" with `remote == local`, which is
+# an equality test wearing the name of a comparison: ANY difference offered an
+# update, including a version BEHIND. Under date-versioning that was nearly
+# harmless, the file held the branch's date, so upstream was never older than you.
+# Under SemVer it is a way to lose work: a checkout ahead of the pushed branch, or
+# an upstream revert, gets "updated" backwards by an older tarball unpacked over
+# its own files. So the question is now ordered, and it has a defined answer for
+# every input, including the values this transport wrote before SemVer.
+SEMVER = re.compile(
+    r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
+    r"(?:-(?P<pre>[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?"
+    r"(?:\+(?P<build>[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$")
+
+
+def parse_version(text: str):
+    """(major, minor, patch, prerelease) or None when this is not SemVer.
+
+    None rather than a guess: a legacy install carries `2026-10-09` in VERSION, and
+    a parser that read that as major=2026 would report every real release as
+    something the user already has. The same grammar scripts/bump_version.py
+    refuses on — a value that cannot be ordered must not be written.
+    """
+    m = SEMVER.match(str(text or "").strip())
+    if not m:
+        return None
+    return (int(m.group("major")), int(m.group("minor")), int(m.group("patch")),
+            m.group("pre") or "")
+
+
+def _pre_key(pre: str):
+    """SemVer's precedence for a prerelease string.
+
+    A release with NO prerelease is greater than the same core with one
+    (1.0.0-rc.1 < 1.0.0), so the empty string leads with 1 and any real
+    prerelease with 0. Identifiers then compare numerically when both are numeric,
+    lexically otherwise, and fewer identifiers lose to more that share the prefix.
+    """
+    if not pre:
+        return (1,)
+    parts = [((0, int(i), "") if i.isdigit() else (1, 0, i)) for i in pre.split(".")]
+    return (0, tuple(parts))
+
+
+def compare_versions(local: str, remote: str) -> int:
+    """-1 remote is older, 0 the same, 1 remote is newer. Never raises.
+
+    Both unparseable: compared as strings, so a date-versioned install still answers
+    "already up to date" to the same date and keeps the one-GET check that makes the
+    hourly auto-check cheap.
+    Exactly one unparseable: the unparseable one is the older. That is the migration
+    — the first SemVer release IS an update for every install that predates it — and
+    it follows the last_commit -> last_version precedent above of carrying the old
+    value across instead of rejecting it.
+    """
+    a, b = parse_version(local), parse_version(remote)
+    if a is None and b is None:
+        ls, rs = str(local or "").strip(), str(remote or "").strip()
+        return 0 if ls == rs else (-1 if ls < rs else 1)
+    if a is None:
+        return 1
+    if b is None:
+        return -1
+    # The sign is REMOTE relative to LOCAL, which is what the docstring promises
+    # ("-1 remote is older ... 1 remote is newer"). Both branches below used to
+    # read `a` (local) against `b` (remote) and return as if they had compared the
+    # other way round, so a genuinely newer upstream reported "this checkout is
+    # ahead of upstream, nothing to pull" (auto-update silently dead for every
+    # install) and a genuinely OLDER upstream reported "remote is newer" and
+    # unpacked an older tarball over newer files, the exact data loss the banner
+    # above says this comparison exists to prevent. The two unparseable branches
+    # at the top of this function already had it right; only these two lines
+    # contradicted the spec written over them.
+    if a[:3] != b[:3]:
+        return -1 if a[:3] > b[:3] else 1
+    pa, pb = _pre_key(a[3]), _pre_key(b[3])
+    return 0 if pa == pb else (-1 if pa > pb else 1)
+
+
 def _http_get(url: str, timeout: float = 30.0) -> bytes:
     """The one seam every fetched byte comes through; the tests stub this."""
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -141,7 +221,7 @@ def load_state() -> dict:
     prefs = config.prefs()
     state = prefs.get("autoupdater", {})
     # Installs from the git era kept the last commit sha under last_commit;
-    # the version transport renamed the field — carry the old value across.
+    # the version transport renamed the field, carry the old value across.
     if "last_version" not in state and state.get("last_commit"):
         state["last_version"] = state["last_commit"]
     state.setdefault("enabled", True)
@@ -215,7 +295,7 @@ def _apply_archive(data: bytes, dry_run: bool) -> dict:
             digest = hashlib.sha256(payload).hexdigest()
             if local.exists():
                 if _file_hash(local) == digest:
-                    continue      # identical already — not an update
+                    continue      # identical already, not an update
                 entry = {"path": rel, "local_hash": (_file_hash(local) or "unreadable")[:16],
                          "remote_hash": digest[:16], "size": len(payload)}
                 if not dry_run:
@@ -253,7 +333,7 @@ async def check_for_updates() -> dict:
     local = _local_version()
     if not local:
         return {"ok": False,
-                "error": "no local VERSION file — this install predates version tracking"}
+                "error": "no local VERSION file, this install predates version tracking"}
     try:
         remote = (await _http_get_async(VERSION_URL)).decode("utf-8").strip()
     except Exception as e:
@@ -261,13 +341,27 @@ async def check_for_updates() -> dict:
     if not remote:
         return {"ok": False, "error": "the remote VERSION file is empty"}
 
-    if remote == local:
+    order = compare_versions(local, remote)
+    if order == 0:
         return {
             "ok": True,
             "update_available": False,
             "current_version": local,
             "latest_version": remote,
             "note": "Already up to date",
+        }
+    if order < 0:
+        # Upstream is BEHIND this checkout. The old equality test called this a
+        # difference and offered an update, which meant downloading an older
+        # tarball and unpacking it over newer files. Report the direction instead:
+        # a dev checkout that is ahead of the pushed branch is normal, and it
+        # deserves to be told so rather than "already up to date".
+        return {
+            "ok": True,
+            "update_available": False,
+            "current_version": local,
+            "latest_version": remote,
+            "note": f"this checkout ({local}) is ahead of upstream ({remote}), nothing to pull",
         }
 
     try:
@@ -292,18 +386,35 @@ async def check_for_updates() -> dict:
 async def pull_updates(dry_run: bool = False) -> dict:
     """Apply the update: download the tarball, unpack over the checkout.
 
-    One download per pull — the check's archive was enumerated, not kept.
+    One download per pull, the check's archive was enumerated, not kept.
     """
     local = _local_version()
     if not local:
         return {"ok": False,
-                "error": "no local VERSION file — this install predates version tracking"}
+                "error": "no local VERSION file, this install predates version tracking"}
     try:
         remote = (await _http_get_async(VERSION_URL)).decode("utf-8").strip()
     except Exception as e:
         return {"ok": False, "error": f"VERSION fetch failed: {e}"}
-    if not remote or remote == local:
+    if not remote:
+        # Honest, like the check's own empty-remote branch. Saying "Already up to
+        # date" about a VERSION file that came back blank is a claim about the
+        # remote the code has no evidence for: an empty body, a truncated fetch and
+        # a genuinely current checkout all looked the same, and only one of them is
+        # safe to act on. NOTE the local==remote path is a DIFFERENT branch (the
+        # `order == 0` below), and it is untouched: still "Already up to date",
+        # still ok=True. A test pins both.
+        return {"ok": False, "error": "the remote VERSION file is empty"}
+    # Ordered, like the check. Applying a version that is older than this checkout
+    # is the failure the equality test allowed, and `pull` is the path that writes
+    # files, so this is the one that actually cost someone their work.
+    order = compare_versions(local, remote)
+    if order == 0:
         return {"ok": True, "updated": False, "message": "Already up to date"}
+    if order < 0:
+        return {"ok": True, "updated": False,
+                "message": f"this checkout ({local}) is ahead of upstream "
+                           f"({remote}), nothing to pull"}
 
     try:
         data = await _http_get_async(TARBALL_URL)

@@ -65,7 +65,7 @@ def normalize_usage(usage: dict | None) -> dict:
         "total": _int(u.get("total")) or (inp + out),
         "cache_read": cache_read,
         "cache_write": _int(u.get("cache_write")),
-        "fresh": max(0, inp - cache_read) + out,
+        "fresh": max(0, inp, cache_read) + out,
     }
 
 
@@ -129,5 +129,5 @@ def dashboard(rec: dict, *, base_prompt_tokens: int = 0, tools: int = 0,
         "saved_total": accounted,
         "full_context_baseline": baseline,
         "actual_startup": actual,
-        "saved_by_discipline": max(0, baseline - actual),
+        "saved_by_discipline": max(0, baseline, actual),
     }

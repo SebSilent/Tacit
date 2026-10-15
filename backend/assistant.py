@@ -33,26 +33,112 @@ DEFAULTS = {
 
 PERSONA = """You are the Assistant, a second set of eyes beside a coding agent.
 
-The agent is doing the work. You help the person direct it. You can read the conversation between
-them, but you cannot change anything yourself. Your job is the work around the work: drafting
-prompts to give the agent, thinking an approach through, noticing what was missed, explaining what
-the agent just did.
+The agent is doing the work. You help the person direct it. You can see the full conversation
+history and can answer questions about it. Your job is the work around the work: drafting prompts
+to give the agent, thinking an approach through, noticing what was missed, explaining what the
+agent just did.
+
+What you may do beyond reading is stated in these instructions as a separate line, because it is
+a setting and not a property of you. Believe that line: it is written from what this conversation
+actually arms.
 
 The agent cannot see you. Nothing you say reaches it unless the person copies it across, so write
 for the person, not for the agent.
 
 Be direct and very brief: your pane is a narrow column, and a long answer is a lost answer.
-Answer in a few lines, not sections — no headings unless asked, no restating the problem, no
+Answer in a few lines, not sections, no headings unless asked, no restating the problem, no
 summary of what you just said. Format in Markdown, and put every command, snippet or
 prompt-to-paste inside a fenced code block with a language tag, because the interface gives
 fenced blocks a one-click copy button. If they ask for something to paste into the main chat,
 that block is the whole answer: no preamble before it, no commentary after.
 
 Your most useful output is the person's next prompt to the agent, so offer one when you can see
-the next step — but do not invent work. If the obvious next move is simply to let the agent carry
+the next step, but do not invent work. If the obvious next move is simply to let the agent carry
 on, answer with the single word `Continue` in a fenced block and nothing else. One word is a
 complete answer. If something specific is wrong or missing, say that instead, in the shortest
 form that works."""
+
+# The capability clause, and it is DERIVED rather than written into PERSONA.
+# `tools` is a per-session switch (DEFAULTS:29, off by default), and `run_turn`
+# arms the read-only set when it is on (assistant.py:500). So one fixed sentence
+# about what the Assistant may do is a false claim half the time, which is the
+# contradiction this replaced: the prompt said it could not act while the request
+# carried the tools that let it look. The house rule elsewhere in this project is
+# the same one applied here: a switch that writes is refused at the point of the
+# call, not merely hidden from the schema, and a tool that could only answer
+# "not enabled" is never put in front of the model. A promise the payload
+# contradicts is worse than no promise.
+CAPABILITY_OFF = """You cannot take actions. Nothing is armed for you in this
+conversation: no file reads, no searches, no commands, no delegation, nothing
+that changes state. Answer from the conversation history you can see, and when
+the honest answer is that you would have to look at something to know it, say
+that instead of guessing."""
+
+CAPABILITY_ON = """You may look, but you may not act. Your tools are read-only:
+you can read files, search them and fetch pages, and every switch that writes,
+editing, running commands, delegating, calling an external tool, is refused at
+the call itself. The conversation history is still your main material; reach for
+a tool when it is not enough, and say what you read rather than presenting it as
+if you knew it."""
+
+
+def persona_block(cfg: dict | None = None) -> str:
+    """PERSONA plus the capability clause that is true for this configuration.
+
+    One function, because two places need the same answer: `system_prompt` sends
+    it and `preview` prices it. Pricing a different string from the one that is
+    sent is exactly how a cost panel starts lying."""
+    cfg = cfg or dict(DEFAULTS)
+    return PERSONA + "\n\n" + (CAPABILITY_ON if cfg.get("tools") else CAPABILITY_OFF)
+
+
+# The conversational task contract, and it is gated on AUTONOMY rather than on
+# rec["mode"]. `mode` is "agent" or "chat" (store.py:53, config.py:253) and says
+# what the MAIN pane does; it is not a filter on what the Assistant's reply is
+# used for. What does decide that is the loop: when it is armed,
+# _autonomy_after_assistant (session_runtime.py:286) reads the LAST fenced block
+# out of the reply and hands it to the agent, and the same block is where the
+# stop word lives. A "plain prose, blocks only when asked" instruction applied
+# THERE would suppress the very block the handoff and the stop signal are parsed
+# from, so this block is added only when nobody is watching, and the autonomous
+# path keeps CYCLE_PROMPT and AUTONOMY_PERSONA exactly as they were.
+#
+# "Plain prose" is narrowed on purpose, not taken literally. It cannot mean "no
+# Markdown" (PERSONA:46 and the README's "It answers in Markdown" both say
+# otherwise) and it cannot mean "no code block" (that is the copy button). What
+# it means is: no staged handoff. The reconciliation is stated inside the block
+# so the model is not left to guess which of its instructions to drop.
+CHAT_TASK = """You are answering a person who is typing to you in this pane, now.
+
+Reply in plain prose: say the thing itself, in sentences, rather than staging it
+as a report or a handoff. No preamble about what you are about to do, no closing
+question asking permission to carry on, no headings unless the answer genuinely
+needs them. Markdown is still fine, this is about shape, not about markup.
+
+A fenced code block is still the only way a prompt reaches the agent, so write
+one when the person asks for a prompt, command or snippet to paste, and keep the
+two rules that make it usable: the block goes last, and it contains nothing but
+the text to paste. An answer with no block is not a failure here; it is the
+normal case."""
+
+
+def task_block(rec: dict) -> str:
+    """The half of the contract that depends on who is reading the reply."""
+    if autonomy_of(rec).get("enabled"):
+        return AUTONOMY_PERSONA
+    return CHAT_TASK
+
+
+def instruction_block(rec: dict, cfg: dict | None = None) -> str:
+    """Persona, capability clause and task contract, in the order they are sent.
+
+    One function for the same reason as persona_block: `system_prompt` sends this
+    and `preview` prices it, and the two must not be assembling different
+    strings. Everything below it (Goal, digest, project) is content, not
+    contract, and is already counted elsewhere."""
+    cfg = cfg or settings_of(rec)
+    return "\n\n".join([persona_block(cfg), task_block(rec)])
+
 
 # No preset list here. What the Assistant may be told to think with comes from the
 # model it is using, discovered and cached on that model: see backend/thinking.py.
@@ -106,8 +192,8 @@ def _tool_digest(m: dict) -> str:
     """One line per tool call behind an answer: name, key argument, outcome.
 
     "Explain what the agent just did" is one of the jobs this panel is for, and
-    prose alone cannot answer it. The digest is deliberately terse — a name and
-    the argument that identifies the target — because the full results are what
+    prose alone cannot answer it. The digest is deliberately terse, a name and
+    the argument that identifies the target, because the full results are what
     filled the agent's window in the first place.
     """
     rows = []
@@ -173,7 +259,14 @@ def preview(rec: dict, cfg: dict | None = None) -> dict:
     cfg = cfg or settings_of(rec)
     text = digest(rec, cfg)
     parts = {
-        "persona": tokens.estimate_tokens(PERSONA),
+        # Priced from instruction_block(rec, cfg), persona, capability clause and
+        # whichever task contract is live, not from PERSONA alone. The panel's key
+        # stays "persona" because assistant.js reads that name; what it now counts
+        # is the whole standing instruction, which is what is actually sent. The
+        # README's claim is that the price is shown before anything is sent, so the
+        # number has to be the number: a chat session and an autonomous one cost
+        # different amounts here and the panel should say so.
+        "persona": tokens.estimate_tokens(instruction_block(rec, cfg)),
         "session": tokens.estimate_tokens(text),
         "history": sum(tokens.estimate_tokens(m.get("content"))
                        for m in (rec.get("assistant") or [])),
@@ -203,11 +296,12 @@ def resolve_thinking(rec: dict, cfg: dict | None = None) -> str:
 def system_prompt(rec: dict, cfg: dict | None = None) -> str:
     cfg = cfg or settings_of(rec)
     body = digest(rec, cfg)
-    parts = [PERSONA]
-    # The contract changes when nobody is watching: in autonomous mode the
-    # reply IS the control signal, so the fenced block stops being a nicety.
-    if autonomy_of(rec).get("enabled"):
-        parts.append(AUTONOMY_PERSONA)
+    # Persona + capability clause + task contract, all derived. What the Assistant
+    # is told it MAY do comes from the same `cfg` that decides what the request
+    # arms; what it is told to PRODUCE comes from the same flag that decides who
+    # reads the reply. The two contradictions this replaces were both of one shape:
+    # a standing sentence about a setting. See persona_block and task_block.
+    parts = [instruction_block(rec, cfg)]
     goal = goal_of(rec)
     if goal:
         parts.append("The Goal the person set for this session, which you are "
@@ -217,8 +311,17 @@ def system_prompt(rec: dict, cfg: dict | None = None) -> str:
     else:
         parts.append("The session is empty so far.")
     if rec.get("project"):
-        parts.append(f"The working project is {rec['project']}. You may read files there, "
-                     f"but you cannot change anything.")
+        # The same derivation as the capability clause. With tools off this line
+        # used to say "You may read files there" while arming nothing at all, an
+        # invitation to describe a read the model cannot perform, and the second
+        # half of the contradiction this item is about.
+        if cfg["tools"]:
+            parts.append(f"The working project is {rec['project']}. You may read files there, "
+                         f"but you cannot change anything.")
+        else:
+            parts.append(f"The working project is {rec['project']}. It is named so you can "
+                         f"interpret the paths in the conversation, not because you can open "
+                         f"them: no tools are armed.")
     return "\n\n".join(parts)
 
 
@@ -291,8 +394,8 @@ DONE = "DONE"
 # The autonomous contract, and what it deliberately does NOT say. The reply used
 # to be required to end in a fenced block every single time, which made the
 # Assistant a prompt generator that never answered anything: a person asking it
-# a question got a code block back. It is still the Assistant — brief, talking
-# to the person — and the block is now an offer, not a tax. The one block that
+# a question got a code block back. It is still the Assistant, brief, talking
+# to the person, and the block is now an offer, not a tax. The one block that
 # must never be left out is DONE, because it is the only thing the harness reads
 # as a stop; prose saying "the goal is met" means nothing to the loop.
 AUTONOMY_PERSONA = """You are running autonomously: the person is not watching live, and the
@@ -301,7 +404,7 @@ your own pane, so stay brief and do not turn every reply into a prompt.
 
 Add a fenced code block only when the agent needs direction it would not otherwise have: the next
 step, a correction, something to stop doing. If the work is on course and the agent should simply
-carry on, say so in a line and leave the block out — the harness lets the run continue, and a run
+carry on, say so in a line and leave the block out, the harness lets the run continue, and a run
 that needs no steering does not need steering from you.
 
 One exception, and it is not optional: when the Goal is fully met, end with a fenced block holding
@@ -414,8 +517,8 @@ def goal_block(rec: dict) -> dict:
     it. The Goal belongs to the Assistant alone: the agent is told only whatever
     prompt the Assistant chose to write for it, so wiring this into a turn would
     be the leak, not a fix. It is kept because the Goal rides on the record
-    rather than in the transcript — a field survives compaction, a message does
-    not — and the cost of that standing block is worth being able to state.
+    rather than in the transcript, a field survives compaction, a message does
+    not, and the cost of that standing block is worth being able to state.
     """
     goal = goal_of(rec)
     if not goal:

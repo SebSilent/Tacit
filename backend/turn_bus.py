@@ -14,7 +14,7 @@ reply streaming beside a running turn never mixes with it.
 
 The buffer is emptied when the turn that produced it ends: from then on the
 transcript is in the session record, so a viewer arriving later is served by
-history, not by a replay that would double it. Subscribers are kept — they are
+history, not by a replay that would double it. Subscribers are kept, they are
 the session's open windows, not the turn's property. A bus nobody is watching
 is dropped entirely, so an idle session costs nothing.
 """
@@ -31,7 +31,7 @@ BUFFER_MAX = 2000
 
 # A live subscriber that stops draining (a stalled socket) must not grow its
 # queue without limit. When it is full, new events are dropped for that
-# viewer only — the buffer still has them, and the viewer's next fresh socket
+# viewer only, the buffer still has them, and the viewer's next fresh socket
 # replays them.
 SUBQUEUE_MAX = 600
 
@@ -39,7 +39,7 @@ SUBQUEUE_MAX = 600
 # that connects mid-plan replays the plan's own events, and a second turn on the
 # same session continues the same stream rather than starting a private one.
 # "plan" is the third because plan mode is now session-owned work like the other
-# two — it runs in a thread that outlives the socket that started it, so it needs
+# two, it runs in a thread that outlives the socket that started it, so it needs
 # a buffer to be handed to whoever is watching next.
 CHANNELS = ("turn", "assistant", "plan")
 
@@ -65,7 +65,7 @@ class TurnBus:
     def publish(self, ev: dict) -> None:
         """One event into the buffer and out to every live subscriber.
 
-        Called from the turn's driver thread, so subscriber queues — asyncio
+        Called from the turn's driver thread, so subscriber queues, asyncio
         objects — are fed through ``call_soon_threadsafe``. A dead loop drops
         the event for everyone rather than raising into the turn.
         """
@@ -78,7 +78,7 @@ class TurnBus:
         for q in subs:
             try:
                 loop.call_soon_threadsafe(q.put_nowait, dict(ev))
-            except Exception:  # noqa: BLE001 — a closed loop is a dead viewer
+            except Exception:  # noqa: BLE001, a closed loop is a dead viewer
                 pass
 
     def subscribe(self) -> tuple[list[dict], asyncio.Queue]:
@@ -115,7 +115,7 @@ def start(sid: str, loop: asyncio.AbstractEventLoop | None,
 
     Called before the session is marked busy, so any viewer that can observe
     busy can also subscribe to the turn behind it. Existing subscribers are
-    kept — they are the session's open windows, and they simply start
+    kept, they are the session's open windows, and they simply start
     receiving the new turn's events.
     """
     key = _key(sid, channel)
@@ -157,7 +157,7 @@ def subscribe(sid: str, loop: asyncio.AbstractEventLoop | None = None,
               channel: str = "turn") -> tuple[list[dict], asyncio.Queue]:
     """Join the session's stream: (replay, live queue). Never None.
 
-    The stream exists whether or not a turn is running — an empty replay just
+    The stream exists whether or not a turn is running, an empty replay just
     means the viewer is served by the transcript in the session record. This
     is the property that makes the socket irrelevant: a window that opens at
     any moment, on any device, is caught up exactly once, from the buffer.
@@ -191,7 +191,7 @@ def finish(sid: str, channel: str = "turn") -> None:
     """The turn is over: empty the buffer, mark the stream idle, keep the
     subscribers.
 
-    A viewer arriving now is served by the transcript in the session record —
+    A viewer arriving now is served by the transcript in the session record,
     an empty replay is what keeps a replay from ever doubling onto it. A bus
     nobody is watching is dropped entirely: the next turn or the next viewer
     makes a fresh one, and an idle session is left holding nothing.

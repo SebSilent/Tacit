@@ -29,7 +29,7 @@
 
   // Every action handler in this file used to call toast() with no such
   // function in scope: the POST went through, then the handler threw, the
-  // panel never re-rendered, and no feedback appeared — which read as
+  // panel never re-rendered, and no feedback appeared, which read as
   // "the buttons do nothing". app.js's toast lives inside its closure; this
   // reaches the same one over the bridge, and falls back to the note line.
   function toast(text, isErr) {
@@ -44,8 +44,8 @@
   //
   // `general` is deliberately NOT in this list. index.html already declares that
   // button (and marks it active), so listing it here appended a *second* General
-  // after the core four — General / Providers / Skills & Tools / Appearance /
-  // General — plus a second element with id="panel-general", a hidden twin of
+  // after the core four, General / Providers / Skills & Tools / Appearance /
+  // General, plus a second element with id="panel-general", a hidden twin of
   // the one the panel actually shows. It belongs in CORE instead: a tab whose
   // button the markup owns and whose content this file renders.
   const TABS = [
@@ -85,7 +85,7 @@
     const tabs = $('#hoTabs');
     // By id, not by class: the snapshots overlay also has a .ho-body, and it
     // sits earlier in the document, so a class query landed every dynamic
-    // tab panel inside that hidden overlay — the tabs clicked, the renderers
+    // tab panel inside that hidden overlay, the tabs clicked, the renderers
     // ran, and nothing appeared from Profile to Plugins.
     const body = $('#hoBody');
     if (!tabs || !body) return;
@@ -105,7 +105,7 @@
       const btn = e.target.closest('.ho-tab');
       if (!btn) return;
       // harness.js already shows and hides the panels by data-tab; this only
-      // renders the content, for the tabs this file knows how to draw — the
+      // renders the content, for the tabs this file knows how to draw, the
       // ones it added, and the core ones it renders (general).
       const id = btn.dataset.tab;
       if (!TABS.some((t) => t.id === id) && !CORE.includes(id)) return;
@@ -149,8 +149,8 @@
 
   // ── General ────────────────────────────────────────────────────────────
   // Was "Profile": the selector and nothing else. Item 6 moves the sections
-  // that lived in the harness's Skills & Tools tab into it — Permissions,
-  // Server, Auto-Updater — so each setting has one home. The token tables
+  // that lived in the harness's Skills & Tools tab into it, Permissions,
+  // Server, Auto-Updater, so each setting has one home. The token tables
   // that once sat under this tab were removed at the operator's request: the
   // numbers live in the backend's own accounting, and the tab's job is to
   // choose a bundle, not to report on it.
@@ -171,15 +171,15 @@
     ]);
 
     // A restart that failed leaves no server standing to report it, so the watcher
-    // writes the outcome to disk and whichever server comes back — including one a
-    // person started by hand — hands it over. the deleted plan item 4: failure has to surface
+    // writes the outcome to disk and whichever server comes back, including one a
+    // person started by hand, hands it over. the deleted plan item 4: failure has to surface
     // here, not only in a restart.log nobody opens.
     const lr = (srv || {}).last_restart;
     const byHand = lr && lr.cmd && lr.cmd.length
       ? esc(lr.cmd.join(' '))
       : ((navigator.userAgent || '').includes('Windows') ? 'run.bat' : './run.sh');
     const restartWarn = lr && lr.state === 'failed'
-      ? `<p class="hint err">restart failed (${esc(lr.stage || 'unknown stage')}) — `
+      ? `<p class="hint err">restart failed (${esc(lr.stage || 'unknown stage')}), `
         + `${esc(lr.detail || 'the replacement server never came up')}. Start Tacit by hand with `
         + `<code>${byHand}</code>, then read <code>~/.tacit/restart.log</code>.</p>`
       : '';
@@ -203,7 +203,7 @@
     const lastUpdate = (au || {}).last_update ? new Date(au.last_update * 1000).toLocaleString() : 'never';
     const version = (au || {}).last_version ? String(au.last_version) : '';
     // The checkout's own version, from the same VERSION file the updater reads.
-    // It belongs beside the remote comparison: "Up to date — version X" means
+    // It belongs beside the remote comparison: "Up to date, version X" means
     // nothing until you can see which X it is talking about.
     const localVersion = (au || {}).local_version ? String(au.local_version) : '';
 
@@ -240,7 +240,7 @@
       <div class="ho-section">Interface</div>
       <div class="tool-row ${sndOn ? '' : 'off'}" data-perm="turn-sound">
         <span class="tool-name">Turn-end sound</span>
-        <span class="tool-desc">On by default. A short two-note chime when a turn finishes — a
+        <span class="tool-desc">On by default. A short two-note chime when a turn finishes, a
           rising pair for a finished turn, a lower one for a turn that ended on an error. It
           plays whether or not this tab is in front of you, which is the whole point. Stored
           on the server, so every device pointed at this install agrees.</span>
@@ -253,7 +253,7 @@
         <span class="tool-desc">Off by default. Two chimes that fire while work is still
           running: a drop in pitch when the token budget warning triggers, and one soft tick
           each time an autonomous cycle starts. Separate from the turn-end chime because these
-          repeat on their own — a loop left running for hours would otherwise make a noise every
+          repeat on their own - a loop left running for hours would otherwise make a noise every
           cycle whether or not anyone is listening. Also stored on the server.</span>
         <button class="tgl ${alertOn ? 'on' : ''}" data-act="toggle-alert-sound" role="switch" aria-checked="${alertOn}" title="${alertOn ? 'Disable' : 'Enable'}">
           <span class="tgl-knob"></span>
@@ -262,7 +262,7 @@
 
       <div class="tool-row" data-perm="chime-audition">
         <span class="tool-name">Chime audition</span>
-        <span class="tool-desc">Plays all four — finished, error, budget warning, cycle tick — past
+        <span class="tool-desc">Plays all four (finished, error, budget warning, cycle tick) past
           both switches, so you hear what the two toggles above actually control. The pitches were
           separated by contour and register rather than by ear, and nobody has listened since.</span>
         <button class="ho-btn small" id="chimePreviewBtn">Hear them</button>
@@ -272,7 +272,7 @@
         <span class="tool-name">Transcript density</span>
         <span class="tool-desc">How much vertical room the transcript gives its rows.
           Compact fits more of a turn on screen; roomy is easier to read for long.
-          Applies to this browser only — it is a view preference, not part of the session,
+          Applies to this browser only - it is a view preference, not part of the session,
           so a fork or reload of the same session keeps your choice and nothing about the
           transcript changes.</span>
         <div class="seg" id="densitySeg">
@@ -285,7 +285,7 @@
       <div class="ho-section">Server</div>
       <div class="tool-row" data-perm="restart">
         <span class="tool-name">Restart</span>
-        <span class="tool-desc">${srv ? `listening on ${esc(srv.host)}:${esc(srv.port)} · pid ${esc(srv.pid)}` : `status unavailable — if a restart did not bring the server back, start it by hand with <code>${byHand}</code>`}.
+        <span class="tool-desc">${srv ? `listening on ${esc(srv.host)}:${esc(srv.port)} · pid ${esc(srv.pid)}` : `status unavailable, if a restart did not bring the server back, start it by hand with <code>${byHand}</code>`}.
           Stop this process and start a fresh one on the same port. The browser reconnects on its own;
           a turn that is running is cut off.</span>
         <button class="ho-btn small danger" id="srvRestartBtn">Restart</button>
@@ -294,8 +294,8 @@
       <div class="tool-row" data-perm="mcp-helpers">
         <span class="tool-name">MCP helper tools</span>
         <span class="tool-desc">${(srv || {}).mcp_servers
-          ? `offered to the agent — ${esc(srv.mcp_servers)} server(s) configured. With none configured the four helper schemas are hidden from the model automatically.`
-          : 'hidden — no MCP server configured. The four helper schemas (mcp_list_servers, mcp_search_tools, mcp_activate_tools, mcp_call) cost nothing and appear automatically the moment a server is added in the MCP tab.'}</span>
+          ? `offered to the agent - ${esc(srv.mcp_servers)} server(s) configured. With none configured the four helper schemas are hidden from the model automatically.`
+          : 'hidden - no MCP server configured. The four helper schemas (mcp_list_servers, mcp_search_tools, mcp_activate_tools, mcp_call) cost nothing and appear automatically the moment a server is added in the MCP tab.'}</span>
         <span class="badge ${(srv || {}).mcp_servers ? 'on' : ''}">${(srv || {}).mcp_servers ? 'on' : 'off'}</span>
       </div>
       <div class="ho-section">Tacit processes <span class="ho-count">${(procs.processes || []).length}</span></div>
@@ -309,7 +309,7 @@
       <div class="tool-row ${auOn ? '' : 'off'}" data-perm="autoupdater-enabled">
         <span class="tool-name">Auto-updater</span>
         <span class="tool-desc">On by default. Checks GitHub for new commits every hour and can pull
-          changed files automatically. Tacit has no releases — every push is an update.
+          changed files automatically. Tacit has no releases - every push is an update.
           ${localVersion ? `This checkout: <code>${esc(localVersion)}</code>.`
             : 'This install has no VERSION file, so it predates version tracking.'}</span>
         <button class="tgl ${auOn ? 'on' : ''}" data-act="toggle-au" role="switch" aria-checked="${auOn}" title="${auOn ? 'Disable' : 'Enable'}">
@@ -412,7 +412,7 @@
 
     // The audition plays past both switches on purpose: you clicked to hear the
     // sound, so answering the click with silence would be the one useless result.
-    // It also needs a gesture — a page that has never been clicked starts its
+    // It also needs a gesture, a page that has never been clicked starts its
     // AudioContext suspended, and this button is that first click.
     const chimeBtn = panel.querySelector('#chimePreviewBtn');
     if (chimeBtn) chimeBtn.addEventListener('click', () => {
@@ -442,7 +442,7 @@
       note('restarting the server…');
       const r = await post('/api/server/restart', {});
       if (!r.ok) { note(r.error || 'restart failed', true); return; }
-      note('server is restarting — reconnecting…');
+      note('server is restarting, reconnecting…');
     });
 
     panel.querySelector('[data-act="toggle-au"]').addEventListener('click', async e => {
@@ -469,18 +469,18 @@
       btn.textContent = 'Check now';
       if (!r.ok) { note(r.error || 'Check failed', true); return; }
       // Both sides of the comparison, or the sentence is unfalsifiable: "Up to
-      // date — version 2026-10-09" told you nothing about what this checkout is.
+      // date, version 2026-10-09" told you nothing about what this checkout is.
       const local = localVersion || 'unknown';
       if (r.update_available) {
-        note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s) — ${r.note}`);
+        note(`Update available: ${r.changed_count} changed, ${r.new_count} new file(s), ${r.note}`);
         pullRow.hidden = false;
         statusRow.hidden = false;
-        statusText.textContent = `Local ${local} — behind by ${r.changed_count + r.new_count} file(s), remote version ${r.latest_version}`;
+        statusText.textContent = `Local ${local}, behind by ${r.changed_count + r.new_count} file(s), remote version ${r.latest_version}`;
       } else {
         note('Already up to date');
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Local ${local} — up to date, remote version ${r.latest_version}`;
+        statusText.textContent = `Local ${local}, up to date, remote version ${r.latest_version}`;
       }
     });
 
@@ -498,15 +498,15 @@
       btn.textContent = 'Pull updates';
       if (!r.ok) { note(r.error || 'Pull failed', true); return; }
       if (r.updated) {
-        note(r.message + ' — restart the server to apply');
+        note(r.message + ', restart the server to apply');
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Updated to ${r.version} — restart to apply`;
+        statusText.textContent = `Updated to ${r.version}, restart to apply`;
       } else {
         note(r.message);
         pullRow.hidden = true;
         statusRow.hidden = false;
-        statusText.textContent = `Up to date — version ${r.version}`;
+        statusText.textContent = `Up to date, version ${r.version}`;
       }
     });
 
@@ -544,7 +544,7 @@
       const why = !row.available ? (row.reason || 'unavailable')
         : (!row.implemented ? 'no adapter yet' : '');
       return `<option value="${esc(row.id)}"${row.id === chosen ? ' selected' : ''}` +
-        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' — ' + esc(why)}</option>`;
+        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' - ' + esc(why)}</option>`;
     };
     const kind = (k) => (c.providers || []).filter((p) => p.kind === k);
 
@@ -602,7 +602,7 @@
       <div class="ho-section">Gateways <span class="ho-sub sm">hand a task to another program</span></div>
       <div class="mcp-add">
         <select class="git-select" id="capGateway">
-          ${(gw.gateways || []).map((g) => `<option value="${esc(g.id)}"${g.id === gw.selected ? ' selected' : ''}${g.available ? '' : ' disabled'}>${esc(g.name)}${g.available ? '' : ' — unavailable'}</option>`).join('')}
+          ${(gw.gateways || []).map((g) => `<option value="${esc(g.id)}"${g.id === gw.selected ? ' selected' : ''}${g.available ? '' : ' disabled'}>${esc(g.name)}${g.available ? '' : ', unavailable'}</option>`).join('')}
         </select>
         <button class="ho-btn small primary" id="capGatewaySelect">Select</button>
       </div>
@@ -631,7 +631,7 @@
       <div class="tok-table">
         ${(dp.groups || []).map((g) => {
           // A group can fail its probe with nothing missing from the binary
-          // list — node present, playwright never installed — so "needs" with
+          // list (node present, playwright never installed) so "needs" with
           // an empty list and a missing[0] that is undefined both have to go.
           const need = (g.missing || []).map((m) => m.binary).join(', ');
           const hint = g.satisfied ? (g.probe || g.note)
@@ -809,7 +809,7 @@
         <input class="mcp-in" id="mcpEnv" placeholder="env KEY=VALUE, space separated (optional)" spellcheck="false">
         <button class="ho-btn primary" id="mcpAdd">Add</button>
       </div>
-      <div class="ho-sub sm">Nothing is installed or launched by adding a server — it starts disabled.</div>
+      <div class="ho-sub sm">Nothing is installed or launched by adding a server, it starts disabled.</div>
       <div class="mcp-add">
         <input class="mcp-in" id="mcpHttpUrl" placeholder="…or an HTTP endpoint (https://host/mcp)" spellcheck="false">
         <button class="ho-btn" id="mcpAddHttp">Add HTTP server</button>
@@ -886,7 +886,7 @@
         if (i > 0) env[pair.slice(0, i)] = pair.slice(i + 1);
       });
       const r = await post('/api/mcp/servers', { name: name || command, command, args, env });
-      note(r.ok ? `added "${r.server.id}" (disabled) — enable and Re-scan to discover tools` : (r.error || 'add failed'), !r.ok);
+      note(r.ok ? `added "${r.server.id}" (disabled), enable and Re-scan to discover tools` : (r.error || 'add failed'), !r.ok);
       if (r.ok) renderMcp();
     });
 
@@ -902,7 +902,7 @@
   // ── Learning ──────────────────────────────────────────────────────────
   // Moved out of Capabilities: the mode selector, the analyzer, and the
   // proposals with their actions. The buttons were wired correctly all along
-  // — the missing toast() above them is what made every action look dead.
+  //, the missing toast() above them is what made every action look dead.
   async function renderLearning() {
     const panel = $('#panel-learning');
     panel.innerHTML = '<div class="ho-loading">Loading learning…</div>';
@@ -915,13 +915,13 @@
       const why = !row.available ? (row.reason || 'unavailable')
         : (!row.implemented ? 'no adapter yet' : '');
       return `<option value="${esc(row.id)}"${row.id === chosen ? ' selected' : ''}` +
-        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' — ' + esc(why)}</option>`;
+        `${usable ? '' : ' disabled'}>${esc(row.name)}${usable ? '' : ' - ' + esc(why)}</option>`;
     };
 
     // A proposal is only judgeable if the person can check it against the turns
     // it claims to come from, so new artifacts carry that evidence and the queue
     // shows it. Proposals written before this change carry only the older
-    // snippet/turn pair, which still renders — as one quote, labelled as less.
+    // snippet/turn pair, which still renders, as one quote, labelled as less.
     const propEvidence = (p) => {
       const pr = p.provenance || {};
       const ev = (pr.evidence || []).filter((e) => e && e.quote);
@@ -934,7 +934,7 @@
       }
       if (pr.snippet) {
         return `<span class="ho-sub sm prop-ev">you said: “${esc(String(pr.snippet).slice(0, 100))}”` +
-          `${pr.turn === undefined ? '' : ` (turn ${esc(pr.turn)})`} — ` +
+          `${pr.turn === undefined ? '' : ` (turn ${esc(pr.turn)})`} - ` +
           `no turn evidence stored for this one</span>`;
       }
       return '';
@@ -1087,7 +1087,7 @@
         <span class="ho-sub">${rows.length} snapshot(s) · ${esc(fmt(d.bytes))} bytes · target workspace: <code>${esc(project || '(none selected)')}</code></span>
         <button class="ho-btn small" id="snRefresh">Refresh</button>
       </div>
-      ${project ? '' : '<div class="ho-err">Pick a workspace first — restoring needs a target.</div>'}
+      ${project ? '' : '<div class="ho-err">Pick a workspace first, restoring needs a target.</div>'}
       ${rows.length === 0 && unfiled ? `<div class="ho-sub sm">${unfiled} earlier snapshot(s) predate per-session tracking and are not listed here.</div>` : ''}
       <div class="snap-list">
         ${rows.map((s) => `
@@ -1104,7 +1104,7 @@
               <button class="ho-btn small" data-act="restore">Restore</button>
             </div>
             <div class="snap-extra" hidden></div>
-          </div>`).join('') || '<div class="ho-empty sm">No snapshots in this session yet — the agent takes one automatically before its first edit of a turn.</div>'}
+          </div>`).join('') || '<div class="ho-empty sm">No snapshots in this session yet, the agent takes one automatically before its first edit of a turn.</div>'}
       </div>`;
 
     $('#snRefresh').addEventListener('click', renderSnapshots);
@@ -1143,6 +1143,27 @@
     ov.hidden = false;
     renderSnapshots();
   }
+
+  // Reached from the transcript: the control on the message that caused a snapshot
+  // opens this session's overlay, scrolls to that card and runs its Compare, so
+  // "what did that turn nearly break" is one click instead of a hunt through a
+  // list. The card is matched by its dataset rather than by a selector built from
+  // the name, so a snapshot name can never become markup.
+  async function openSnapshot(name) {
+    const ov = $('#snapOverlay');
+    if (!ov) return;
+    ov.hidden = false;
+    await renderSnapshots();
+    const box = $('#snapList');
+    if (!box) return;
+    const want = String(name || '');
+    const card = Array.from(box.querySelectorAll('.snap-card'))
+      .find((c) => c.dataset.name === want);
+    if (!card) return;
+    card.scrollIntoView({ block: 'center' });
+    const btn = card.querySelector('[data-act="compare"]');
+    if (btn) btn.click();
+  }
   function closeSnapshots() {
     const ov = $('#snapOverlay');
     if (ov) ov.hidden = true;
@@ -1163,7 +1184,7 @@
     const rows = d.memories || [];
     const rep = c.memory_report || {};
     // resolve() returns the selection's id and the registry row under
-    // `provider` — the human name lives on the row, not on the selection.
+    // `provider`, the human name lives on the row, not on the selection.
     const memId = (c.memory || {}).id || 'off';
     const memName = ((c.memory || {}).provider || {}).name || memId;
     const memOptions = (c.providers || []).filter((p) => p.kind === 'memory');
@@ -1208,7 +1229,7 @@
         <div class="tok-row"><span class="tok-label">All memories if injected</span><span class="tok-value">${esc(fmt(st.total_tokens))}</span><span class="tok-hint">the cost the budget avoids</span></div>
       </div>
       <div class="ho-section">Startup block preview</div>
-      <pre class="mem-preview">${esc(startup.text || (startup.mode === 'off' ? 'Memory is off — nothing is injected.' : '(nothing fits the budget yet)'))}</pre>
+      <pre class="mem-preview">${esc(startup.text || (startup.mode === 'off' ? 'Memory is off, nothing is injected.' : '(nothing fits the budget yet)'))}</pre>
       <div class="ho-section">Add a memory</div>
       <div class="mcp-add">
         <input class="mcp-in" id="memContent" placeholder="a durable fact, preference or decision" spellcheck="false">
@@ -1229,7 +1250,7 @@
       if (!r.ok) { note(r.error || 'could not save that', true); return; }
       const savedBudget = parseInt($('#memBudget').value, 10) || 0;
       note(`memory set to ${r.memory.id}` +
-           (r.memory.id === 'off' ? ' — nothing is injected and the agent gets no memory tools'
+           (r.memory.id === 'off' ? ', nothing is injected and the agent gets no memory tools'
             : ` · ${savedBudget}-token budget`));
       renderMemory();
     });
@@ -1253,7 +1274,7 @@
       if (!r.candidates.length) { note('no candidates proposed'); return; }
       const box = document.createElement('div');
       box.className = 'mem-candidates';
-      box.innerHTML = '<div class="ho-section">Proposed — approve or skip</div>' +
+      box.innerHTML = '<div class="ho-section">Proposed, approve or skip</div>' +
         r.candidates.map((c, i) => `
           <div class="mem-cand" data-i="${i}">
             <span class="badge">${esc(c.type)}</span>
@@ -1287,7 +1308,7 @@
       const box = document.createElement('div');
       box.className = 'mem-candidates';
       box.innerHTML =
-        `<div class="ho-section">Session summary — ${esc(preview.display)} tokens</div>` +
+        `<div class="ho-section">Session summary, ${esc(preview.display)} tokens</div>` +
         `<pre class="mem-preview">${esc(preview.summary)}</pre>` +
         `<div class="mcp-add">
            <input class="mcp-in sm" id="mvSumTtl" type="number" min="0" placeholder="ttl days">
@@ -1311,7 +1332,7 @@
       const preview = await post('/api/memory/compress', { apply: false });
       if (!preview.ok) { note(preview.error || 'compress failed', true); return; }
       const html = `
-        <div class="ho-section">Compression preview — ${esc(preview.before_display)} → ${esc(preview.after_display)} (saves ${esc(preview.saved_display)})</div>
+        <div class="ho-section">Compression preview, ${esc(preview.before_display)} → ${esc(preview.after_display)} (saves ${esc(preview.saved_display)})</div>
         <pre class="mem-preview">${esc(preview.after)}</pre>
         <div class="ho-toolbar">
           <span class="ho-sub">Nothing is changed until you apply it.</span>
@@ -1325,7 +1346,7 @@
       $('#memCancel').addEventListener('click', () => box.remove());
       $('#memApply').addEventListener('click', async () => {
         const applied = await post('/api/memory/compress', { apply: true });
-        note(applied.ok ? `applied — saved ${applied.saved_display}` : (applied.error || 'failed'), !applied.ok);
+        note(applied.ok ? `applied, saved ${applied.saved_display}` : (applied.error || 'failed'), !applied.ok);
         box.remove();
         renderMemory();
       });
@@ -1437,5 +1458,5 @@
   }
 
   install();
-  window.TacitPlatform = { render, openSnapshots };
+  window.TacitPlatform = { render, openSnapshots, openSnapshot };
 })();

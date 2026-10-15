@@ -109,7 +109,7 @@ def verify(names) -> str:
 
 
 # Ordered in the middle of a turn, not offered at the end of one. Every zero-artifact cell in the
-# hard set - feal t2 at 16 turns, schemelike t3 at 34 - ran out of turn while still investigating,
+# hard set, feal t2 at 16 turns, schemelike t3 at 34, ran out of turn while still investigating,
 # and a phase that only fires when the model chooses to stop never reaches them.
 _DEMAND = ("{used} of this turn is spent and the file the task names is still not on disk: "
            "{names}. Nothing else in this turn is graded. Put it on disk now with write_file "
@@ -130,7 +130,7 @@ def demand(names, used="", nth=1) -> str:
 # allowance, so the last two minutes are the difference between a file that exists and a turn that
 # gets abandoned mid-sentence.
 LATE_S = 420
-# One salvage round, not three - but it has to be reachable. At 120s the guard never fired in
+# One salvage round, not three, but it has to be reachable. At 120s the guard never fired in
 # practice: a step costs 30-90s and the kill lands mid-step, so feal trial 1 of s2 died at 1,081s
 # with `attack.py does not exist` and no delivery attempted. 300s is the smallest window in which
 # one write plus one run can actually complete before the clock.
@@ -138,7 +138,7 @@ EMERGENCY_S = 300
 
 _TIME = ("{left}s of wall-clock budget remain for this task, and at zero the run is killed "
          "mid-sentence with nothing graded. Stop probing and stop verifying. If the deliverable "
-         "is not on disk yet, write it now from what you already know - a rough file that exists "
+         "is not on disk yet, write it now from what you already know, a rough file that exists "
          "outscores a plan that never landed.")
 
 
@@ -263,14 +263,14 @@ def nudge() -> str:
 # calls against 44 read_file, 29 greps against 10 grep_files, 11 `dir` against 1
 # list_files.
 #
-# This table is the whole vocabulary — verb to (tool, why the tool is the better
+# This table is the whole vocabulary, verb to (tool, why the tool is the better
 # call). `overlap()` decides whether a command is *only* that, which is the
 # condition for refusing it before it runs rather than commenting afterwards.
 # The old `_dump_hint` in agent.py is the seed of this table and now reads its
 # mapping from here, so there is one vocabulary and two consumers.
 #
 # Three things disqualify a command from any advice at all, because guessing here
-# is worse than silence — a refusal that blocks real work teaches the model to
+# is worse than silence, a refusal that blocks real work teaches the model to
 # distrust the tool list, and I hit the first one myself while testing:
 #   • a pipe. `python -m unittest 2>&1 | findstr OK` filters a *stream*; findstr
 #     is reading stdin, and no tool composes stages. Refusing it loses the test run.
@@ -399,7 +399,7 @@ def _verb_of(words: list[str]) -> tuple[int, str]:
 
 
 def _segment_overlap(command: str) -> dict | None:
-    """One command, classified — or None if it is not an overlap *at all*.
+    """One command, classified, or None if it is not an overlap *at all*.
 
     Returning None rather than a non-intercepting hit matters: a command the tool
     cannot do is not a worse version of a tool, and a note about it is noise that
@@ -466,7 +466,7 @@ def overlap(cmd: str) -> dict | None:
     `tools`, `verbs` and `pure`. `pure` is the condition for refusing before the
     command runs: *every* command is an overlap, every one of them blockable, and
     one tool would do the whole job. `dir && python build.py` is a real command
-    that happens to contain an overlap and gets a note instead of a refusal — the
+    that happens to contain an overlap and gets a note instead of a refusal, the
     trap is refusing half a chain and losing the half that mattered.
     """
     raw = str(cmd or "").strip()
@@ -522,7 +522,7 @@ def overlap_note(hit: dict) -> str:
     one line: this is the injection path, and an unbounded note on every shell
     result is the standing-prompt bloat the README says guidance exists to avoid.
     """
-    parts = "; ".join(f"`{h['verb']}` is what {h['tool']} does — {h['why']}" for h in hit["hits"][:2])
+    parts = "; ".join(f"`{h['verb']}` is what {h['tool']} does, {h['why']}" for h in hit["hits"][:2])
     if not parts:
         return ""
     return _clip("\n[overlap] " + parts + ". (Shell overlap=off silences this.)")

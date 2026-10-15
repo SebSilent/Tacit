@@ -43,7 +43,7 @@ def _ask(ref: str | None, effort: str | None, tokens: int = PROBE_TOKENS) -> dic
 
     Deliberately bypasses engine.stream_chat: that applies the clamp this feeds, so
     probing through it would test the clamp instead of the endpoint. The effort name
-    travels under the key the provider listens to — some (Ollama's OpenAI-compatible
+    travels under the key the provider listens to, some (Ollama's OpenAI-compatible
     endpoint) ignore reasoning_effort entirely and only read `thinking`, which is the
     same mapping engine._payload applies, so the probe exercises the name the real
     call would send rather than a field the endpoint discards.
@@ -276,7 +276,7 @@ def send(ref: str | None, level: str | None) -> str | None:
     # ollama_cloud/kimi-k2.7-code: thinking="medium" came back with 297 reasoning characters,
     # while sending nothing at all came back with 399. The endpoint accepts a word it does not
     # support and thinks LESS for it. So on a boolean switch any level above off is the switch
-    # being on - which is what the card's own thinkingDefault already says it does.
+    # being on, which is what the card's own thinkingDefault already says it does.
     if values(ref) and not allowed:
         return True
     if level == "on":

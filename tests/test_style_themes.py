@@ -437,5 +437,65 @@ class TestOnAccentContrast(unittest.TestCase):
                         "a rule putting --on-accent on --err went unnoticed")
 
 
+class TestThemeGrouping(unittest.TestCase):
+    """The Appearance panel groups its twenty cards by tone. That only works while
+    `tone` is a fact about the theme rather than an opinion about it, so it is read
+    back out of the theme block's own `color-scheme` -- the property the browser uses
+    to pick form-control and scrollbar colours. A hand-written label that drifts from
+    it would make the picker confidently wrong, which is worse than not labelling."""
+
+    ENTRY = re.compile(r"\{ id: '([\w-]+)',.*?tone: '(\w+)'", re.S)
+
+    def registry(self):
+        block = APP[APP.index("const THEMES = ["):]
+        return self.ENTRY.findall(block[:block.index("\n];")])
+
+    def test_tone_is_the_blocks_own_color_scheme(self):
+        th = themes()
+        got = self.registry()
+        self.assertEqual(len(got), THEME_COUNT, "the registry did not parse")
+        for tid, tone in got:
+            self.assertIn(tone, ("dark", "light"), f"{tid}: tone {tone!r}")
+            self.assertEqual(th[tid].get("color-scheme"), tone,
+                             f"{tid}: picker says {tone!r}, the stylesheet says "
+                             f"{th[tid].get('color-scheme')!r}")
+
+    def test_the_groups_are_contiguous_and_dark_first(self):
+        tones = [t for _, t in self.registry()]
+        self.assertEqual(tones, sorted(tones, key=["dark", "light"].index),
+                         "the two groups interleave -- the panel renders one list "
+                         "in the registry's order, so a scattered registry is a "
+                         "scattered picker")
+        self.assertEqual(tones.count("dark") + tones.count("light"), len(tones))
+
+    def test_css_blocks_follow_the_registry(self):
+        """Order is irrelevant to the cascade here (the selectors are mutually
+        exclusive) and entirely relevant to a reader comparing the two files."""
+        self.assertEqual(list(themes()), [i for i, _ in self.registry()],
+                         "style.css and app.js list the themes in different orders")
+
+    def test_the_panel_renders_a_group_per_tone(self):
+        HARNESS = (ROOT / "static" / "harness.js").read_text(encoding="utf-8")
+        for frag in ("theme-group", "theme-group-label", "theme-group-count",
+                     "t.tone"):
+            self.assertIn(frag, HARNESS, f"harness.js no longer references {frag}")
+        for sel in (".theme-group", ".theme-group-label", ".theme-group-count"):
+            self.assertIn(sel + " ", CSS, f"{sel} is referenced but never styled")
+
+    def test_the_guards_can_fail(self):
+        reg = self.registry()
+        self.assertTrue(reg, "premise: the registry parses")
+        # a light theme mislabelled dark is the exact drift this exists to catch, and
+        # the comparison only works because the two answers are distinguishable
+        th = themes()
+        tid, tone = reg[0]
+        flipped = "light" if tone == "dark" else "dark"
+        self.assertNotEqual(th[tid].get("color-scheme"), flipped,
+                            "premise: tone-vs-color-scheme can actually disagree")
+        # and the contiguity guard has something to bite on
+        mixed = ["dark", "light", "dark"]
+        self.assertNotEqual(mixed, sorted(mixed, key=["dark", "light"].index))
+
+
 if __name__ == "__main__":
     unittest.main()

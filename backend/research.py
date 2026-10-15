@@ -4,7 +4,7 @@ Three things used to make this tool feel broken, none of them the report:
 
 1. Aspect activity was appended to a plain list and drained *after* every
    ``t.join()``, so minutes of sub-agent work arrived in one burst at the end of
-   the aspect phase — which reads exactly like a hang.
+   the aspect phase, which reads exactly like a hang.
 2. Two blocking model calls bracketed the run (decompose, synthesise) and emitted
    nothing at all while they sat there.
 3. Nothing said what the call was doing, how long it had been at it, or what it
@@ -13,7 +13,7 @@ Three things used to make this tool feel broken, none of them the report:
 So the threads now queue into a ``queue.Queue`` the generator polls while they
 run (the shape ``agent._run_parallel`` already uses), every phase change is a
 ``notify``, and a second of silence produces a heartbeat on the research card.
-The report shape — Answer / Findings with a source per claim / Uncertainties —
+The report shape, Answer / Findings with a source per claim / Uncertainties,
 is untouched, because that part worked.
 """
 
@@ -63,7 +63,7 @@ def _ask(system: str, user: str, ref: str | None, max_tokens: int = 4000) -> str
 def _delegate_ref(explicit: str | None) -> str | None:
     """The model delegated work runs on: the call's own ref, else the setting.
 
-    `explicit` is what the caller passed — for a tool call that is the session's
+    `explicit` is what the caller passed, for a tool call that is the session's
     model, which used to be the end of it. The setting exists because a session
     model at thinking=max is a poor default for fetch-and-grep work, and the
     choice has to be reachable from the interface.
@@ -114,7 +114,7 @@ def _ask_live(system: str, user: str, ref: str | None, max_tokens: int,
     The result lands in ``out["value"]`` because a generator cannot hand one
     back; ``out["stopped"]`` means the person cancelled while it was in flight,
     and the caller must not read a value that never came. The model call itself
-    is not interruptible — it keeps running on a daemon thread and its answer is
+    is not interruptible, it keeps running on a daemon thread and its answer is
     dropped. That is the same trade every other cancellation here makes.
     """
     box: queue.Queue = queue.Queue()
@@ -145,13 +145,13 @@ def research(question: str, project: str | None = None, ref: str | None = None,
 
     A generator, and now a *live* one: aspect events surface as they happen
     rather than in one burst when the aspect phase joins. `call_id` is the id of
-    the research tool call in the main transcript — the card the heartbeats tick
-    on — and `stop` is the turn's cancellation event, either of which may be
+    the research tool call in the main transcript, the card the heartbeats tick
+    on, and `stop` is the turn's cancellation event, either of which may be
     empty/None when this is driven from a test.
 
     Two caps bound the call, because the caller is the one waiting: a wall clock
     (`TACIT_RESEARCH_TIMEOUT`) and the sub-agents' own step budget. Aspects run
-    concurrently — independent and read-only, which is what `_run_parallel`
+    concurrently, independent and read-only, which is what `_run_parallel`
     already does for `task` calls; running three of them one after another was
     three times the wall clock for the same tokens. Hitting the clock is not an
     error: the findings that exist get synthesised into a partial report.
@@ -201,7 +201,7 @@ def research(question: str, project: str | None = None, ref: str | None = None,
         specs.append((f"research-{i}", label, sub_q))
 
     # Worker threads cannot yield into the caller's stream, so their activity
-    # queues here and the generator polls it *while they run* — the old version
+    # queues here and the generator polls it *while they run*, the old version
     # queued into a list and drained it after the join, which is the burst this
     # file exists to remove.
     live: queue.Queue = queue.Queue()

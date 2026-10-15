@@ -46,14 +46,14 @@ PLAN_MARK = "tacit:approved-plan"
 PLAN_MARK_LINE = f"<!-- {PLAN_MARK} -->"
 
 # Session-scoped plan files are found by pattern, not by name: the session id is
-# not knowable here. A glob is also what makes them eligible at all — a plan the
+# not knowable here. A glob is also what makes them eligible at all, a plan the
 # prompt never sees is a plan that only exists on disk.
 PLAN_GLOB = "PLAN-*.md"
 
 # Documentation rather than instructions. Most real projects have no AGENTS.md and
 # put everything in the README, so a project scan that ignored it found nothing at
-# all. These are listed in index mode — naming a file and its size is nearly free,
-# and it stops the model guessing at what exists — but they are deliberately not
+# all. These are listed in index mode, naming a file and its size is nearly free,
+# and it stops the model guessing at what exists, but they are deliberately not
 # preferred for inlining, because a README is usually far too large to be worth the
 # standing prompt space and reading it on demand costs the same as it ever did.
 DOCS = ("README.md", "SPEC.md", "CONTRIBUTING.md")
@@ -117,7 +117,7 @@ def _candidates(root: Path) -> list[str]:
     try:
         extra = [p.name for p in root.glob(PLAN_GLOB) if p.name not in names]
         extra.sort(key=lambda n: (root / n).stat().st_mtime, reverse=True)
-    except Exception:  # noqa: BLE001 — an unreadable root still has its fixed names
+    except Exception:  # noqa: BLE001, an unreadable root still has its fixed names
         return names
     if not extra:
         return names
@@ -150,8 +150,8 @@ def discover(project: str | None) -> list[dict]:
         except Exception:  # noqa: BLE001
             continue
         # A PLAN-*.md without the marker is not an instruction. The glob is wider
-        # on purpose than what plan mode writes — projects keep PLAN-phase2.md and
-        # PLAN-old.md and october-roadmap names nobody meant for the agent — so the
+        # on purpose than what plan mode writes, projects keep PLAN-phase2.md and
+        # PLAN-old.md and october-roadmap names nobody meant for the agent, so the
         # stamp earns a place in the prompt, not the filename.
         if name not in NAMES and name not in DOCS and PLAN_MARK not in text:
             continue
@@ -181,7 +181,7 @@ def block(project: str | None, cfg: dict | None = None) -> dict:
 
     if mode == "index":
         lines = ["This project has its own instructions and documentation. They are not in "
-                 "your context yet — read the ones that matter before changing anything:"]
+                 "your context yet, read the ones that matter before changing anything:"]
         lines += [f"- {f['name']} ({f['tokens']} tokens)" for f in found]
         text = "\n".join(lines)
         return {"text": text, "tokens": tokens.estimate_tokens(text), "mode": mode,

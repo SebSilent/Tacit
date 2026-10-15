@@ -1,13 +1,13 @@
 """Token accounting for Tacit.
 
-Everything the harness injects into a prompt — the base prompt, the skill index,
-tool schemas, MCP tool schemas, memory blocks — has a visible cost. This module
+Everything the harness injects into a prompt, the base prompt, the skill index,
+tool schemas, MCP tool schemas, memory blocks, has a visible cost. This module
 is the one place that estimates those costs so the UI and the agent loop agree.
 
 No tokenizer is assumed. If ``tiktoken`` happens to be installed we use it and
 report exact counts; otherwise we fall back to a conservative character
 heuristic and every count is an *estimate*. Callers must never present an
-estimate as exact — use :func:`label` which carries the distinction for you.
+estimate as exact, use :func:`label` which carries the distinction for you.
 """
 
 from __future__ import annotations

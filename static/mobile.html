@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover is load-bearing here as it is on the desktop page: without it
+     the browser clamps the layout viewport inside the notch and every
+     env(safe-area-inset-*) below resolves to 0, putting the composer under the home bar. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Tacit</title>
+<script>
+  // Applied before paint: the theme is stored by the desktop page under tacit.theme and
+  // the palettes live in style.css, so this page inherits them rather than shipping a
+  // second set of colours. Unknown or absent value leaves the :root default.
+  try {
+    var t = localStorage.getItem('tacit.theme');
+    if (t) document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/style.css?v=33">
+<style>
+/* The mobile chrome. Colour, type, spacing and radius all come from style.css tokens -
+   nothing here hardcodes a palette, so a theme change lands on both pages at once.
+   Layout is its own because a phone is not a small desktop: one column, no panes, and
+   every touch target at least 44px. */
+html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); }
+
+.m-top {
+  position: fixed; inset: 0 0 auto 0; z-index: 30;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  padding-top: calc(var(--sp-2) + env(safe-area-inset-top));
+  background: var(--bg-2); border-bottom: 1px solid var(--line);
+}
+.m-title { flex: 1; min-width: 0; font-size: var(--fs-3); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-icon {
+  flex: none; width: 44px; height: 44px; display: grid; place-items: center;
+  background: transparent; color: var(--muted); border: 0; border-radius: var(--radius-sm);
+  font-size: var(--fs-5);
+}
+.m-icon:active { background: var(--bg-hover); color: var(--text); }
+
+.m-thread {
+  position: fixed; inset: 0; z-index: 10; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(var(--sp-6) + 56px + env(safe-area-inset-top)) var(--sp-3)
+           calc(var(--sp-4) + 76px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
+
+.m-msg { display: flex; flex-direction: column; gap: var(--sp-1); max-width: 100%; }
+.m-meta { display: flex; align-items: baseline; gap: var(--sp-2);
+  font-size: var(--fs-meta); color: var(--fadetext); }
+.m-role { font-weight: 600; letter-spacing: var(--tr-2); text-transform: uppercase;
+  color: var(--muted); }
+.m-msg.you .m-role { color: var(--accent); }
+/* Always shown, never hover-gated (PLAN item 5): a time you need a pointer for is
+   not available on this device. Tabular figures so the column scans. */
+.m-time { margin-left: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.m-bubble { background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: var(--sp-3); font-size: var(--fs-read);
+  line-height: 1.55; overflow-wrap: anywhere; }
+.m-msg.you .m-bubble { background: var(--user-bubble); }
+.m-bubble pre { background: var(--code-bg); color: var(--code-text);
+  padding: var(--sp-2); border-radius: var(--rd-2); overflow-x: auto; }
+
+.m-fold { border: 1px solid var(--line); border-radius: var(--rd-2); background: var(--bg-3); }
+.m-fold > button { width: 100%; min-height: 44px; display: flex; align-items: center;
+  gap: var(--sp-2); padding: 0 var(--sp-3); background: transparent; border: 0;
+  color: var(--muted); font: inherit; font-size: var(--fs-2); text-align: left; }
+.m-fold > button::after { content: '\25BE'; margin-left: auto; }
+.m-fold.open > button::after { content: '\25B4'; }
+.m-fold-body { display: none; padding: 0 var(--sp-3) var(--sp-3);
+  color: var(--dim); font-size: var(--fs-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.m-fold.open .m-fold-body { display: block; }
+.m-fold-body.err { color: var(--err); }
+
+.m-composer {
+  position: fixed; inset: auto 0 0 0; z-index: 30; display: flex; align-items: flex-end;
+  gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  padding-bottom: calc(var(--sp-2) + env(safe-area-inset-bottom));
+  background: var(--bg-2); border-top: 1px solid var(--line);
+}
+#mInput { flex: 1; resize: none; max-height: 40vh; min-height: 44px;
+  padding: var(--sp-2) var(--sp-3); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--radius); font: inherit;
+  font-size: var(--fs-read); }
+.m-send, .m-stop { flex: none; min-height: 44px; min-width: 64px; padding: 0 var(--sp-4);
+  border: 0; border-radius: var(--radius-pill); background: var(--accent);
+  color: var(--on-accent); font: inherit; font-weight: 600; }
+.m-stop { background: var(--err); color: var(--bg); }
+.m-send[disabled] { opacity: .45; }
+
+/* Drawer. Its own markup rather than the desktop sidebar's .open/.hidden, because the
+   desktop sidebar is a column at wide widths and this page never has a wide width. */
+.m-drawer {
+  position: fixed; inset: 0 auto 0 0; z-index: 50; width: min(78vw, 320px);
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: var(--sp-3); padding-top: calc(var(--sp-3) + env(safe-area-inset-top));
+  padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  background: var(--bg-2); border-right: 1px solid var(--line);
+  transform: translateX(-100%); transition: transform var(--dur-2) var(--ease-out);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.m-drawer.open { transform: none; }
+.m-scrim { position: fixed; inset: 0; z-index: 45; background: var(--shade);
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-2) var(--ease-out); }
+.m-scrim.on { opacity: 1; pointer-events: auto; }
+.m-drawer-head { font-size: var(--fs-2); color: var(--muted);
+  letter-spacing: var(--tr-2); text-transform: uppercase; }
+.m-sessions { list-style: none; margin: 0; padding: 0; display: flex;
+  flex-direction: column; gap: var(--sp-1); flex: 1; }
+.m-sessions li { min-height: 44px; display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2); border-radius: var(--rd-2); color: var(--text);
+  font-size: var(--fs-uirow); }
+.m-sessions li.active { background: var(--bg-hover); }
+.m-sessions li .dot { flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); }
+.m-sessions li.busy .dot { background: var(--ok); }
+.m-sessions li .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-seg { display: flex; gap: var(--sp-1); background: var(--bg); padding: 3px;
+  border-radius: var(--radius-pill); border: 1px solid var(--line); }
+.m-seg button { flex: 1; min-height: 40px; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-2); }
+.m-seg button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+select.m-pick { width: 100%; min-height: 44px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--rd-2); padding: 0 var(--sp-2);
+  font: inherit; font-size: var(--fs-2); }
+.m-status { font-size: var(--fs-1); color: var(--fadetext); }
+</style>
+</head>
+<body>
+
+<header class="m-top">
+  <button class="m-icon" id="mMenu" aria-label="Sessions" title="Sessions">&#9776;</button>
+  <div class="m-title" id="mTitle">Tacit</div>
+  <button class="m-icon" id="mNew" aria-label="New session" title="New session">+</button>
+</header>
+
+<main class="m-thread" id="mThread"></main>
+
+<aside class="m-drawer" id="mDrawer" aria-label="Sessions and settings">
+  <div class="m-drawer-head">Sessions</div>
+  <ul class="m-sessions" id="mSessions"></ul>
+  <div class="m-seg" id="mMode">
+    <button type="button" data-mode="chat">Chat</button>
+    <button type="button" data-mode="agent">Agent</button>
+  </div>
+  <select class="m-pick" id="mModel" aria-label="Model"></select>
+  <div class="m-status" id="mStatus"></div>
+</aside>
+<div class="m-scrim" id="mScrim"></div>
+
+<form class="m-composer" id="mComposer">
+  <textarea id="mInput" rows="1" placeholder="Say what you need"></textarea>
+  <button class="m-send" id="mSend" type="submit">Send</button>
+  <button class="m-stop" id="mStop" type="button" hidden>Stop</button>
+</form>
+
+<!-- The contract first, then the renderer, then this page's chrome: mobile.js reads
+     window.TacitTransport and window.TacitMarkdown, and owns neither. -->
+<script src="/static/transport.js?v=45"></script>
+<script src="/static/markdown.js?v=1"></script>
+<script src="/static/mobile.js?v=1"></script>
+</body>
+</html>

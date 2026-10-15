@@ -1,20 +1,20 @@
 """Process identity and containment for everything Tacit spawns.
 
 The problem this module exists for: during a stuck test run, ~23 ``python.exe``
-processes sat in the task list and none of them could be attributed — Tacit's
+processes sat in the task list and none of them could be attributed, Tacit's
 children look like any other Python process, and the user runs other Python
 projects on the same machine, so nothing could be killed safely. Two fixes:
 
 1. **Identity at spawn.** Every child gets a recognizable token in argv right
    after the interpreter (``tacit-turn-worker``, ``tacit-watcher``), plus
    ``TACIT_ROLE`` / ``TACIT_SESSION_ID`` in its environment. On Windows the
-   command line is the only reliable identifier — the exe name is not — so the
+   command line is the only reliable identifier (the exe name is not) so the
    marker lives in argv, and every sweep matches the marker, never the exe.
 
 2. **Job-object containment.** On Windows every child is assigned to a Job
    Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``: if the parent crashes or
    is hard-killed, the kernel closes the job handle and the children die with
-   it. try/finally cleanup cannot do this — it does not run on a hard kill.
+   it. try/finally cleanup cannot do this, it does not run on a hard kill.
 
 The parent also keeps a live registry ({pid, role, session, started, cmdline})
 in memory and persisted under the state dir, so ``GET /api/processes`` can show
@@ -48,7 +48,7 @@ REGISTRY_FILE = "processes.json"
 # ── job objects (Windows) ─────────────────────────────────────────────────
 # No new dependency: the three calls we need are declared against the ctypes
 # prototypes. A job object is a kernel container; KILL_ON_JOB_CLOSE means the
-# last handle closing kills everything in the job — which is exactly the
+# last handle closing kills everything in the job, which is exactly the
 # orphan guarantee try/finally cannot give, because it does not run on a hard
 # kill of the parent.
 def _job_available() -> bool:
@@ -104,7 +104,7 @@ if os.name == "nt":
 
 def _assign_job(proc) -> None:
     """Put the child in a kill-on-close job. Best effort: a failure to contain
-    is logged, never fatal — the marker and registry still identify it."""
+    is logged, never fatal, the marker and registry still identify it."""
     if not _job_available() or proc is None:
         return
     try:
@@ -244,7 +244,7 @@ def _pid_cmdline(pid: int) -> str:
     """The process's current command line, or '' when it cannot be read.
 
     On Windows this is the only reliable identity check; on POSIX /proc does
-    the same job. Empty string means "cannot prove it is ours" — and the sweep
+    the same job. Empty string means "cannot prove it is ours", and the sweep
     treats cannot-prove as leave-alone.
     """
     if os.name == "nt":
@@ -275,7 +275,7 @@ def kill_tree(pid: int) -> bool:
     """Hard-stop a process and everything under it, by pid.
 
     Only ever called on a pid whose *current* command line has been proved to
-    carry one of our markers — that proof is what makes a tree kill safe, and it
+    carry one of our markers, that proof is what makes a tree kill safe, and it
     is why nothing here looks at the exe name. The Windows call keeps `taskkill`
     on the inherited-stdin allowlist (tests/test_shell_stdin.py): it is a Tacit
     tool call, not an agent command, and it takes no input.
@@ -297,8 +297,8 @@ def sweep() -> dict:
 
     An orphan is a pid that is alive, whose CURRENT command line still
     contains one of our markers (proving it is ours and guarding against pid
-    reuse), and which this boot did not register. Anything else — dead, or
-    alive but unprovable — is left alone. Never matches on the exe name.
+    reuse), and which this boot did not register. Anything else, dead, or
+    alive but unprovable, is left alone. Never matches on the exe name.
     """
     killed: list[dict] = []
     dropped: list[dict] = []
@@ -344,10 +344,10 @@ def _marked_argv(argv: list[str], role: str) -> list[str]:
 
     NOT argv[:1] + [role] + argv[1:]: for `python -m backend.turn_worker`
     that puts the marker before `-m`, and Python reads `tacit-turn-worker` as
-    a script file to run — the worker dies instantly with "can't open file"
+    a script file to run, the worker dies instantly with "can't open file"
     and the turn produces nothing. And NOT between `-m` and the module name:
     there it would BE the module name. The marker goes after the complete
-    interpreter spec — `-m module` or `-c code` — as the first argument the
+    interpreter spec (`-m module` or `-c code`) as the first argument the
     script itself sees, which is still the front of the command line a human
     scans, and is ignored by everything Tacit runs.
     """
@@ -356,7 +356,7 @@ def _marked_argv(argv: list[str], role: str) -> list[str]:
         # python -m backend.turn_worker ...  ->  python -m backend.turn_worker tacit-turn-worker ...
         return argv[:3] + [role] + argv[3:]
     if len(argv) >= 3 and argv[1] == "-c":
-        # python -c "<code>" tacit-turn-worker ...  — the marker rides as
+        # python -c "<code>" tacit-turn-worker ...  - the marker rides as
         # sys.argv[1] of the -c script, which never reads it.
         return argv[:3] + [role] + argv[3:]
     return argv[:1] + [role] + argv[1:]
@@ -372,18 +372,18 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
     the registry row makes it visible and sweepable.
 
     ``contain=False`` is for the two children that must OUTLIVE their spawner
-    by design — the restart watcher and the server it starts. A kill-on-close
+    by design, the restart watcher and the server it starts. A kill-on-close
     job would kill them the moment the spawner's handle closed, which is the
     opposite of what a restart needs. They keep the marker and the registry
     row, so they stay identifiable and sweepable.
 
-    ``mark=False`` is for children whose argv is the user's own command —
+    ``mark=False`` is for children whose argv is the user's own command,
     agent-launched background jobs. A marker token would corrupt that command,
     so they are identified by the env vars and the registry row alone, and the
     sweep deliberately leaves them alone (it only ever kills a pid whose
     command line proves it is ours). With ``mark=False`` the argv may be a raw
     string: passing a list to ``shell=True`` on Windows re-quotes it through
-    list2cmdline, which misparses commands that contain their own quotes —
+    list2cmdline, which misparses commands that contain their own quotes,
     the string form goes to cmd.exe untouched, exactly as the old bg_start
     passed it.
     """

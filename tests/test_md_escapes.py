@@ -39,13 +39,22 @@ APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 # the first anchor to a comment that follows the function, so a slice cannot silently
 # come back empty (an empty slice is the failure mode that looks like missing code).
 _START = "function esc(t)"
-_END = "// delegated: the ONE click handler"
+_END = "// ---- end of the renderer"
+
+MD = (ROOT / "static" / "markdown.js").read_text(encoding="utf-8")
 
 
 def renderer_source():
-    s = APP.index(_START)
-    e = APP.index(_END, s)          # bounded from the anchor forward
-    return APP[s:e]
+    """The single copy both frontends load: `static/markdown.js`.
+
+    It moved out of `app.js` with PLAN item 8 - a second frontend that re-implements
+    the renderer is a second set of escaping bugs, and this file exists because
+    escaping is where model text becomes HTML. The slice is taken the same way as
+    before (anchor forward to a named marker, so an empty slice cannot pass silently);
+    `test_app_js_delegates_...` below pins that app.js goes through it."""
+    s = MD.index(_START)
+    e = MD.index(_END, s)          # bounded from the anchor forward
+    return MD[s:e]
 
 
 def _js(cases, src):
@@ -186,6 +195,17 @@ class RendererEscapes(unittest.TestCase):
         out = self.out["real_link"]
         self.assertIn('<a href="https://example.com/a?b=1"', out)
         self.assertIn('rel="noopener"', out)
+
+
+    def test_app_js_delegates_instead_of_keeping_a_copy(self):
+        """The move is only safe if the desktop page really goes through the shared
+        renderer. Three one-line wrappers, and no second implementation to drift."""
+        for w in ("function esc(t) { return window.TacitMarkdown.esc(t); }",
+                  "function inlineMd(t) { return window.TacitMarkdown.inlineMd(t); }",
+                  "function md(src) { return window.TacitMarkdown.md(src); }"):
+            self.assertIn(w, APP, "app.js no longer delegates to the shared renderer")
+        self.assertNotIn("const TBL_SEP", APP,
+                         "a second renderer grew back inside app.js")
 
 
 class TheGuardHasTeeth(unittest.TestCase):
