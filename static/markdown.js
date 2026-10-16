@@ -1,13 +1,12 @@
-/* Tacit's markdown renderer, shared by both frontends.
+/* Tacit's markdown renderer, one copy for the page to load.
 
-   Moved verbatim out of app.js when /mobile arrived (PLAN item 8: share the
-   transport and the renderer, fork only the chrome). A second copy of a renderer
-   is a second set of escaping bugs, and this one has a test file of its own
+   Moved verbatim out of app.js when a second consumer needed the same drawing
+   (share the transport and the renderer, fork only the chrome). A second copy of a
+   renderer is a second set of escaping bugs, and this one has a test file of its own
    precisely because escaping is where model text becomes HTML:
    tests/test_md_escapes.py extracts the block below and runs it under node.
 
-   app.js keeps three one-line wrappers so its ~40 call sites are untouched;
-   mobile.js reads window.TacitMarkdown directly.
+   app.js keeps three one-line wrappers so its ~40 call sites are untouched.
 */
 (function () {
   'use strict';

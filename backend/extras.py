@@ -49,7 +49,9 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
     cmd = str(command or "").strip()
     if not cmd:
         return "ERROR: empty command"
-    work = cwd or project or str(config.USER_HOME)
+    # No explicit `cwd` and no usable project means this session's scratch folder, not
+    # the user's home directory — the same rule `agent._root` uses.
+    work = cwd or str(config.work_root(project, session))
     try:
         # Registry-only identity: the user's command must not be corrupted by
         # an argv marker, so the child is identified by TACIT_ROLE /
@@ -204,6 +206,46 @@ def snapshot(root: str, label: str = "", session: str = "", message=None) -> str
         except Exception:
             pass
     return f"snapshot {dest.name}: {count} file(s)" + (f", {label}" if label else "")
+
+
+def drop_message_links(session: str, from_index: int) -> int:
+    """Un-link snapshots that pointed at rows a rewind deleted. Returns how many.
+
+    A snapshot is a real undo point and is never deleted here — only its claim
+    about *which message* caused it. `truncate_from` (routers/chat.py) rewinds a
+    session's stored history, so every marker at or past the cut now counts rows
+    that no longer exist. The transcript then grows back and a stale index lands
+    on an unrelated message: a control that opens compare against a snapshot from
+    a discarded branch is worse than no control, because it looks authoritative.
+
+    With the marker gone the snapshot drops out of the per-message decoration —
+    `snapshot_index` reads `None`, the renderer skips it — and still appears in
+    the Snapshots panel. That is the honest state: we know it belongs to this
+    session, we no longer know which turn made it.
+    """
+    root = config.CHECKPOINT_DIR
+    if not session or not root.is_dir():
+        return 0
+    dropped = 0
+    for path in root.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            if (path / ".session").read_text(encoding="utf-8").strip() != session:
+                continue
+        except Exception:  # noqa: BLE001
+            continue                      # not this session's, or unreadable
+        try:
+            if int((path / ".message").read_text(encoding="utf-8").strip()) < from_index:
+                continue
+        except Exception:  # noqa: BLE001
+            continue                      # no marker, or corrupt: nothing to drop
+        try:
+            (path / ".message").unlink()
+            dropped += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return dropped
 
 
 def list_snapshots() -> str:

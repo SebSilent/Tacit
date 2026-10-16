@@ -1,6 +1,6 @@
 """Item 3 — a deleted session stays deleted.
 
-PLAN.md's "done when", quoted exactly so this file cannot drift from it:
+The bar this test was written to, stated here so the file stands on its own:
 
     A regression test: create -> delete -> re-open the store from disk in a fresh
     process -> assert gone. The fresh-process step is the point; a test that deletes

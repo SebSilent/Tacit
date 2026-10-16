@@ -789,12 +789,16 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # (store.py:83) exists for. Before Stage 1b was undone, a mode click hid
         # this by opening a fresh socket, whose URL re-read the record; switching
         # in place exposes it, so the turn asks the disk which mode it is in.
-        disk_mode = (store.get(sid) or {}).get("mode")
-        if disk_mode:
-            rec["mode"] = disk_mode
+        # One read, two consumers: the mode, and the plan pointer below. Neither is
+        # owned by this socket — the mode by the metadata POST, the plan by plan
+        # mode's driver thread — so both come off disk.
+        disk = store.get(sid) or {}
+        if disk.get("mode"):
+            rec["mode"] = disk["mode"]
         chat = (rec.get("mode") or "agent") == "chat"
         messages = [{"role": "system",
-                     "content": prompts.system_prompt(rec.get("project"), False, chat=chat)}]
+                     "content": prompts.system_prompt(rec.get("project"), False, chat=chat,
+                                                      session=rec.get("id") or "")}]
         # The project's own instructions go in the standing prefix, before the
         # transcript: they depend only on the folder, so putting them here keeps
         # the cached prefix stable across turns instead of invalidating it.
@@ -807,6 +811,18 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
                          tokens=int(instructions.get("tokens") or 0),
                          files=[f["name"] for f in instructions.get("files") or []],
                          held_back=int(instructions.get("held_back") or 0))
+        # An approved plan is a file, and a file the agent does not know the path to
+        # is a file it will not read. The pointer goes in the standing prefix beside
+        # the project's own instructions for the same reason they do: the transcript
+        # gets summarised and the prefix is rebuilt every turn, so this outlives the
+        # message that first named the path. Chat mode is skipped because it has no
+        # read tool, and a pointer to a file a model cannot open is a tax with no
+        # purchase.
+        if not chat:
+            from . import plan as plan_mod  # lazy: plan's driver imports this module
+            pointer = plan_mod.pointer(disk)
+            if pointer:
+                messages.append({"role": "system", "content": pointer})
         messages.extend(_history(rec))
 
         # The Goal is NOT injected here, and nothing on this side may start to

@@ -1,7 +1,8 @@
 """The transcript's clock is a display row, not a model row.
 
-PLAN item 5's "Done when": *timestamps render in both frontends, and a test proves `ts`
-is in the transcript payload but never in the provider payload.*
+PLAN item 5's "Done when": *a message with no `ts` shows nothing; the times line up as a
+column; a test asserts `ts` is present in `registry()` output and absent from the
+provider payload* — and, in both modes, a correct local time **without hovering**.
 
 Both halves matter and they pull in opposite directions. The browser cannot draw a time
 it never receives, so `ts` has to survive `store.registry()`'s projection. A provider
@@ -10,8 +11,9 @@ should not receive a field it did not ask for, so `ts` has to die in
 those two is exactly where a future "cleanup" would drop the clock or leak the field, so
 it is pinned here rather than trusted.
 
-The other half of the item is that a time is always visible: a hover-only timestamp does
-not exist on a phone, and one frontend already drew it permanently.
+The other half of the item is the words **without hovering**: a timestamp you have to
+hover to find is one a keyboard user never sees, and parts of the page already drew some
+times permanently. So the rule here is *always rendered*, not *rendered on demand*.
 """
 
 import re
@@ -20,7 +22,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-MOBILE = (ROOT / "static" / "mobile.js").read_text(encoding="utf-8")
 CSS = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
 from backend import agent, config, store  # noqa: E402
@@ -142,19 +143,6 @@ class TestDesktopDrawsTheTime(unittest.TestCase):
         self.assertNotIn("visibility: hidden", block.group(1))
         self.assertNotIn(":hover", block.group(1))
         self.assertIsNone(re.search(r"\.msg:hover[^{]*\.msg-time", CSS))
-
-
-class TestMobileDrawsTheTime(unittest.TestCase):
-    def test_time_is_rendered_as_text_on_the_row(self):
-        mob = code(MOBILE)
-        self.assertIn("function timeOf(ts)", mob)
-        self.assertIn("meta.className = 'm-meta'", mob)
-        self.assertIn("timeOf(msg.ts)", mob)
-
-    def test_mobile_has_no_hover_affordance_at_all(self):
-        # Not a style claim: the page has no pointer to hover with, which is why the
-        # desktop's hover-only clock had to go rather than be duplicated here.
-        self.assertNotIn(":hover", code(MOBILE))
 
 
 if __name__ == "__main__":

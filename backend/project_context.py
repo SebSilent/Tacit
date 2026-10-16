@@ -26,29 +26,18 @@ from . import config, tokens
 # Conventional names, most specific first. A project that has both AGENTS.md and
 # CLAUDE.md gets both listed; they are not interchangeable and picking one silently
 # would be a guess.
-NAMES = ("AGENTS.md", "CLAUDE.md", "TACIT.md", "PLAN.md", ".cursorrules",
+NAMES = ("AGENTS.md", "CLAUDE.md", "TACIT.md", ".cursorrules",
          ".tacit/instructions.md", ".github/copilot-instructions.md")
 
-# PLAN.md is here because plan mode writes it: approving a plan puts the plan in
-# the project as its own instruction file, and this list is what the prompt is
-# built from. It sits among the instruction names rather than in DOCS below
-# because DOCS is only ever *listed* in index mode, and an approved plan that is
-# merely named in the prompt is a plan the agent may read or may not.
-
-# The stamp plan mode puts on the first line of every file it writes into a
-# project. The name lives here rather than in plan.py because this module is the
-# one that has to judge a file it did not write: a project is allowed to have its
-# own PLAN.md, and when it does the approved plan lands beside it as
-# PLAN-<session>.md. Without a way to tell the two apart, discover() would either
-# ignore a plan the person approved or promote a stranger's file to instruction
-# status, so the marker is the contract between the writer and the reader.
-PLAN_MARK = "tacit:approved-plan"
-PLAN_MARK_LINE = f"<!-- {PLAN_MARK} -->"
-
-# Session-scoped plan files are found by pattern, not by name: the session id is
-# not knowable here. A glob is also what makes them eligible at all, a plan the
-# prompt never sees is a plan that only exists on disk.
-PLAN_GLOB = "PLAN-*.md"
+# PLAN.md used to be in this list, because plan mode wrote approved plans into the
+# project and a plan the prompt merely *listed* was a plan the agent might ignore.
+# That is inverted now. An approved plan lives under ~/.tacit/plans with the session
+# that approved it, and the standing prompt carries a pointer to that path
+# (``plan.pointer``) instead of a copy of the file — which reaches the agent every
+# turn whether or not context injection is switched on, and cannot be summarised
+# away. The harness no longer writes into a project at all, so a project's PLAN.md
+# is whatever the person put there: a document to be found, not an instruction to be
+# obeyed, which is why it moved to DOCS below.
 
 # Documentation rather than instructions. Most real projects have no AGENTS.md and
 # put everything in the README, so a project scan that ignored it found nothing at
@@ -56,7 +45,7 @@ PLAN_GLOB = "PLAN-*.md"
 # and it stops the model guessing at what exists, but they are deliberately not
 # preferred for inlining, because a README is usually far too large to be worth the
 # standing prompt space and reading it on demand costs the same as it ever did.
-DOCS = ("README.md", "SPEC.md", "CONTRIBUTING.md")
+DOCS = ("README.md", "SPEC.md", "CONTRIBUTING.md", "PLAN.md")
 
 MODES = ("off", "index", "inline")
 DEFAULT_MODE = "index"
@@ -98,31 +87,15 @@ def save(patch: dict) -> dict:
     return settings()
 
 
-def _is_plan_name(name: str) -> bool:
-    """PLAN.md and the session-scoped files plan mode falls back to."""
-    return name == "PLAN.md" or (name.startswith("PLAN-") and name.endswith(".md"))
-
-
-def _candidates(root: Path) -> list[str]:
+def _candidates() -> list[str]:
     """The names discover() looks for, in the order the prompt is built from.
 
-    NAMES (most specific first), then DOCS. A session-scoped plan is slotted in
-    right after PLAN.md rather than appended at the end: it is an instruction, and
-    MAX_FILES cuts the list from the tail, so a crowded project root should lose
-    its CONTRIBUTING.md before it loses a plan somebody approved. Newest first,
-    because a project holding several approved plans is a project where the most
-    recent one is the live one.
+    NAMES (most specific first), then DOCS. This used to also glob for the
+    session-scoped plan files plan mode wrote beside a project's own PLAN.md; the
+    harness writes nothing into a project now, so there is no filename to earn a
+    place by pattern and a fixed list is the whole contract.
     """
-    names = list(NAMES) + list(DOCS)
-    try:
-        extra = [p.name for p in root.glob(PLAN_GLOB) if p.name not in names]
-        extra.sort(key=lambda n: (root / n).stat().st_mtime, reverse=True)
-    except Exception:  # noqa: BLE001, an unreadable root still has its fixed names
-        return names
-    if not extra:
-        return names
-    at = NAMES.index("PLAN.md") + 1
-    return names[:at] + extra + names[at:]
+    return list(NAMES) + list(DOCS)
 
 
 def discover(project: str | None) -> list[dict]:
@@ -141,7 +114,7 @@ def discover(project: str | None) -> list[dict]:
         return out
     if not root.is_dir():
         return out
-    for name in _candidates(root):
+    for name in _candidates():
         try:
             path = root / name
             if not path.is_file():
@@ -149,16 +122,16 @@ def discover(project: str | None) -> list[dict]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except Exception:  # noqa: BLE001
             continue
-        # A PLAN-*.md without the marker is not an instruction. The glob is wider
-        # on purpose than what plan mode writes, projects keep PLAN-phase2.md and
-        # PLAN-old.md and october-roadmap names nobody meant for the agent, so the
-        # stamp earns a place in the prompt, not the filename.
-        if name not in NAMES and name not in DOCS and PLAN_MARK not in text:
+        # On the list or invisible: there is no second route into the prompt, and
+        # there used to be a marker stamp that let a file plan mode itself had
+        # written earn instruction status by its contents rather than its name. The
+        # harness does not write into projects any more, so the name is the whole
+        # contract.
+        if name not in NAMES and name not in DOCS:
             continue
         out.append({"name": name, "path": str(path), "chars": len(text),
                     "tokens": tokens.estimate_tokens(text), "text": text,
-                    "kind": "instructions" if (name in NAMES or _is_plan_name(name))
-                            else "docs"})
+                    "kind": "instructions" if name in NAMES else "docs"})
         if len(out) >= MAX_FILES:
             break
     return out

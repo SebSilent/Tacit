@@ -47,7 +47,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-# esc() itself now lives in the shared renderer both frontends load; app.js keeps a
+# esc() itself now lives in the shared renderer the page loads; app.js keeps a
 # one-line wrapper (asserted by TheWrapperStillDelegates below) and no body of its own.
 MD = (ROOT / "static" / "markdown.js").read_text(encoding="utf-8")
 

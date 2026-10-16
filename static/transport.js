@@ -1,15 +1,14 @@
-/* Tacit's wire contract. Both frontends load this file, and neither one re-implements it.
-   index.html: transport.js, then app.js.  /mobile: transport.js, then mobile.js.
+/* Tacit's wire contract: the one place that names the socket, loaded before app.js.
 
-   This exists because of PLAN item 8. A second frontend that re-derives the socket URL,
-   the query parameters and the event names drifts from the first within a week, and the
-   drift is invisible until a turn half-works on one device. So everything that *names the
-   wire* lives here: the URL builder, the event types the server publishes, the command
-   types the client sends, the reconnect backoff, and the REST helper. What stays per-page
-   is chrome - how an event is drawn.
+   Everything that *names the wire* lives here rather than in the page - the URL
+   builder, the query parameters, the event types the server publishes, the command
+   types a client may send, the reconnect backoff, the REST helpers. What stays in
+   app.js is chrome: how an event is drawn. The reason is drift. A second copy of a
+   URL builder or an event name diverges from the first within a week, and the
+   divergence is invisible until a turn half-works.
 
-   tests/test_mobile_protocol.py reads the backend and fails if the lists below and the
-   server's own literals disagree. That is the pin neither frontend can break by accident.
+   tests/test_transport_contract.py reads the backend and fails if the lists below and
+   the server's own literals disagree. That is the pin that keeps this honest.
 */
 (function () {
   'use strict';
@@ -65,7 +64,7 @@
 
   // ---- a session id, on every origin the app is served from ----
   // crypto.randomUUID is undefined on plain-HTTP LAN origins (insecure context),
-  // and /mobile is exactly such an origin. The fallback is the same shape the
+  // which is exactly how this app is reached from another machine. The fallback is the same shape the
   // browser produces, and it is only a client-side id: the server owns the store.
   function uuid() {
     return crypto.randomUUID ? crypto.randomUUID()

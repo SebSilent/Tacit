@@ -189,7 +189,10 @@ async def remove_model(name: str, request: Request):
 
 
 @router.post("/api/providers/{name}/probe")
-async def probe_provider(name: str):
+def probe_provider(name: str):
+    # `def`: engine.remote_models() is a blocking HTTP request to the provider with a
+    # real timeout, and this is a button in Settings. On the loop it could hold the
+    # whole server for the length of a network round-trip, or until it times out.
     reg = config.registry()
     spec = (reg.get("providers") or {}).get(name)
     if not spec:
@@ -302,8 +305,10 @@ async def set_default(request: Request):
 @router.post("/api/terminal")
 async def terminal(request: Request):
     body = await request.json()
+    # `session` so a terminal with no project opens in that session's own scratch
+    # folder rather than the shared default one.
     return agent.run_terminal(body.get("command") or "", body.get("project") or None,
-                              body.get("timeout"))
+                              body.get("timeout"), session=body.get("session") or "")
 
 
 def _enrich_projects(items: list[dict]) -> list[dict]:
@@ -380,7 +385,7 @@ async def fs_mkdir(request: Request):
 
 
 @router.get("/api/tokens/dashboard")
-async def token_dashboard(sid: str = "", project: str = ""):
+def token_dashboard(sid: str = "", project: str = ""):
     """Local token accounting: what Tacit injects, and what it avoided.
 
     The baseline is *our own* full-context estimate (every discovered MCP schema
@@ -477,7 +482,7 @@ async def token_dashboard(sid: str = "", project: str = ""):
 
 
 @router.get("/api/snapshots")
-async def snapshots(limit: int = 200, session: str = ""):
+def snapshots(limit: int = 200, session: str = ""):
     from .. import extras
     rows = extras.snapshot_index(limit, session=session)
     total = sum(int(r.get("bytes") or 0) for r in rows)
@@ -485,7 +490,7 @@ async def snapshots(limit: int = 200, session: str = ""):
 
 
 @router.get("/api/tasks/{sid}")
-async def tasks_state(sid: str):
+def tasks_state(sid: str):
     """The session's task list, for the strip above the composer.
 
     Read-only: the model owns the list. The strip shows what it holds and
@@ -522,7 +527,7 @@ async def snapshot_restore(request: Request):
 
 
 @router.get("/api/assistant/{sid}")
-async def assistant_state(sid: str):
+def assistant_state(sid: str):
     """The side conversation, its settings, and what those settings cost."""
     from .. import assistant
     rec = store.get(sid)
@@ -647,7 +652,7 @@ async def forget_folder(request: Request):
 
 
 @router.get("/api/sessions")
-async def list_sessions():
+def list_sessions():
     return {"sessions": store.list_sessions()}
 
 
@@ -667,7 +672,10 @@ async def sessions_state():
 
 
 @router.get("/api/sessions/registry")
-async def get_registry():
+def get_registry():
+    # `def`, not `async def`: store.registry() opens and parses one file per session
+    # (up to 200) and this is the largest and slowest thing the page fetches at boot.
+    # On the loop it delayed everything else in the process, including the handshake.
     return store.registry()
 
 
@@ -677,7 +685,7 @@ async def post_registry(request: Request):
 
 
 @router.get("/api/sessions/{sid}")
-async def get_session(sid: str):
+def get_session(sid: str):
     rec = store.get(sid)
     if not rec:
         return _fail("session not found")
@@ -685,7 +693,7 @@ async def get_session(sid: str):
 
 
 @router.get("/api/sessions/{sid}/transcript")
-async def transcript(sid: str):
+def transcript(sid: str):
     rec = store.get(sid)
     if not rec:
         return _fail("session not found")
@@ -951,7 +959,7 @@ async def server_restart():
 
 
 @router.get("/api/server/status")
-async def server_status():
+def server_status():
     """Where this process listens and which pid it is, the General tab's Server section."""
     from .. import agent as agent_mod
     from .. import extras
@@ -968,7 +976,7 @@ async def server_status():
 
 
 @router.get("/api/processes")
-async def processes():
+def processes():
     """Everything Tacit has spawned and not yet reaped, from the live registry.
 
     The point is attribution: on a machine full of python.exe, this says which
@@ -981,7 +989,7 @@ async def processes():
 
 # ═══════════════════════════ AUTOUPDATER ═══════════════════════════════════
 @router.get("/api/autoupdater/status")
-async def autoupdater_status():
+def autoupdater_status():
     """Get autoupdater status: enabled, last check, last commit, etc."""
     from .. import autoupdater
     return _ok(**autoupdater.get_status())

@@ -31,11 +31,24 @@ def mask_url(url: str) -> str:
 
 
 def resolve_workdir(workdir: str | None = None, sid: str | None = None) -> str:
+    """Which folder the version-control panel talks to.
+
+    Given a session, this is now the same answer `config.work_root` gives the tools.
+    It used to be a different one: for a session with no project the panel would borrow
+    whichever folder some other session happened to use, or fall back to the first
+    configured root, while the turn worked somewhere else entirely — so the Git panel
+    could name a directory and the user read that as "your edits are there".
+
+    With no session at all (`hosting.py` asking which repo holds these credentials) the
+    old chain stands. There is no session to root, and a scratch folder is not a repo.
+    """
     from . import store
     candidate = str(workdir or "").strip()
     if not candidate and sid:
         rec = store.get(str(sid)) or {}
         candidate = str(rec.get("project") or "").strip()
+        if not config.project_usable(candidate):
+            return str(config.work_root("", str(sid)))
     if not candidate:
         for row in store.list_sessions():
             p = str(row.get("project") or "").strip()

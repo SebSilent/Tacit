@@ -1507,6 +1507,18 @@ input, textarea {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), .45);
 }
+/* The seam of a preview tail (backend/store.py's REGISTRY_PREVIEW): the rows on
+   screen are the end of the conversation, and saying so is the difference between
+   a session that looks short and one that is honestly still loading. */
+.transcript-gap {
+  margin: var(--sp-2) 0 var(--sp-4);
+  text-align: center;
+  font-size: var(--fs-2);
+  letter-spacing: var(--tr-3);
+  color: var(--muted);
+  border-top: 1px dashed var(--line);
+  padding-top: var(--sp-3);
+}
 /* The undo point a turn left behind, on the row that caused it (PLAN item 4). It
    is the role line's third member and it borrows the sender tag's pill so the
    line reads as one piece of furniture: same radius, same hairline, same muted
@@ -2149,15 +2161,11 @@ input, textarea {
   flex: 1;
   min-width: 120px;
 }
-/* The approval writes two files and either can fail alone, so the strip marks
-   which copy landed. Distinct colours are the point: a refused PLAN.md must not
-   read like a success. */
-.ps-ok {
-  color: var(--ok);
-}
-.ps-warn {
-  color: var(--warn);
-}
+/* .ps-ok / .ps-warn used to live here. The approval wrote two files — the plan
+   record and the project's PLAN.md — and either could fail alone, so the strip
+   needed a colour per copy and a refused PLAN.md had not to read like a success.
+   One file is written now and it either exists or the approval threw, so the
+   markup that needed them is gone and the rules went with it. */
 .ps-cancel {
   border: 1px solid var(--line-2);
   background: transparent;

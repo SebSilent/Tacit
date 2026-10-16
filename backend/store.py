@@ -81,7 +81,11 @@ def get(sid: str) -> dict | None:
 # existed. A stale save there would not just rewind progress; it would delete the
 # snapshot a reload reads back, which is the whole reason the plan survives a
 # dropped socket.
-PRESERVED = ("assistantSettings", "assistantGoal", "assistantAutonomy", "planState")
+# planFile joins them because Implement writes it onto the session it creates, from
+# the planning session's socket, before that session has ever been opened. A record
+# saved without it would silently un-point the working agent at its own plan.
+PRESERVED = ("assistantSettings", "assistantGoal", "assistantAutonomy", "planState",
+             "planFile")
 
 
 # One writer at a time through the two halves of the store. `save()` reads the
@@ -185,12 +189,94 @@ def remove(sid: str) -> bool:
             return False
         rows = [r for r in index() if r.get("id") != sid]
         _write_index(rows)
-        return True
+    # Outside the lock, and after the row is gone: the session's scratch folder holds
+    # whatever its tools wrote during a project-less turn, and nothing else collects it.
+    config.remove_workspace(sid)
+    return True
 
 
-def registry(rows: list[dict] | None = None) -> dict:
+# The registry is the browser's boot payload: every session's transcript in one
+# response. It used to ship the last 200 messages of up to 200 sessions, which on
+# a real home measured 1.2 MB — and that grows with the *longest* conversation,
+# not the number of them, so it never stops getting worse. A drawer row needs the
+# tail (title, count, which copy is richer); the transcript itself is fetched from
+# /api/sessions/<id> when a session is actually opened.
+#
+# `messageCount` and `trimmed` are the part that makes this safe rather than a
+# silent history loss: they tell the client it is holding a tail, so a tail can
+# never be rendered, edited, or pushed back to the server as if it were the whole
+# conversation. Undo and rollback index into this array by position — cut at the
+# wrong row and you delete turns the user never asked to delete.
+REGISTRY_PREVIEW = 24
+
+# Counting messages was not enough, and measuring it proved the point: the real
+# home's boot payload is 95.9 KB, and 94.3 KB of that is ONE session's 24-message
+# tail, because a single stored message measured 7,856 bytes. Twenty-four rows of
+# an unbounded field is not a bound. The unbounded field is `tools[].args` - chat
+# clips `result` (MAX_TOOL_RESULT) and `reason` (MAX_REASON), but `args` is a dict
+# passed through as-is, so a `write_file` call stores the entire file body in it.
+#
+# So this bounds bytes, at two levels: per field, and per payload. A tail that
+# would push the whole response past REGISTRY_TAIL_BUDGET ships with no messages
+# at all - which is safe because nothing draws a non-active tail: the drawer row
+# is built from the index fields, and the active session is replaced by the full
+# /api/sessions/<id> record before it is ever painted (pinned in
+# tests/test_registry_preview.py). `trimmed` then tells the client it is holding
+# less than it thinks, which is the same flag that keeps a partial transcript from
+# being pushed back as a whole one.
+PREVIEW_MARKER = " […]"
+PREVIEW_CONTENT_CAP = 240
+PREVIEW_TOOL_CAP = 120
+PREVIEW_TOOL_MAX = 6
+REGISTRY_TAIL_BUDGET = 48_000
+
+
+def _cap_str(value, limit: int):
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[:limit] + PREVIEW_MARKER
+
+
+def _preview_tool(t: dict) -> dict:
+    """One tool call, same keys, bounded values. `args` is why this exists."""
+    row = {}
+    for k, v in t.items():
+        if k == "args" and isinstance(v, dict):
+            row[k] = {ak: _cap_str(av, PREVIEW_TOOL_CAP) for ak, av in v.items()}
+        elif k == "result":
+            row[k] = _cap_str(v, PREVIEW_TOOL_CAP)
+        elif k == "name":
+            row[k] = _cap_str(v, 64)          # a name is never the payload
+        else:
+            row[k] = _cap_str(v, PREVIEW_TOOL_CAP) if isinstance(v, str) else v
+    return row
+
+
+def _preview_message(m: dict) -> dict:
+    """One message as the boot payload ships it.
+
+    The key set is unchanged on purpose - the client's undo logic and the
+    `trimmed` contract both read `messages[i]`, so a row that lost a key would be
+    a shape change, not a size change. `reason` keeps its key and loses its value:
+    it is capped at MAX_REASON (8,000) on the way in, it is the second-largest
+    field, and a tail nobody renders does not need the model's thinking.
+    """
+    tools = m.get("tools")
+    return {
+        "role": m.get("role"),
+        "content": _cap_str(m.get("content"), PREVIEW_CONTENT_CAP),
+        "reason": None,
+        "tools": [_preview_tool(t) for t in tools[:PREVIEW_TOOL_MAX] if isinstance(t, dict)]
+        if isinstance(tools, list) and tools else None,
+        "ts": m.get("ts"),
+    }
+
+
+def registry(rows: list[dict] | None = None, preview: int = REGISTRY_PREVIEW,
+             budget: int = REGISTRY_TAIL_BUDGET) -> dict:
     rows = rows if rows is not None else index()
     out = []
+    spent = 0
     for r in sorted(rows, key=lambda s: s.get("updated") or 0, reverse=True)[:200]:
         rec = get(r.get("id", ""))
         msgs = (rec or {}).get("messages") or []
@@ -199,11 +285,26 @@ def registry(rows: list[dict] | None = None) -> dict:
         # browser cannot draw a time it never receives. It is display metadata
         # only, agent.transcript_messages rebuilds every row as {role, content}
         # on the way to a provider, so nothing here reaches the model.
-        out.append({**r, "messages": [
-            {"role": m.get("role"), "content": m.get("content"),
-             "reason": m.get("reason"), "tools": m.get("tools"),
-             "ts": m.get("ts")} for m in msgs[-200:]
-        ]})
+        messages = [_preview_message(m) for m in msgs[-preview:]]
+        # Spend the budget newest-first: if the payload cannot carry every tail,
+        # the rows it drops are the ones furthest from what the person is reading.
+        # Message order is never disturbed, so an index still means the same row.
+        keep: list[dict] = []
+        for m in reversed(messages):
+            # +2 because that is what the row really costs: json.dumps joins an
+            # array with ", ", so a serialized array is exactly sum(msg + 2).
+            # Charging len(msg) alone under-counted the payload by hundreds of
+            # bytes on a six-session home, which is the same mistake in miniature.
+            cost = len(json.dumps(m, ensure_ascii=False)) + 2
+            if spent + cost > budget:
+                break
+            spent += cost
+            keep.append(m)
+        keep.reverse()
+        if not keep:
+            spent += 2   # an empty tail still ships "[]"
+        out.append({**r, "messageCount": len(msgs),
+                    "trimmed": len(msgs) > len(keep), "messages": keep})
     return {"sessions": out, "active": (out[0]["id"] if out else "")}
 
 

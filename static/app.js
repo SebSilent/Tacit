@@ -2,10 +2,10 @@
 (() => {
 'use strict';
 
-// The id generator moved into transport.js: /mobile is served over a LAN origin
-// (http://0.0.0.0:8550 in the plan), which is an insecure context where
+// The id generator lives in transport.js. The reason is not tidiness: a page served
+// over a LAN origin (http://192.168.x.x:8550) is an insecure context, where
 // crypto.randomUUID does not exist at all. Two copies of that fallback is how one
-// page gets ids the other cannot make.
+// context gets ids another context cannot make.
 const uuid = () => window.TacitTransport.uuid();
 
 const $ = s => document.querySelector(s);
@@ -205,9 +205,15 @@ async function loadServerRegistry() {
       const ss = byId.get(ls.id);
       if (!ss) {
         if (ls.messages && ls.messages.length) { byId.set(ls.id, ls); changed = true; }
-      } else if ((ls.messages || []).length > (ss.messages || []).length) {
+      } else if ((ls.messages || []).length > (ss.messageCount ?? (ss.messages || []).length)) {
         // local holds a longer transcript (offline edits, or the server was
-        // restarted before the first persist) — keep the richer copy
+        // restarted before the first persist) — keep the richer copy.
+        // The comparison counts the server's HISTORY, not its rows: a registry
+        // row is a preview tail, so a 300-message session arrives with 24 rows
+        // and `messageCount: 300`. Comparing raw lengths made every trimmed row
+        // look poorer than a local copy and pushed a truncated transcript over the
+        // full one. When the server row is the richer one we simply leave it in
+        // `byId` — and ensureFull() pulls the rest when the session opens.
         byId.set(ls.id, ls);
         changed = true;
       }
@@ -245,12 +251,51 @@ async function syncSessionMetadata(s) {
   } catch (e) {}
 }
 
+// The registry sends a preview tail per session (backend/store.py
+// REGISTRY_PREVIEW): boot used to download every transcript in the home — 1.2 MB
+// measured, and it grows with the *longest* conversation rather than the number
+// of them. Drawing the drawer only needs the tail. Opening a session needs the
+// whole thing, so the tail is upgraded here, on the one path that has to have it:
+// undo, rollback and "edit this turn" all index into `messages` by position, and
+// cutting a tail at the row a full transcript would number 274 silently deletes
+// turns nobody mentioned.
+const fullInFlight = new Set();
+async function ensureFull(s) {
+  if (!s || !s.trimmed || fullInFlight.has(s.id)) return s;
+  // A running turn appends to this array from its own socket while the stored
+  // record lags behind it, so replacing the transcript mid-stream would erase the
+  // bubble that is still arriving. The turn's `done` persists anyway; the next
+  // open upgrades. The tail keeps drawing in the meantime.
+  const st = sessionStates[s.id] || {};
+  if (st.busy || st.starting || s._busy) return s;
+  fullInFlight.add(s.id);
+  try {
+    const rec = await (await fetch(`/api/sessions/${s.id}`)).json();
+    if (rec && rec.id === s.id) {
+      s.messages = rec.messages || [];
+      s.messageCount = s.messages.length;
+      delete s.trimmed;
+      persist({ localOnly: true });      // we just read the server; no reason to push back
+      if (s.id === activeId) { renderTranscript(s); renderTokMeter(); }
+    }
+  } catch (e) {
+    // stay a tail: the drawer works, and the next open retries
+  } finally {
+    fullInFlight.delete(s.id);
+  }
+  return s;
+}
+
 async function initSessions() {
   await loadServerRegistry();
   if (!activeId || !sessions.find(s => s.id === activeId)) {
     activeId = sessions.length ? sessions[0].id : null;
   }
   renderSessionList();
+  // The socket is already open by now (boot connects before this runs), so the
+  // transcript upgrade cannot delay it — this await only delays the first paint
+  // of history, which would otherwise paint 24 rows and then jump.
+  await ensureFull(cur());
   renderTranscript(cur());
   renderModelChip();
   renderTokMeter();
@@ -424,8 +469,8 @@ function startRenameTop() {
 // Switching sessions is an in-band `switch` command (server answers with a
 // `hello` carrying starting=true/false), never a reconnect.
 function wsUrl(s) {
-  // The wire contract lives in transport.js now, because /mobile builds the same URL and
-  // two copies of it drift. Every call site here is unchanged.
+  // The wire contract lives in transport.js, so there is exactly one copy of this URL.
+  // Every call site here is unchanged.
   return window.TacitTransport.wsUrl(s);
 }
 
@@ -1242,7 +1287,8 @@ function nowTs() { return Date.now() / 1000; }
 // beside the copy (extras.py's `.message` marker, set by agent._auto_snapshot
 // through _turn_msg_index). It is metadata *about* the message, never content in
 // it: the transcript sent to the model and the saved markdown export are
-// unchanged, which is the constraint PLAN.md item 4 puts on this feature.
+// unchanged. That is the constraint this feature is specified under — a snapshot
+// marker must never reach what the model reads or what the person exports.
 let snapRows = [];   // this session's snapshots, as /api/snapshots returns them
 let snapSeq = 0;     // a slow response must not decorate a newer session
 
@@ -1549,6 +1595,17 @@ function renderTranscript(s) {
   inner.innerHTML = '';
   if (!s) { emptyState.style.display = ''; return; }
   emptyState.style.display = s.messages.length ? 'none' : '';
+  // A registry row is a tail: what is on screen is the END of the conversation.
+  // ensureFull normally replaces it within a moment, but if that fetch fails, or
+  // the session was deleted mid-flight, the person must not read 24 rows as the
+  // whole transcript — and the edit guard below depends on `trimmed` being a
+  // state the interface admits to rather than hides.
+  if (s.trimmed && s.messages.length) {
+    const gap = document.createElement('div');
+    gap.className = 'transcript-gap';
+    gap.textContent = `${s.messageCount - s.messages.length} earlier message(s) not loaded`;
+    inner.appendChild(gap);
+  }
   // The transcript stores one assistant row per step — every model round that ran
   // tools gets its own row, often with no text at all. The live view streams a
   // whole turn into ONE bubble (all events land in `streaming`), so drawing a
@@ -1781,6 +1838,11 @@ function switchSession(id) {
   renderModelChip();
   renderTokMeter();
   attachCurrent();
+  // A registry row is a preview tail. Draw it now so the click feels instant,
+  // then redraw once the whole transcript lands. Order matters: attachCurrent
+  // runs first because ensureFull refuses to replace a transcript whose session
+  // is mid-turn, and it is the socket that knows the turn is running.
+  ensureFull(cur());
 }
 
 function endStreamQuiet() {
@@ -1826,6 +1888,17 @@ function editUserMessage(wrap) {
   if (!ws || ws.readyState !== 1) { toast('Not connected', true); return; }
   const s = cur();
   if (!s) return;
+  if (s.trimmed) {
+    // The index counted below comes from the bubbles on screen. On a preview tail
+    // that count begins partway through the conversation, while the server reads
+    // it as an offset into the FULL transcript — so the rewind would cut at the
+    // wrong turn. Upgrade the copy first; the next click edits. (The server
+    // refuses a fragment too, via _adoptable in routers/chat.py — but refusing is
+    // not editing, so the client must not offer it in the first place.)
+    ensureFull(s);
+    toast('Loading the full history of this session — try the edit again in a moment', true);
+    return;
+  }
   const userTurnIndex = userTurnIndexOfBubble(wrap);
   if (userTurnIndex < 0) return;
   const contentEl = wrap.querySelector('.msg-content');
@@ -1884,8 +1957,8 @@ function editUserMessage(wrap) {
 // md()/a renderer and the surrounding try/catch swallows it — the pane just
 // silently loses its content. Latent rather than live (nothing passes a
 // non-string statically), which is why those eight coercions exist at all.
-// The renderer itself now lives in static/markdown.js, because /mobile must draw the
-// same markup from the same escaping rules or the two pages drift into different bugs.
+// The renderer itself lives in static/markdown.js, because a second copy of a renderer
+// is a second set of escaping bugs.
 // These wrappers exist so every call site below is unchanged; they delegate, always.
 function esc(t) { return window.TacitMarkdown.esc(t); }
 function inlineMd(t) { return window.TacitMarkdown.inlineMd(t); }
@@ -2711,26 +2784,17 @@ function renderPlanReady(text) {
 
 function renderPlanApproved(info) {
   // Drawn from two sources that must look the same: the plan_approved event and
-  // the snapshot a reload gets from hello. Both carry plan_file (the record
-  // under ~/.tacit/plans) and context_file (the project's PLAN.md), because the
-  // approval writes both and they can fail independently — a PLAN.md the person
-  // wrote themselves is refused, not overwritten. So the line names each copy
-  // and says which one did not happen, and the server's own sentence, which is
-  // the only place the refusal reason exists, rides in the tooltip.
+  // the snapshot a reload gets from hello. Both carry plan_file, the file under
+  // ~/.tacit/plans. There is one copy now, not two: the approval used to also
+  // write the project's PLAN.md and to refuse to overwrite a PLAN.md the person
+  // had written themselves, which is why this line had to name two files and say
+  // which one did not happen. It names the one file that always lands, and the
+  // server's own sentence — what Implement will do with it — rides in the tooltip.
   planStrip.hidden = false;
-  // The project copy is named by whatever write_context actually chose: PLAN.md
-  // when the project let it, PLAN-<session> when the project's own PLAN.md was
-  // in the way. Hard-coding "PLAN.md" here would advertise a file that does not
-  // exist, so the name comes off the path.
-  const ctx = info.context_file || '';
-  const ctxName = ctx.split(/[\\/]/).pop();
-  const proj = ctx
-    ? ` · <span class="ps-ok">${esc(ctxName)} written</span>`
-    : ' · <span class="ps-warn">no project file written</span>';
   planStrip.innerHTML = `
     <div class="ps-head"><span class="ps-icon ok"></span>
       <span class="ps-phase">Plan approved & saved</span>
-      <span class="ps-detail" title="${esc(info.message || '')}">${esc(info.plan_file || '')}${proj}</span></div>
+      <span class="ps-detail" title="${esc(info.message || '')}">${esc(info.plan_file || '')}</span></div>
     ${planBody(planText || info.text || '')}
     <div class="pr-actions">
       <button class="ho-btn primary" id="plImplement">Implement now</button>
@@ -2938,7 +3002,8 @@ async function termRun(cmd) {
     const r = await fetch('/api/terminal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: cmd, project: (s && s.workdir) || '' }),
+      body: JSON.stringify({ command: cmd, project: (s && s.workdir) || '',
+                             session: (s && s.id) || '' }),
     });
     const d = await r.json();
     if (d.cwd) termCwd.textContent = d.cwd;
@@ -3001,10 +3066,23 @@ if (!activeId || !sessions.find(s => s.id === activeId)) {
 })();
 updateSteerHint();
 
-// Boot: load server-side session registry (cross-device), then connect.
+// Boot: the socket goes up FIRST, then the data arrives.
+// `sessions` and `activeId` are restored from localStorage synchronously at the
+// top of this module, so there is already a valid session to attach to before a
+// single byte has been fetched. Booting the other way round - await the registry,
+// then connect - made "connecting..." last exactly as long as that request, and
+// the registry is a read of every session file on disk. Ordering it the other way
+// costs nothing: `connectSession` reuses a socket that is already open, and a
+// session the server does not know answers 4404 and is adopted, which is the
+// path that already exists for a relocated store.
 (async function boot() {
+  const bootId = activeId;
+  if (bootId) connect();
   await initSessions();
-  connect();
+  // The registry may name a different active session, or supply the first one on
+  // a browser with no stored state. Only then is a second connect needed; calling
+  // it unconditionally would close and reopen a socket still mid-handshake.
+  if (activeId !== bootId) connect();
   await loadInfo();
   await loadSoundPref();
   renderModelPickers();

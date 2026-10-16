@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import platform as _platform
 import threading
 import time
@@ -33,6 +34,10 @@ ENV_FILE = HOME / ".env"
 PREFS_FILE = HOME / "prefs.json"
 GITHUB_FILE = HOME / "github.json"
 SESSIONS_DIR = HOME / "sessions"
+# Scratch root for a session that has no project. See `work_root` below: the point of
+# this directory is that a project-less Agent session no longer gets its tools rooted
+# in the user's home folder.
+WORKSPACES_DIR = HOME / "workspaces"
 SKILLS_DIR = HOME / "skills"
 KNOWLEDGE_DIR = HOME / "knowledge"
 EVIDENCE_FILE = HOME / "evidence.jsonl"
@@ -570,6 +575,92 @@ def project_roots() -> list[str]:
     else:
         cands = [str(p) for p in (prefs().get("projectRoots") or []) if p]
     return [c for c in cands if Path(c).is_dir()] or [str(USER_HOME)]
+
+
+_WS_KEEP = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _workspace_name(session: str) -> str:
+    """A usable directory name for one session id.
+
+    Every character that could act as a path separator is replaced, so the result
+    cannot climb out of WORKSPACES_DIR no matter what arrives on the wire — `..`
+    collapses to nothing and is replaced by "default". Real ids (`s-<hex>`) pass
+    through untouched; this is a guard, not a renaming.
+    """
+    keep = "".join(c if c in _WS_KEEP else "_" for c in str(session or ""))
+    return keep.strip("._-")[:48] or "default"
+
+
+def workspace_dir(session: str = "", create: bool = True) -> Path:
+    """The scratch root for a session with no project.
+
+    Read on every call, never cached at import, for the reason documented at
+    `store._index_path`: a test that redirects `WORKSPACES_DIR` has to actually
+    redirect it.
+
+    `create=False` answers "where would this session work" without making the
+    directory. Prompt-building needs that: an estimate of the system prompt's size
+    must not leave a folder behind on disk.
+    """
+    d = Path(WORKSPACES_DIR) / _workspace_name(session)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d.resolve()
+
+
+def remove_workspace(session: str) -> bool:
+    """Delete one session's scratch folder, when it has one.
+
+    Called from `store.remove`, because a deleted session's files would otherwise sit
+    in `WORKSPACES_DIR` forever: nothing else ever collects them, and they are the
+    thing the model wrote while nobody had chosen a project for it.
+
+    Refuses anything that is not a real per-session folder — an empty id maps to the
+    shared `default`, and a path that does not sit under WORKSPACES_DIR is not ours to
+    delete. It returns False rather than raising: a session is already gone by then,
+    and a failed cleanup must not make the delete look like it failed.
+    """
+    if not str(session or "").strip():
+        return False
+    base = Path(WORKSPACES_DIR).resolve()
+    d = base / _workspace_name(session)
+    try:
+        d = d.resolve()
+    except OSError:
+        return False
+    if d == base or not d.is_relative_to(base) or not d.is_dir():
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return not d.exists()
+
+
+def project_usable(project: str | None) -> bool:
+    """The `work_root` test on its own, for callers that must describe the situation
+    rather than resolve it (the system prompt says where the tools will work, and has
+    to agree with `work_root` or it lies)."""
+    return bool(project) and Path(str(project)).expanduser().is_dir()
+
+
+def work_root(project: str | None = "", session: str = "", create: bool = True) -> Path:
+    """Where a session's tools operate. One rule, shared by every caller.
+
+    A project that exists always wins — a session with a workdir must never be
+    re-rooted into a scratch folder. Only when there is no usable project does the
+    session get its own workspace, and the home directory is not a fallback any
+    more: it used to be, which meant a session with no project (or with a project
+    that had since been deleted) read and wrote in the user's home folder with only
+    a short blocklist in the way.
+
+    A project that is *named but missing* counts as no project. Silently working in
+    the home folder is worse than working in a scratch folder, and the reason this
+    branch exists at all is that stale paths arrive from stored sessions.
+    """
+    if project:
+        p = Path(project).expanduser()
+        if p.is_dir():
+            return p.resolve()
+    return workspace_dir(session, create=create)
 
 
 def fs_roots() -> list[dict]:

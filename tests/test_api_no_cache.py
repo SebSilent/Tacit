@@ -1,9 +1,9 @@
 """Item 3, the half the store fix does not reach: the response a browser caches.
 
-PLAN.md:156-157 names this anchor and leaves it open —
+The anchor this started at, before the header existed:
 
-    `backend/main.py:130-133` — `Cache-Control: no-cache` is set for `index.html`
-    only. `/api/sessions` is not covered by that header — check it.
+    `Cache-Control: no-cache` was set for `index.html` only. `/api/sessions` was not
+    covered by that header.
 
 Checked, and it was not covered: `/api/sessions/registry` came back with no
 Cache-Control, no ETag, no Last-Modified. A response with no freshness information
@@ -65,8 +65,8 @@ class TheListTheBrowserKeeps(IsolatedStore):
     """The endpoints the session list is built from."""
 
     def test_registry_is_not_cacheable(self):
-        # app.js:197 and mobile.js:296 — the payload that decides which sessions
-        # the sidebar shows. This is the one that reappeared.
+        # app.js:197 — the payload that decides which sessions the sidebar shows.
+        # This is the one that reappeared.
         r = self.client.get("/api/sessions/registry")
         self.assertEqual(r.status_code, 200, r.text[:200])
         self.assertEqual(r.headers.get("Cache-Control"), "no-cache")
@@ -96,13 +96,12 @@ class TheRuleIsPathBased(IsolatedStore):
 
 
 class WhatStaysCacheable(IsolatedStore):
-    """The pages are already covered; the assets are covered a different way."""
+    """The page is already covered; the assets are covered a different way."""
 
-    def test_the_pages_are_no_cache(self):
+    def test_the_page_is_no_cache(self):
         # PLAN:156 — nothing in the suite pinned this before, so a refactor of the
         # FileResponse call could drop it silently.
         self.assertEqual(self.header("/"), "no-cache")
-        self.assertEqual(self.header("/mobile"), "no-cache")
 
     def test_static_assets_keep_the_version_query_mechanism(self):
         """/static is deliberately outside the rule: `?v=NN` + ETag revalidation is

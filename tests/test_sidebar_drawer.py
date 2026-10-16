@@ -1,4 +1,8 @@
-"""The mobile drawer has to be dismissible, and nothing but this file makes it so.
+"""The sidebar drawer has to be dismissible, and nothing but this file makes it so.
+
+This was written for the `/mobile` page, which is gone; what it pins is the **desktop**
+sidebar's off-canvas mode, so it now carries that name. Nothing here depends on a mobile
+page existing - the file is a `static/app.js` and `static/style.css` source assertion.
 
 Under 760px the sidebar stops being a column and becomes an off-canvas drawer:
 `style.css` paints `.sidebar.open` over the transcript and adds a scrim at

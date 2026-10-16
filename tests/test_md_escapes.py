@@ -45,10 +45,10 @@ MD = (ROOT / "static" / "markdown.js").read_text(encoding="utf-8")
 
 
 def renderer_source():
-    """The single copy both frontends load: `static/markdown.js`.
+    """The single copy the page loads: `static/markdown.js`.
 
-    It moved out of `app.js` with PLAN item 8 - a second frontend that re-implements
-    the renderer is a second set of escaping bugs, and this file exists because
+    It moved out of `app.js` when the renderer needed a second consumer - a second
+    copy of a renderer is a second set of escaping bugs - and this file exists because
     escaping is where model text becomes HTML. The slice is taken the same way as
     before (anchor forward to a named marker, so an empty slice cannot pass silently);
     `test_app_js_delegates_...` below pins that app.js goes through it."""

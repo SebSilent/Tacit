@@ -87,13 +87,20 @@ GZIP_BASELINE = 115_372
 # lesson the 2026-10-13 note records — a budget that is nearly spent reads as a
 # passing test rather than a warning, so both numbers are re-measured here rather
 # than nudged.
-# Re-measured 2026-10-14, per page (see the budget test). Desktop is the larger page
-# and sets the line; the shipped pair is the union of static/, still asserted because
-# a file nobody loads is dead weight that someone still has to review.
-RAW_BUDGET = 470_000
-GZIP_BUDGET = 124_000
-SHIPPED_RAW_BUDGET = 518_000
-SHIPPED_GZIP_BUDGET = 137_000
+# Re-measured 2026-10-14, after the phone page and its script left static/.
+#
+# index.html now loads every file in the directory, so the per-page set and the
+# shipped union are the same files again and the shipped pair is the page pair plus
+# the HTML document itself (23,935 raw / 5,451 gzip). Measured: page assets
+# 460,789 raw / 121,871 gzip; union 484,724 raw / 127,322 gzip. Each budget is that
+# plus ~4%, the margin every note above was set with.
+#
+# The previous numbers were 2% and 1.7% of headroom away from the page's real load —
+# spent, not warning, which is the failure this file's own notes keep naming.
+RAW_BUDGET = 480_000
+GZIP_BUDGET = 127_000
+SHIPPED_RAW_BUDGET = 505_000
+SHIPPED_GZIP_BUDGET = 132_500
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
@@ -187,16 +194,16 @@ def _delegated_handler(src):
     return hits, _block(code, code.index("{", hits[0].end())) if hits else ""
 
 
-PAGES = ("index.html", "mobile.html")   # both are entry points since PLAN item 8
+PAGES = ("index.html",)   # the one entry point
 
 
 def _served_files(page="index.html"):
     """Every file one page actually loads.
 
-    Takes the page rather than assuming the desktop one. While this read only
-    index.html, a `<script>` that 404s on /mobile was invisible to the suite -
-    the exact failure the asset test below exists to catch - and every byte of
-    the mobile chrome was being charged against the desktop's weight budget.
+    Takes the page as a parameter because the reference set is per entry point, not
+    per repository: a `<script>` that 404s is the exact failure the asset test below
+    exists to catch, and summing all of static/ would charge a device for chrome it
+    never downloads.
     """
     html = (STATIC / page).read_text(encoding="utf-8")
     refs = re.findall(r'(?:src|href)="(/static/[^"?]+)', html)
@@ -286,15 +293,19 @@ class PageWeightTests(TestCase):
     def test_what_the_browser_loads_stays_inside_its_budget(self):
         """Per page, then per shipment.
 
-        Re-measured 2026-10-14. index.html loads app.js, assistant/delegation/git/
-        harness/platform, the shared transport.js and markdown.js, and style.css:
-        449,290 raw / 118,937 gzip. mobile.html loads mobile.js, those same two
-        shared files and style.css: 157,556 / 36,037. The single number this test
-        used to check summed all of static/, so it charged the phone for the
-        desktop's chrome and the desktop for the phone's - and it went over its
-        line the day the second page landed, without either device loading a byte
-        more than it did before. Budgets are the larger page plus ~4%, the same
-        margin every note above was set with.
+        It used to sum all of static/ as one figure. With two pages that sum was
+        496,117 raw while the desktop page itself loaded 449,290 / 118,937 and the
+        phone page 157,556 / 36,037 - so the number charged every device for chrome
+        it never downloaded, and it could go over its line on a day when no page got
+        heavier. Hence the per-page loop below.
+        Measured again after the phone page was withdrawn: index.html loads app.js,
+        assistant/delegation/git/harness/platform, the shared transport.js and
+        markdown.js, and style.css - 460,789 raw / 121,871 gzip. The union of
+        static/ is 484,724 / 127,322, i.e. the same files plus the HTML document,
+        because there is one entry point again.
+        Budgets are each measured figure plus ~4%, the margin every note above was
+        set with. The page budgets had drifted to ~2% of headroom by the time this
+        was re-measured: spent, not warning.
         """
         for page in PAGES:
             raw, gz = _page_bytes(page)

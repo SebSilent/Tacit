@@ -56,7 +56,7 @@ NAMESPACES = ["Tacit", "TacitTheme", "TacitAssistant", "TacitDelegation",
 # The surface as measured on 2026-10-13. Pinned so a dropped or renamed member is a
 # reviewed change rather than a panel that quietly stops responding.
 EXPECTED_EXPORTS = {
-    # The wire contract both frontends load. This set is the module's whole public
+    # The wire contract the page loads. This set is the module's whole public
     # surface; adding a member here is a reviewed change, same as every other panel.
     "TacitTransport": {"EVENTS", "COMMANDS", "wsUrl", "uuid", "openSocket", "getJSON",
                        "postJSON", "isCommand"},
@@ -77,14 +77,12 @@ EXPECTED_EXPORTS = {
 }
 
 EXPECTED_READS = {
-    # app.js keeps its own per-session socket bookkeeping and borrows only the URL
-    # builder from the contract; mobile.js is the fuller reader. Either way the
-    # invariant is the same one this file has always held: every read resolves.
-    # mobile.js reads the contract through a `const T =` alias, which this file
-    # counts; the desktop page borrows only the two builders it delegates to.
-    "TacitTransport": {"wsUrl", "uuid", "openSocket", "getJSON", "postJSON"},
+    # app.js keeps its own per-session socket bookkeeping and borrows only the two
+    # builders it delegates to. The invariant is the one this file has always held:
+    # every read resolves.
+    "TacitTransport": {"wsUrl", "uuid"},
     # app.js keeps three wrappers around the shared renderer; the wrappers are the
-    # reads, and mobile.js reads the same three names.
+    # reads this counts.
     "TacitMarkdown": {"esc", "inlineMd", "md"},
     "Tacit": {"getSid", "getWorkdir", "md", "pickDir", "refreshInfo",
               "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},

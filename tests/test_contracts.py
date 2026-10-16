@@ -6,6 +6,7 @@ version-control process: the git layer is stubbed where it is exercised.
 """
 
 import asyncio
+import inspect
 import os
 import sys
 import unittest
@@ -114,6 +115,42 @@ class TestEditAndContinue(unittest.TestCase):
 
     def test_missing_turn_is_not_found(self):
         self.assertIsNone(self._cut([{"role": "assistant", "content": "x"}], 0))
+
+    # ── the fragment guard: chat._adoptable ─────────────────────────────────
+    # /api/sessions/registry now ships each session as a PREVIEW TAIL (the
+    # `REGISTRY_PREVIEW` bound in backend/store.py), and the rewind handler above
+    # adopts whatever the browser sends. A tail left in an old tab would therefore
+    # replace 300 stored rows with their last 24 — and `userTurnIndex` is counted
+    # from that same fragment, so the cut would land on a turn nobody named and
+    # the request would look like it succeeded. Adoption is conditional, and the
+    # condition is a pure function: testable without a socket.
+
+    def test_a_tail_is_not_a_transcript(self):
+        prior = [{"role": "user", "content": "the real opening"}]
+        prior += [{"role": "assistant", "content": f"a{i}"} for i in range(30)]
+        tail = prior[-24:]
+        self.assertFalse(chat._adoptable(prior, tail))
+
+    def test_a_shorter_list_that_opens_the_same_way_is_still_this_conversation(self):
+        # The case adoption exists for: an offline edit, or a server that restarted
+        # before its first persist. Same opening means the same conversation, even
+        # when the client holds less than we do.
+        prior = [{"role": "user", "content": "open"},
+                 {"role": "assistant", "content": "b"}] * 5
+        self.assertTrue(chat._adoptable(prior, prior[:4]))
+
+    def test_a_richer_client_is_adopted_wholesale(self):
+        prior = [{"role": "user", "content": "open"}]
+        self.assertTrue(chat._adoptable(
+            prior, prior + [{"role": "assistant", "content": "x"}]))
+
+    def test_nothing_stored_is_never_a_reason_to_refuse(self):
+        self.assertTrue(chat._adoptable([], [{"role": "user", "content": "mid"}]))
+
+    def test_a_different_role_at_the_start_is_a_fragment(self):
+        prior = [{"role": "user", "content": "x"}] * 10
+        self.assertFalse(chat._adoptable(
+            prior, [{"role": "assistant", "content": "x"}] * 3))
 
 
 class TestForkAdoption(unittest.TestCase):
@@ -245,7 +282,7 @@ class TestServerStatus(unittest.TestCase):
     """The General tab's Server section reads where this process listens."""
 
     def test_reports_host_port_pid(self):
-        d = asyncio.run(api.server_status())
+        d = api.server_status()      # a plain `def` route: it reads disk, not a socket
         self.assertTrue(d["ok"])
         self.assertEqual(d["port"], config.PORT)
         self.assertGreater(d["pid"], 0)
@@ -342,7 +379,7 @@ class TestProbeShape(unittest.TestCase):
             "p": {"baseUrl": "http://x", "models": [{"id": "old"}]}}}
         engine.remote_models = lambda base, key="": ["old", "fresh1", "fresh2"]
         try:
-            r = asyncio.run(api.probe_provider("p"))
+            r = api.probe_provider("p")   # sync route: the provider read blocks
         finally:
             config.registry, engine.remote_models = orig_reg, orig_rm
         self.assertTrue(r["ok"])
@@ -445,7 +482,13 @@ class TestProviderReconciliation(unittest.TestCase):
         config.save_registry = lambda r: box.__setitem__("reg", r)
         engine.remote_models = lambda base, key="": list(remote)
         try:
-            out = asyncio.run(call(*args))
+            # The provider routes are deliberately a mix: `probe_provider` is sync
+            # (it blocks on an HTTP read, so FastAPI runs it on the threadpool)
+            # while `set_default` and `prune_models` are coroutines. This helper is
+            # handed either, so it awaits only what actually needs awaiting.
+            out = call(*args)
+            if inspect.isawaitable(out):
+                out = asyncio.run(out)
         finally:
             config.registry, config.save_registry, engine.remote_models = orig
         return out, box["reg"]["providers"]["p"]["models"]

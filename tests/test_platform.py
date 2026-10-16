@@ -1387,9 +1387,9 @@ class TestSessionCreationRule(Isolated):
         # must never ride an ordinary connection, or any stale id could put a
         # row in the store.
         #
-        # The builder moved into static/transport.js when /mobile arrived, so the
-        # gate is asserted where it now lives - and app.js is pinned to go through
-        # it rather than keep a second copy that could diverge.
+        # The builder lives in static/transport.js, so the gate is asserted where it
+        # now is - and app.js is pinned to go through it rather than keep a second
+        # copy that could diverge.
         wire = (base / "static/transport.js").read_text(encoding="utf-8")
         self.assertIn("(s._new || s._adopt) ? '&create=1' : ''", wire)
         self.assertIn("window.TacitTransport.wsUrl(s)", js)

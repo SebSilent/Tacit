@@ -162,15 +162,21 @@ async def set_gateway(request: Request):
 
 
 @router.get("/api/deps")
-async def deps_status():
-    """What optional dependencies exist, and what is missing here."""
+def deps_status():
+    """What optional dependencies exist, and what is missing here.
+
+    Plain `def` on purpose: `deps.status()` spawns a probe per optional group, and
+    measured 380 ms. On the event loop that was 380 ms during which the server could
+    not answer `/health` (341 ms there, from 13 ms), accept a WebSocket, or serve the
+    next request. Same for `deps_check` below.
+    """
     from .. import deps
 
     return _ok(**deps.status())
 
 
 @router.get("/api/deps/{name}")
-async def deps_check(name: str):
+def deps_check(name: str):
     from .. import deps
 
     got = deps.check(name)
@@ -298,7 +304,7 @@ async def guidance_configure(request: Request):
 # that ever reaches memory or a skill, and that stays a person's click.
 
 @router.get("/api/analyzer")
-async def analyzer_status():
+def analyzer_status():
     from .. import analyzer
 
     return _ok(**analyzer.status())
@@ -326,7 +332,8 @@ async def analyzer_run(request: Request):
     except Exception:
         body = {}
     force = bool((body or {}).get("force"))
-    res = analyzer.run_once(force=force)
+    # run_once reads every session transcript and may call a model; off the loop.
+    res = await asyncio.to_thread(analyzer.run_once, force=force)
     # merged rather than double-splatted: both dicts carry counts, and a collision
     # here is a 500 rather than a wrong number.
     merged = {**res, **analyzer.status()}

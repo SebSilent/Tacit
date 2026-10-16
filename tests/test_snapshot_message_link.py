@@ -9,8 +9,9 @@ distinction is the whole design: the transcript sent to a model is rebuilt as
 the rows, so a field smuggled into a message would change what the model sees and what
 the person saves. A sidecar file changes neither.
 
-This file checks both halves — that the index is recorded and survives the read path, and
-that the renderer draws a control only where a real index exists.
+This file checks three things: that the index is recorded and survives the read path, that
+the renderer draws a control only where a real index exists, and that rewinding a session
+does not leave old undo points pointing at rows they never made.
 """
 
 import re
@@ -22,9 +23,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 PLATFORM = (ROOT / "static" / "platform.js").read_text(encoding="utf-8")
-MOBILE = (ROOT / "static" / "mobile.js").read_text(encoding="utf-8")
 CSS = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
 API = (ROOT / "backend" / "routers" / "api.py").read_text(encoding="utf-8")
+CHAT = (ROOT / "backend" / "routers" / "chat.py").read_text(encoding="utf-8")
 
 from backend import agent, config, extras, store  # noqa: E402
 from tests.helpers import state_paths  # noqa: E402
@@ -100,6 +101,86 @@ class TestMarkerIsWritten(Isolated):
         # to be listed there or the transcript stops being able to find its undo points.
         self.assertIn("rows = extras.snapshot_index(limit, session=session)", API)
         self.assertIn('"snapshots": rows', API)
+
+
+class TestRewindDropsStaleLinks(Isolated):
+    """A rewound session must not let old undo points claim new rows.
+
+    PLAN item 4's "Done when" asks what happens when the message a snapshot points
+    at is deleted afterwards. `truncate_from` deletes stored rows (edit-and-resend),
+    so every marker at or past the cut counts rows that are gone — and the
+    transcript then grows back, landing that index on a *different* message. The
+    control would open compare against a snapshot from a discarded branch and look
+    entirely credible. Dropping the marker keeps the undo point and removes only
+    the claim, which is the "shows it's stale" branch of that sentence.
+    """
+
+    def _take(self, session, index):
+        # The name comes back in the tool's own line ("snapshot <name>: n file(s)")
+        # rather than by re-listing: two snapshots taken in the same second sort
+        # adjacently, and "the newest" is not a safe way to name the one I just made.
+        return extras.snapshot(str(self.root), f"turn {index}",
+                               session=session,
+                               message=index).split()[1].rstrip(":")
+
+    def test_rows_at_and_past_the_cut_lose_their_link(self):
+        keep = self._take("s1", 2)
+        drop = self._take("s1", 5)
+        self.assertEqual(extras.drop_message_links("s1", 3), 1)
+        rows = {r["name"]: r["message"] for r in extras.snapshot_index(session="s1")}
+        self.assertEqual(rows[keep], 2)
+        self.assertIsNone(rows[drop])
+
+    def test_the_cut_itself_is_dropped_not_kept(self):
+        # chat.py stores msgs[:cut], so `cut` is the index of the FIRST deleted row.
+        # Treating it as still-alive is the off-by-one that reintroduces the wrong
+        # link, just one row later.
+        at_cut = self._take("s1", 3)
+        self.assertEqual(extras.drop_message_links("s1", 3), 1)
+        self.assertFalse((config.CHECKPOINT_DIR / at_cut / ".message").exists())
+
+    def test_the_undo_point_itself_survives(self):
+        # Deleting the copy would turn a rewind into data loss. The snapshot exists
+        # precisely to recover files the discarded branch changed, and the Snapshots
+        # panel still lists it.
+        name = self._take("s1", 5)
+        extras.drop_message_links("s1", 3)
+        d = config.CHECKPOINT_DIR / name
+        self.assertTrue(d.is_dir())
+        self.assertTrue((d / "a.py").exists())
+        self.assertEqual((d / ".session").read_text(encoding="utf-8"), "s1")
+        self.assertIn(name, [r["name"] for r in extras.snapshot_index(session="s1")])
+
+    def test_another_sessions_link_is_untouched(self):
+        other = self._take("s2", 9)
+        self._take("s1", 5)
+        self.assertEqual(extras.drop_message_links("s1", 3), 1)
+        rows = {r["name"]: r["message"] for r in extras.snapshot_index(session="s2")}
+        self.assertEqual(rows[other], 9)
+
+    def test_no_marker_and_a_corrupt_marker_are_not_errors(self):
+        # Snapshots from the agent's own `snapshot` tool have no link to lose, and a
+        # half-written marker must not raise inside a rewind the user asked for.
+        extras.snapshot(str(self.root), "manual", session="s1")
+        broken = self._take("s1", 4)
+        (config.CHECKPOINT_DIR / broken / ".message").write_text("??", encoding="utf-8")
+        self.assertEqual(extras.drop_message_links("s1", 0), 0)
+
+    def test_an_empty_session_drops_nothing(self):
+        # `truncate_from` knows its own sid, but a caller passing "" must not be
+        # read as "every snapshot with no session marker".
+        kept = self._take("s1", 1)
+        self.assertEqual(extras.drop_message_links("", 0), 0)
+        self.assertEqual(extras.snapshot_index(session="s1")[0]["message"], 1)
+        self.assertEqual(extras.snapshot_index(session="s1")[0]["name"], kept)
+
+    def test_the_truncate_handler_drops_before_acking(self):
+        # Source-level: this suite has no websocket harness for this branch. The
+        # ordering is the substance — app.js redraws and re-fetches /api/snapshots
+        # when it sees `truncated`, so dropping after the send races the redraw.
+        call = CHAT.index('extras.drop_message_links(rec["id"], cut)')
+        ack = CHAT.index('"type": "truncated"')
+        self.assertLess(call, ack)
 
 
 class TestIndexIsTheRightNumber(Isolated):
@@ -218,27 +299,6 @@ class TestDesktopDrawsTheControl(unittest.TestCase):
         self.assertTrue(block, ".msg-snap has no rule in style.css")
         self.assertNotIn("margin-left: auto", block.group(1))
         self.assertIn("margin-left: var(--sp-4)", block.group(1))
-
-
-class TestMobileDrawsTheControl(unittest.TestCase):
-    """Same link, subset behaviour: it shows what the snapshot holds, not a restore."""
-
-    def test_rows_are_drawn_with_their_index(self):
-        self.assertIn("s.messages.forEach((m, i) => thread.appendChild(row(m, i)));",
-                      code(MOBILE))
-        self.assertIn("function row(msg, i) {", code(MOBILE))
-
-    def test_the_link_is_read_from_the_index_and_skipped_without_one(self):
-        mob = code(MOBILE)
-        self.assertIn("snaps.filter((s) => s.message === i)", mob)
-        self.assertIn("for (const s of snapshotsFor(i))", mob)
-
-    def test_compare_and_restore_stay_on_the_desktop(self):
-        # Mobile has no picked workspace, and compare needs one. The page shows the
-        # file list instead of offering a button that cannot work.
-        mob = code(MOBILE)
-        self.assertNotIn("snapshots/compare", mob)
-        self.assertNotIn("snapshots/restore", mob)
 
 
 class TestTheGuardsCanFail(Isolated):

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.gzip import GZipMiddleware
 
 from . import (analyzer, autoupdater, config, mcp_registry, plan_runtime,
                 proctools, session_runtime, store)
@@ -115,8 +116,8 @@ app = FastAPI(title="Tacit", lifespan=lifespan)
 async def no_cache_api(request, call_next):
     """Every /api/ response is revalidated before it is reused.
 
-    The pages already carried `Cache-Control: no-cache` (see / and /mobile below),
-    but the JSON they read did not - and the JSON is where the bug lived. PLAN's
+    The page already carried `Cache-Control: no-cache` (see the `/` route below),
+    but the JSON it reads did not - and the JSON is where the bug lived. PLAN's
     item-3 anchor names it: "/api/sessions is not covered by that header - check
     it." Checked: `/api/sessions/registry` came back with no Cache-Control, no
     ETag and no Last-Modified, so a browser was free to keep its own copy and show
@@ -136,6 +137,14 @@ async def no_cache_api(request, call_next):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
+
+# Added after the @app.middleware("http") decorator above, which puts it on the
+# OUTERMOST layer: it compresses whatever the inner stack produces, including the
+# `Cache-Control` that middleware sets. min_size 1024 so a 200-byte ack is not
+# spent CPU on. Nothing here is a streaming HTTP response — the live transcript
+# travels over the WebSocket, which this middleware passes through untouched
+# (it only wraps `scope["type"] == "http"`), so gzip cannot stall a token stream.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(api.router)
 app.include_router(chat.router)
@@ -160,15 +169,6 @@ async def index():
         return JSONResponse({"ok": False, "error": "static/index.html not found"}, status_code=404)
     return FileResponse(page, headers={"Cache-Control": "no-cache"})
 
-
-@app.get("/mobile")
-async def mobile():
-    """The phone frontend. Same origin, same socket, same store: this serves a page,
-    not a second service - there is nothing here for CORS or a second port to get wrong."""
-    page = config.STATIC_DIR / "mobile.html"
-    if not page.exists():
-        return JSONResponse({"ok": False, "error": "static/mobile.html not found"}, status_code=404)
-    return FileResponse(page, headers={"Cache-Control": "no-cache"})
 
 
 if config.STATIC_DIR.is_dir():

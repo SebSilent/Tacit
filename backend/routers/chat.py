@@ -28,7 +28,7 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import (agent, assistant, config, plan_runtime, session_runtime,
+from .. import (agent, assistant, config, extras, plan_runtime, session_runtime,
                 session_state, store, turn_bus)
 from ..session_runtime import _title
 
@@ -111,6 +111,34 @@ def _stats_payload(rec: dict) -> dict:
                          "percent": ctx.get("percent")},
         "model": rec.get("model"),
     }
+
+
+def _adoptable(prior: list, incoming: list) -> bool:
+    """May a client-supplied transcript replace the stored one?
+
+    `truncate_from` treats the browser's visible list as authoritative, and that
+    is deliberate: it is how an offline edit, or a server that restarted before
+    the first persist, gets rescued. But /api/sessions/registry now ships each
+    session as a PREVIEW TAIL (see `REGISTRY_PREVIEW` in backend/store.py), and a
+    tail is the END of a conversation. Adopting one would replace 300 stored rows
+    with their last 24 — and the rewind index below is counted from the same
+    fragment, so "edit this old turn" would then cut an unrelated message and
+    delete real history while looking like it worked.
+
+    A legitimate client list starts where the record starts. So: adopt when
+    nothing is stored, when the client holds at least as much history as we do,
+    or when both lists open with the same message.
+    """
+    if not prior or not incoming:
+        return True
+    if len(incoming) >= len(prior):
+        return True
+    a, b = prior[0], incoming[0]
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    if a.get("role") != b.get("role"):
+        return False
+    return (a.get("content") or "")[:200] == (b.get("content") or "")[:200]
 
 
 def _clean_history(items) -> list[dict]:
@@ -487,6 +515,17 @@ async def ws_session(ws: WebSocket, sid: str):
                 # echo userTurnIndex so the client can match the acknowledgement.
                 incoming = msg.get("messages")
                 if isinstance(incoming, list) and incoming:
+                    if not _adoptable(rec.get("messages") or [], incoming):
+                        # A fragment that does not start this conversation — a
+                        # preview tail left in an old tab. Its `userTurnIndex` was
+                        # counted from the same fragment, so the cut below would
+                        # rewind to the wrong turn and delete rows the user never
+                        # named. Refuse the whole request, leave the record
+                        # untouched, and let the client reopen and try again.
+                        await ws.send_text(_json({
+                            "type": "truncate_failed", "sid": rec["id"],
+                            "error": "this browser holds only a fragment of the session - reopen it, then edit"}))
+                        continue
                     rec["messages"] = _clean_history(incoming)
                 msgs = rec.get("messages") or []
                 turn = msg.get("userTurnIndex")
@@ -508,6 +547,12 @@ async def ws_session(ws: WebSocket, sid: str):
                 else:
                     rec["messages"] = msgs[:cut]
                     store.save(rec)
+                    # Rows from `cut` onward no longer exist, so any snapshot that
+                    # named one must stop naming it before the client re-renders:
+                    # `truncated` makes app.js redraw and re-fetch /api/snapshots,
+                    # and a stale index would then decorate a surviving, unrelated
+                    # row. The undo points themselves are untouched.
+                    extras.drop_message_links(rec["id"], cut)
                     await ws.send_text(_json({"type": "truncated", "index": cut,
                                               "userTurnIndex": turn if isinstance(turn, int) else cut,
                                               "sid": rec["id"]}))
@@ -549,11 +594,12 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind == "plan_approve":
                 # Approving is where a plan stops being conversation and becomes
-                # a file: the approved text is saved under ~/.tacit/plans as the
-                # record, and written into the project as PLAN.md, which is the
-                # copy the implementing agent's own context reads. The runtime
-                # does both and the result is forwarded unchanged, so the strip
-                # can say which of the two actually landed.
+                # a file: the approved text is saved under ~/.tacit/plans, which
+                # is now the only copy — the project is never written into. What
+                # reaches the implementing agent is a pointer to that path in its
+                # standing prefix, so the plan survives compaction without being
+                # pasted back into context. The result is forwarded unchanged so
+                # the strip can name the file it wrote.
                 res = plan_runtime.approve(rec["id"], rec, bool(msg.get("approved")))
                 store.save(rec)
                 await ws.send_text(_json({"type": "plan_approved", **res, "sid": rec["id"]}))

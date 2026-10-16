@@ -247,9 +247,10 @@ def run(command: str, project: str | None = None, backend: str | None = None,
     box = dict(cfg.get("sandbox") or {})
     chosen = backend or box.get("backend") or "none"
     limit = max(1, min(int(timeout or box.get("timeout") or config.SHELL_TIMEOUT), 600))
-    root = Path(project).expanduser() if project else Path(config.USER_HOME)
-    if not root.is_dir():
-        root = Path(config.USER_HOME)
+    # Same rule the file tools use, from one place: a usable project wins, otherwise
+    # this session's scratch folder. It used to fall back to the user's home
+    # directory, which put a project-less `run_shell` in `~` with no blocklist at all.
+    root = config.work_root(project, session)
 
     if not cmd:
         return _result(False, "ERROR: empty command", backend=chosen, cwd=str(root))

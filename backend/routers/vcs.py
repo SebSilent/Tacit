@@ -1,3 +1,21 @@
+"""Version control panel endpoints.
+
+The git and gh CLIs are subprocesses, and on Windows one spawn costs tens of
+milliseconds. That is only a problem when it happens *on the event loop*: an
+`async def` handler that calls `subprocess.run` directly stops the server from
+accepting anything else for its duration - no WebSocket handshake, no other
+request, no poll. Measured before this was fixed, one `/api/git/status` pushed an
+unrelated `/health` from 13 ms to 177 ms, and eight parallel ones serialised
+(316 ms to 818 ms), which is the signature of a loop with no concurrency left.
+`/api/git/run` could hold it for TIMEOUT seconds - 120 - during a `git push`.
+
+So these handlers are either plain `def`, which FastAPI runs on a threadpool, or
+they offload the specific blocking call with `asyncio.to_thread`. The same rule
+applies to the file-reading endpoints in `api.py`: `/api/sessions/registry` reads
+every session file on disk, which is fine off the loop and not fine on it.
+"""
+import asyncio
+
 from fastapi import APIRouter, Request
 
 from .. import hosting, vcs
@@ -17,15 +35,20 @@ async def _commit_identity(cwd: str) -> tuple[dict, str]:
     the Tacit default. Nothing is ever blocked or misattributed, and the choice
     survives across sessions.
     """
-    for candidate in (vcs.saved_identity(), vcs.configured_identity(cwd),
-                      vcs.env_identity()):
-        if candidate:
-            return candidate, ""
-    return vcs.default_identity(), ""
+    # Off the loop, and in order: each source is a `git config` spawn, and stopping
+    # at the first hit is the point, so this cannot be three separate awaits.
+    def _resolve():
+        for candidate in (vcs.saved_identity(), vcs.configured_identity(cwd),
+                          vcs.env_identity()):
+            if candidate:
+                return candidate
+        return vcs.default_identity()
+
+    return await asyncio.to_thread(_resolve), ""
 
 
 @router.get("/api/git/status")
-async def status(workdir: str = "", sid: str = ""):
+def status(workdir: str = "", sid: str = ""):
     cwd = vcs.resolve_workdir(workdir, sid)
     top = vcs.vc(cwd, ["rev-parse", "--show-toplevel"])
     if not top["ok"]:
@@ -39,7 +62,7 @@ async def status(workdir: str = "", sid: str = ""):
 
 
 @router.get("/api/git/log")
-async def log(workdir: str = "", sid: str = "", limit: int = 30):
+def log(workdir: str = "", sid: str = "", limit: int = 30):
     cwd = vcs.resolve_workdir(workdir, sid)
     count = min(200, max(1, int(limit or 30)))
     r = vcs.vc(cwd, ["log", f"--max-count={count}", "--date=iso",
@@ -61,7 +84,7 @@ async def log(workdir: str = "", sid: str = "", limit: int = 30):
 
 
 @router.get("/api/git/branches")
-async def branches(workdir: str = "", sid: str = ""):
+def branches(workdir: str = "", sid: str = ""):
     cwd = vcs.resolve_workdir(workdir, sid)
     cur = vcs.vc(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
     local = vcs.vc(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
@@ -76,7 +99,7 @@ async def branches(workdir: str = "", sid: str = ""):
 
 
 @router.get("/api/git/diff")
-async def diff(workdir: str = "", sid: str = "", staged: str = "", path: str = ""):
+def diff(workdir: str = "", sid: str = "", staged: str = "", path: str = ""):
     cwd = vcs.resolve_workdir(workdir, sid)
     args = ["diff", "--no-color"]
     if staged:
@@ -92,9 +115,10 @@ async def diff(workdir: str = "", sid: str = "", staged: str = "", path: str = "
 async def get_identity(workdir: str = "", sid: str = ""):
     """Every identity source, and which one a commit would actually use."""
     cwd = vcs.resolve_workdir(workdir, sid)
-    repository = vcs.configured_identity(cwd)
-    settings = vcs.saved_identity()
-    environment = vcs.env_identity()
+    # Three `git config` spawns, off the loop, while the GitHub round-trip below is
+    # awaited. This one stays `async` because it genuinely awaits hosting.account().
+    repository, settings, environment = await asyncio.to_thread(
+        lambda: (vcs.configured_identity(cwd), vcs.saved_identity(), vcs.env_identity()))
     try:
         acct = await hosting.account()
     except Exception:  # noqa: BLE001
@@ -114,7 +138,8 @@ async def get_identity(workdir: str = "", sid: str = ""):
 @router.post("/api/git/identity")
 async def set_identity(request: Request):
     body = await request.json()
-    res = vcs.save_identity(body.get("name") or "", body.get("email") or "")
+    res = await asyncio.to_thread(vcs.save_identity,
+                                  body.get("name") or "", body.get("email") or "")
     return res if res.get("ok") else {"ok": False, "error": res.get("error")}
 
 
@@ -142,6 +167,9 @@ async def run(request: Request):
                       "-c", f"user.email={identity['email']}"]
 
     exe = vcs.BIN if binary.startswith("git") else vcs.HOST_BIN
-    r = vcs.run_argv([exe, *prefix, *argv[1:]], cwd)
+    # The one that matters most: this runs whatever git/gh the console typed, with a
+    # TIMEOUT of 120 seconds. On the loop that is two minutes during which the server
+    # cannot accept a WebSocket, answer a poll, or finish any other request.
+    r = await asyncio.to_thread(vcs.run_argv, [exe, *prefix, *argv[1:]], cwd)
     out = r["stdout"] + (("\n" + r["stderr"]) if r["stderr"] else "")
     return {"ok": r["ok"], "workdir": cwd, "command": command, "output": out.strip()}

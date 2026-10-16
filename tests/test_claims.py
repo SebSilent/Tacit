@@ -1782,9 +1782,10 @@ class TestTaskStripEndpoint(Isolated):
     """GET /api/tasks/{sid}: the strip above the composer reads this."""
 
     def _call(self, sid):
-        import asyncio
+        # `tasks_state` is a sync route (one file read), so it is called directly.
+        # A refusal still arrives as a JSONResponse, which the check below handles.
         from backend.routers import api as api_router
-        res = asyncio.run(api_router.tasks_state(sid))
+        res = api_router.tasks_state(sid)
         # a refusal comes back as a JSONResponse, an accept as a plain dict
         if hasattr(res, "body"):
             return json.loads(res.body)

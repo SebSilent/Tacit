@@ -1,5 +1,7 @@
 """HTTP surface for MCP servers, tools, activation and the audit log."""
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -17,7 +19,7 @@ def _fail(error: str):
 
 
 @router.get("/api/mcp/servers")
-async def servers():
+def servers():
     return _ok(servers=mcp_registry.list_servers(), settings=mcp_registry.settings(),
                injection=mcp_registry.injection_report())
 
@@ -35,13 +37,17 @@ async def update_server(sid: str, request: Request):
 
 
 @router.delete("/api/mcp/servers/{sid}")
-async def remove_server(sid: str):
+def remove_server(sid: str):
     res = mcp_registry.remove_server(sid)
     return res if res.get("ok") else _fail(res.get("error") or "could not remove server")
 
 
 @router.post("/api/mcp/servers/{sid}/{action}")
-async def server_action(sid: str, action: str):
+def server_action(sid: str, action: str):
+    # `def`, not `async def`: start/stop/restart spawn (or reap) a server process and
+    # `discover` runs a full tool round-trip over its pipe. Those take seconds, and on
+    # the event loop that is seconds during which no other request, poll or WebSocket
+    # handshake in this process gets served.
     if action == "start":
         res = mcp_registry.start(sid)
     elif action == "stop":
@@ -58,7 +64,7 @@ async def server_action(sid: str, action: str):
 
 
 @router.get("/api/mcp/tools")
-async def tools_index(search: str = "", limit: int = 500):
+def tools_index(search: str = "", limit: int = 500):
     rows = mcp_registry.search(search, limit) if search else mcp_registry.all_tools()
     return _ok(tools=rows, injection=mcp_registry.injection_report())
 
@@ -88,20 +94,25 @@ async def deactivate(request: Request):
 @router.post("/api/mcp/call")
 async def call_tool(request: Request):
     body = await request.json()
-    res = mcp_registry.call(str(body.get("server_id") or ""), str(body.get("tool_name") or ""),
-                            body.get("arguments") or {}, confirmed=bool(body.get("confirm")))
+    # This handler must stay `async` to read its body, so only the round-trip moves.
+    # A tool call is whatever the server does - a network fetch, a build - and the
+    # loop cannot afford to sit inside it.
+    res = await asyncio.to_thread(
+        mcp_registry.call, str(body.get("server_id") or ""),
+        str(body.get("tool_name") or ""),
+        body.get("arguments") or {}, confirmed=bool(body.get("confirm")))
     if res.get("ok"):
         return _ok(result=res.get("result"), tokens=res.get("tokens"), ms=res.get("ms"))
     return _fail(res.get("error") or "call failed")
 
 
 @router.get("/api/mcp/audit")
-async def audit(limit: int = 100):
+def audit(limit: int = 100):
     return _ok(events=mcp_registry.recent_audit(limit))
 
 
 @router.get("/api/mcp/settings")
-async def get_settings():
+def get_settings():
     return _ok(settings=mcp_registry.settings(), injection=mcp_registry.injection_report())
 
 

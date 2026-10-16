@@ -28,17 +28,20 @@ class ToolError(RuntimeError):
     pass
 
 
-def _root(project: str | None) -> Path:
-    if project:
-        p = Path(project).expanduser()
-        if p.is_dir():
-            return p.resolve()
-    return Path(config.USER_HOME)
+def _root(project: str | None, session: str = "") -> Path:
+    """Where this turn's tools work. `config.work_root` owns the rule — see there.
+
+    `session` is what makes a project-less turn land in its own scratch folder
+    instead of the user's home directory. It is optional only so the call sites that
+    genuinely have no session (a direct `run_terminal` from the API) still resolve
+    somewhere sane; every tool reached through `call_tool` gets it injected.
+    """
+    return config.work_root(project, session)
 
 
-def _safe(path: str, project: str | None, write: bool = False) -> Path:
+def _safe(path: str, project: str | None, write: bool = False, session: str = "") -> Path:
     raw = Path(str(path or ".")).expanduser()
-    base = _root(project)
+    base = _root(project, session)
     p = (raw if raw.is_absolute() else (base / raw)).resolve()
     if p.name in DENY_NAMES:
         raise ToolError(f"{p.name} is protected and cannot be read or written")
@@ -50,9 +53,9 @@ def _safe(path: str, project: str | None, write: bool = False) -> Path:
     return p
 
 
-def _rel(p: Path, project: str | None) -> str:
+def _rel(p: Path, project: str | None, session: str = "") -> str:
     try:
-        return str(p.relative_to(_root(project))).replace("\\", "/")
+        return str(p.relative_to(_root(project, session))).replace("\\", "/")
     except ValueError:
         return str(p).replace("\\", "/")
 
@@ -125,36 +128,37 @@ def _last_line_number(text: str, fallback: int) -> int:
     return fallback
 
 
-def t_list_files(path: str = ".", project: str | None = None) -> str:
-    base = _safe(path, project)
+def t_list_files(path: str = ".", project: str | None = None, session: str = "") -> str:
+    base = _safe(path, project, session=session)
     if base.is_file():
-        return f"{_rel(base, project)} is a file ({base.stat().st_size} bytes)"
+        return f"{_rel(base, project, session)} is a file ({base.stat().st_size} bytes)"
     if not base.exists():
         return f"ERROR: {path} does not exist"
     rows = []
     for c in sorted(base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
         if c.name in DENY_NAMES or c.name in DENY_PARTS:
             continue
-        rows.append(("DIR  " if c.is_dir() else "FILE ") + _rel(c, project))
+        rows.append(("DIR  " if c.is_dir() else "FILE ") + _rel(c, project, session))
         if len(rows) >= MAX_LIST:
             rows.append(f"…(more than {MAX_LIST} entries)")
             break
     return "\n".join(rows) or "(empty)"
 
 
-def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | None = None) -> str:
-    p = _safe(path, project)
+def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | None = None,
+                session: str = "") -> str:
+    p = _safe(path, project, session=session)
     if not p.exists():
         return f"ERROR: {path} does not exist"
     if p.is_dir():
-        return t_list_files(path, project)
+        return t_list_files(path, project, session)
     try:
         lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except Exception as e:
         return f"ERROR: {e}"
     start = max(0, int(offset or 0))
     if lines and start >= len(lines):
-        return (f"ERROR: offset {start} is past the end of {_rel(p, project)} "
+        return (f"ERROR: offset {start} is past the end of {_rel(p, project, session)} "
                 f"({len(lines)} lines)")
     chunk = lines[start:start + max(1, int(limit or 2000))]
     body = "\n".join(f"{start + i + 1}\t{ln}" for i, ln in enumerate(chunk))
@@ -169,15 +173,17 @@ def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | No
     return clipped + tail
 
 
-def t_write_file(path: str, content: str, project: str | None = None) -> str:
-    p = _safe(path, project, write=True)
+def t_write_file(path: str, content: str, project: str | None = None,
+                 session: str = "") -> str:
+    p = _safe(path, project, write=True, session=session)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
-    return f"wrote {len(content)} chars to {_rel(p, project)}"
+    return f"wrote {len(content)} chars to {_rel(p, project, session)}"
 
 
-def t_edit_file(path: str, find: str, replace: str, project: str | None = None) -> str:
-    p = _safe(path, project, write=True)
+def t_edit_file(path: str, find: str, replace: str, project: str | None = None,
+                session: str = "") -> str:
+    p = _safe(path, project, write=True, session=session)
     if not p.exists():
         return f"ERROR: {path} does not exist"
     text = p.read_text(encoding="utf-8", errors="replace")
@@ -187,11 +193,11 @@ def t_edit_file(path: str, find: str, replace: str, project: str | None = None) 
     if n > 1:
         return f"ERROR: search text appears {n} times in {path}; make it unique"
     p.write_text(text.replace(find, replace), encoding="utf-8")
-    return f"edited {_rel(p, project)} (1 replacement)"
+    return f"edited {_rel(p, project, session)} (1 replacement)"
 
 
-def t_glob_files(pattern: str, project: str | None = None) -> str:
-    base = _root(project)
+def t_glob_files(pattern: str, project: str | None = None, session: str = "") -> str:
+    base = _root(project, session)
     pat = str(pattern or "").strip()
     if not pat:
         return "ERROR: pattern required"
@@ -206,7 +212,7 @@ def t_glob_files(pattern: str, project: str | None = None) -> str:
                 continue
             if any(part in DENY_PARTS or part == "node_modules" for part in p.parts):
                 continue
-            hits.append(_rel(p, project))
+            hits.append(_rel(p, project, session))
             if len(hits) >= MAX_LIST:
                 break
     except OSError:
@@ -223,8 +229,9 @@ def _files_under(base: Path):
             yield Path(dirpath) / name
 
 
-def t_grep_files(pattern: str, path: str = ".", project: str | None = None) -> str:
-    base = _safe(path, project)
+def t_grep_files(pattern: str, path: str = ".", project: str | None = None,
+                 session: str = "") -> str:
+    base = _safe(path, project, session=session)
     try:
         rx = re.compile(pattern)
     except re.error as e:
@@ -245,7 +252,7 @@ def t_grep_files(pattern: str, path: str = ".", project: str | None = None) -> s
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if rx.search(line):
-                rows.append(f"{_rel(f, project)}:{i}: {line.strip()[:200]}")
+                rows.append(f"{_rel(f, project, session)}:{i}: {line.strip()[:200]}")
                 if len(rows) >= MAX_GREP:
                     full = True
                     break
@@ -504,9 +511,10 @@ def t_skill(name: str, project: str | None = None) -> str:
     return skills.read(name)
 
 
-def run_terminal(command: str, project: str | None = None, timeout: int | None = None) -> dict:
+def run_terminal(command: str, project: str | None = None, timeout: int | None = None,
+                 session: str = "") -> dict:
     cmd = str(command or "").strip()
-    cwd = _root(project)
+    cwd = _root(project, session)
     if not cmd:
         return {"ok": False, "error": "empty command", "cwd": str(cwd), "shell": config.SHELL}
     limit = max(1, min(int(timeout or config.SHELL_TIMEOUT), 600))
@@ -848,7 +856,12 @@ def _auto_snapshot(project: str, tool: str, session: str = "") -> str:
     unchanged.
     """
     try:
-        out = extras.snapshot(project, f"auto: before {tool}", session=session,
+        # Snapshot where the edits actually land. Passing the raw `project` meant a
+        # session with no project got `ERROR:  is not a directory` back from
+        # `extras.snapshot` on every turn, so the promise in the docstring above never
+        # held for exactly the sessions that most needed an undo.
+        out = extras.snapshot(str(config.work_root(project, session)),
+                              f"auto: before {tool}", session=session,
                               message=_turn_msg_index(session))
     except Exception as exc:  # noqa: BLE001
         return f"could not take an automatic snapshot ({exc}); edits are not undoable"
@@ -1416,7 +1429,9 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
     # has to be reachable from the interface.
     ref = str(ctx.get("ref") or "").strip() or config.delegate_model() or None
     messages = [
-        {"role": "system", "content": prompts.system_prompt(ctx.get("project"), False, subagent=True)},
+        {"role": "system", "content": prompts.system_prompt(ctx.get("project"), False,
+                                                             subagent=True,
+                                                             session=ctx.get("session") or "")},
         {"role": "user", "content": task},
     ]
     report: list[str] = []

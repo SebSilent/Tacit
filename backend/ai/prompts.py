@@ -30,6 +30,13 @@ Relative paths resolve against that directory. Treat it as the scope of this tas
 keeping changes inside it. You are not walled in: if the task genuinely requires a file
 elsewhere on the machine, use an absolute path."""
 
+WORKSPACE = """No project folder is set for this session, so your tools are rooted in a
+scratch folder of its own: {root}
+
+Relative paths resolve against it. Nothing you write there belongs to a project, so if the
+task is meant to change real files, say so instead of writing them here and implying they
+are in place."""
+
 READONLY = """Read-only mode is active. You may inspect files and search, but you cannot write,
 edit or run commands that change anything. Do not attempt blocked actions."""
 
@@ -139,12 +146,23 @@ SUMMARISED = ("[Compacted history of earlier work — reference only. This is a 
 
 
 def system_prompt(project: str | None = None, readonly: bool = False,
-                  subagent: bool = False, chat: bool = False) -> str:
+                  subagent: bool = False, chat: bool = False,
+                  session: str = "") -> str:
     # The version-control rule tracks the setting, so the prompt never claims
     # something the shell guard would refuse, or vice versa.
     vcs = _VCS_ON if config.allow_vcs() else _VCS_OFF
     parts = [(SUBAGENT if subagent else BASE).format(platform=config.PLATFORM, vcs=vcs)]
-    if project:
+    if config.project_usable(project):
+        parts.append(PROJECT.format(project=project))
+    elif session and not chat:
+        # No usable project, but a session that has its own scratch folder: name it,
+        # because "I wrote notes.md" means something different there than in a project.
+        # `create=False` — describing the root must not leave a folder on disk, and
+        # callers with no session id (the prompt-size estimates) get no block at all.
+        parts.append(WORKSPACE.format(root=config.workspace_dir(session, create=False)))
+    elif project:
+        # A project that is named but missing, with no session to root instead: say
+        # what was asked for rather than inventing a folder the caller did not name.
         parts.append(PROJECT.format(project=project))
     if chat:
         parts.append(CHAT)

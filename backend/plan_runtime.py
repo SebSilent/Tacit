@@ -245,12 +245,15 @@ def answers(sid: str, rec: dict, text: str,
 
 
 def approve(sid: str, rec: dict, approved: bool) -> dict:
-    """Approve or reject: save the plan, and put it in the project.
+    """Approve or reject: save the plan with the session that made it.
+
+    Nothing here touches the project. The snapshot persisted underneath is what
+    makes the approval survive the reload the person will almost certainly do
+    next, and it is also where ``pointer()`` reads the plan's path from, so the
+    session that planned keeps being pointed at what it agreed to.
 
     Returns the ``plan.py`` result unchanged so the socket's ``plan_approved``
-    message keeps the shape the strip already draws, plus the persisted
-    snapshot, which is what makes the approval survive the reload that the
-    person will almost certainly do next.
+    message keeps the shape the strip already draws.
     """
     sid = str(rec.get("id") or sid or "")
     p = get_run(sid, rec)
@@ -311,9 +314,19 @@ def implement(sid: str, rec: dict) -> dict:
                          mode=rec.get("mode") or "agent",
                          thinking=rec.get("thinking") or "default",
                          project=rec.get("project") or "")
+    # The plan belongs to the work now, and the work is this session. Copying the
+    # path onto its record is what lets `pointer()` name it on every turn: the copy
+    # inlined in `prompt` is real but temporary, and a long implementation is exactly
+    # the case where it gets summarised into a paraphrase of a paraphrase. Only the
+    # path travels, not the plan state — a fresh session that restored an
+    # approved-plan strip would offer Implement again and spawn a sibling doing the
+    # same work.
+    try:
+        store.patch(fresh["id"], planFile=p.plan_file or None)
+    except Exception:  # noqa: BLE001 — the first message already names the path
+        pass
     return {"ok": True, "data": {"sid": fresh["id"], "name": fresh["title"],
-                                 "prompt": prompt, "plan_file": p.plan_file,
-                                 "context_file": p.context_file}}
+                                 "prompt": prompt, "plan_file": p.plan_file}}
 
 
 def shutdown() -> int:

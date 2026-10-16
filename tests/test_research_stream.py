@@ -36,6 +36,7 @@ property of the old code:
 
 import inspect
 import json
+import shutil
 import sys
 import tempfile
 import threading
@@ -71,6 +72,11 @@ class ResearchCase(unittest.TestCase):
     def setUp(self):
         self.stub = _stub_config()
         self.addCleanup(setattr, research, "config", config)
+        # The stub hands back a fresh HOME because a research run writes evidence
+        # into it. Nothing was removing it, so every test in this file left a
+        # `tacit_research_*` directory behind in TEMP - several hundred over a
+        # week of runs, which is what made the tree look like it had junk in it.
+        self.addCleanup(shutil.rmtree, self.stub.HOME, True)
         research.config = self.stub
         self.orig_ask = research._ask
         self.addCleanup(setattr, research, "_ask", self.orig_ask)

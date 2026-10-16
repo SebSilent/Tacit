@@ -812,14 +812,15 @@ class TestRestartState(Home):
     # ── what the Settings panel actually gets ─────────────────────────────
 
     def test_server_status_carries_the_last_restart(self):
-        import asyncio
-
+        # `server_status` is a plain `def` route. Calling it through asyncio.run
+        # raises "a coroutine was expected" before any assertion can speak, so the
+        # sync call is made directly.
         from backend.routers import api
-        self.assertEqual(asyncio.run(api.server_status())["last_restart"], {})
+        self.assertEqual(api.server_status()["last_restart"], {})
         extras.record_restart_state("failed", stage="bind", detail="never accepted",
                                     via="launcher", cmd=["cmd.exe", "/c", "run.bat"],
                                     port=8756)
-        out = asyncio.run(api.server_status())
+        out = api.server_status()
         self.assertEqual(out["last_restart"]["state"], "failed")
         self.assertEqual(out["last_restart"]["stage"], "bind")
         self.assertEqual(out["last_restart"]["cmd"], ["cmd.exe", "/c", "run.bat"])
