@@ -166,7 +166,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `projectRoots` | `backend/config.py:576` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:796`, `:802` | stop reading `AGENTS.md` and friends |
 | `memoryBudget` | `backend/memory_store.py:142` | startup memory ceiling in tokens |
-| `memoryBudgetOverride` | `backend/memory_store.py:147` | a figure above the default cap |
+| `memoryBudgetOverride` | `backend/memory_store.py:147` | lifts the 500 ceiling to 100,000 |
 
 The sound switches have no environment variable. That is deliberate: they describe the machine the
 server is on, and a person who silenced it wants every device pointed at this install to stay

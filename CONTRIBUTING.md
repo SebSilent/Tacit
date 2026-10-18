@@ -25,7 +25,7 @@ runner, and Tacit installs neither (`README.md:1207-1209`).
 | `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:27`, `backend/main.py:175`) |
 | `tests/` | the suite, plus `tests/helpers.py` and `tests/fake_mcp_server.py` |
 | `docs/` | the documentation set, indexed at `docs/index.md` |
-| `scripts/` | `check_prose.py`, `bump_version.py`, and the two measurement scripts |
+| `scripts/` | `check_prose.py`, `bump_version.py`, `build_site.py`, the two measurement scripts, and the two doc checkers |
 | `install.sh`, `install.ps1`, `run.sh`, `run.bat`, `restart.ps1` | installers and launchers |
 | `VERSION` | the release identity; `package.json` mirrors it (`package.json:4`) |
 
@@ -99,6 +99,14 @@ Two scripts measure instead of asserting, and they are the model for how to argu
 because one message can carry a 48,000-character result (`scripts/measure_registry.py:5-7`). Keep the
 script in the repo: the first version of one of them lived in `%TEMP%` and was deleted with it, which is
 why the number was argued from memory afterwards (`scripts/measure_registry.py:14-16`).
+
+The same rule covers the tooling for these docs, because all of it was in a temp folder once:
+`scripts/dump_citations.py` prints every cited source line next to the doc line that cites it, which is
+the reading a citation check cannot do for you (`scripts/dump_citations.py:5-9`), and
+`scripts/check_site_render.js` renders the docs through the same JavaScript the browser runs to confirm
+the vendored renderer still produces tables and code blocks (`scripts/check_site_render.js:4-6`). It needs
+Node, so it is run by hand and never from `unittest`, which stays offline and installs nothing
+(`scripts/check_site_render.js:13-14`).
 
 ## Where to start
 

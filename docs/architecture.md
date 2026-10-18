@@ -86,7 +86,7 @@ dead pid wearing this boot's marker (`:91-96`).
 
 The orphan sweep identifies children by a command-line marker and by the `TACIT_ROLE` /
 `TACIT_SESSION_ID` pair in their environment, never by the executable name
-(`backend/proctools.py:10`, `:370-395`). A dead pid is dropped from the registry; a live pid whose
+(`backend/proctools.py:8-12`, `:295-302`). A dead pid is dropped from the registry; a live pid whose
 command line still proves it is Tacit's is killed as an orphan from a previous crash.
 
 ## Blocking code does not run on the event loop

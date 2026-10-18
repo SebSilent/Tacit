@@ -101,6 +101,23 @@ Both are kept in the repo on purpose: the first version of one of them lived in 
 with it, which is why the registry's byte cost was argued about from memory afterwards
 (`scripts/measure_registry.py:14-15`).
 
+## Checking the documentation itself
+
+Two more scripts run by hand, for the docs rather than the product.
+
+`scripts/dump_citations.py` prints every cited source line next to the doc line that cites it.
+`tests/test_docs.py` can prove a citation points at a real file, a line inside it and a non-blank line;
+it cannot prove the line says what the sentence claims, and that gap is closed by reading
+(`scripts/dump_citations.py:5-9`). It handles the three shapes a citation takes here, including the bare
+`:N-M` that repeats the path before it (`:13-15`, `scripts/dump_citations.py:25-31`), and it exits 1 when
+a citation names a missing file or a line outside it, so it doubles as a check.
+
+`scripts/check_site_render.js` renders a sample of the docs through `site/assets/markdown.js` in a VM
+sandbox, the way a page loads it, and asserts the output contains the structures the source has
+(`scripts/check_site_render.js:4-9`). `scripts/build_site.py` already checks that every link resolves;
+this checks the renderer. It needs Node, so it is never run by `unittest`, which stays offline and
+installs nothing (`:13-15`).
+
 ## Where the published numbers come from
 
 The benchmark section of the README is the evidence for the architecture, not the argument itself: one
