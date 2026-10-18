@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tacit · Documentation</title>
+<meta name="description" content="Documentation for Tacit, a coding agent you run yourself: architecture, configuration, tools, isolation, memory and cost.">
+<link rel="stylesheet" href="assets/kinpaku-tokens.css">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="index.html">Tacit</a>
+    <span class="masthead-tag">The coding agent where nothing is hidden</span>
+    <nav class="masthead-links">
+      <a href="readme.html">README</a>
+      <a href="contributing.html">Contributing</a>
+      <a href="https://github.com/SebSilent/Tacit" rel="noopener noreferrer" target="_blank">Repository</a>
+    </nav>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav-group">
+      <p class="nav-label">Documentation</p>
+      <ul><li><a href="install.html">Install</a></li><li><a href="interface.html">Interface</a></li><li><a href="settings.html">Settings</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="tools.html">Tools</a></li><li><a href="architecture.html">Architecture</a></li><li><a href="cost-and-profiles.html">Cost and profiles</a></li><li><a href="isolation-and-audit.html">Isolation and audit</a></li><li><a href="memory-and-learning.html">Memory and learning</a></li><li><a href="mcp-and-plugins.html">MCP and plugins</a></li><li><a href="data-and-privacy.html">Data and privacy</a></li><li><a href="testing-and-benchmarks.html">Testing and benchmarks</a></li></ul>
+    </div>
+    <div class="nav-group">
+      <p class="nav-label">Repository</p>
+      <ul><li><a href="readme.html">Tacit</a></li><li><a href="contributing.html">Contributing</a></li></ul>
+    </div>
+  </nav>
+
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">A coding agent you run yourself</p>
+      <h1>Documentation</h1>
+      <p>How Tacit works, where each setting lives, and which line of code decides it. Every citation is a file and a line you can open.</p>
+      <div class="hero-rule"></div>
+      <p>One Python program serving plain web pages. No build step, no frontend toolchain, no
+      database to install. The fixed cost per turn is the smallest in its class, nothing optional
+      is on until you turn it on, and the sandbox reports what it actually enforces.</p>
+      <div class="card-grid">
+<a class="card" href="install.html"><span class="card-key">install.md</span><h2>Install</h2><p>getting it running, and what the installers do</p></a>
+<a class="card" href="interface.html"><span class="card-key">interface.md</span><h2>Interface</h2><p>the three regions, snapshots, restart, sounds</p></a>
+<a class="card" href="settings.html"><span class="card-key">settings.md</span><h2>Settings</h2><p>which tab owns which switch and which file it writes</p></a>
+<a class="card" href="configuration.html"><span class="card-key">configuration.md</span><h2>Configuration</h2><p>every environment variable, every preference key, and which one wins</p></a>
+<a class="card" href="tools.html"><span class="card-key">tools.md</span><h2>Tools</h2><p>the 22 tools the agent is offered, and the four rules that decide whether a tool appears</p></a>
+<a class="card" href="architecture.html"><span class="card-key">architecture.md</span><h2>Architecture</h2><p>server, session runtime, turn worker, routers, the agent loop</p></a>
+<a class="card" href="cost-and-profiles.html"><span class="card-key">cost-and-profiles.md</span><h2>Cost and profiles</h2><p>how a token figure is produced, and what each profile changes</p></a>
+<a class="card" href="isolation-and-audit.html"><span class="card-key">isolation-and-audit.md</span><h2>Isolation and audit</h2><p>what a command was allowed to touch, and what it changed</p></a>
+<a class="card" href="memory-and-learning.html"><span class="card-key">memory-and-learning.md</span><h2>Memory and learning</h2><p>the four memory modes, the budget, and how a proposal becomes a rule</p></a>
+<a class="card" href="mcp-and-plugins.html"><span class="card-key">mcp-and-plugins.md</span><h2>MCP and plugins</h2><p>external tools without the prompt cost</p></a>
+<a class="card" href="data-and-privacy.html"><span class="card-key">data-and-privacy.md</span><h2>Data and privacy</h2><p>every file Tacit writes and what is in it</p></a>
+<a class="card" href="testing-and-benchmarks.html"><span class="card-key">testing-and-benchmarks.md</span><h2>Testing and benchmarks</h2><p>how to run the suite and what the published figures came from</p></a>
+      </div>
+    </section>
+
+    <article class="prose" id="page" data-md="md/index.md"></article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <span>Tacit 1.0.2</span>
+    <span>Everything stays on your machine. No accounts, no telemetry, no tracking.</span>
+    <a href="https://github.com/SebSilent/Tacit" rel="noopener noreferrer" target="_blank">github.com/SebSilent/Tacit</a>
+  </div>
+</footer>
+
+<script src="assets/markdown.js"></script>
+<script src="assets/site.js"></script>
+</body>
+</html>

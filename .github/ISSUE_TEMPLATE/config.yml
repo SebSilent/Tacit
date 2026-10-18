@@ -1,0 +1,17 @@
+name: Issue config
+about: Where to file things
+title: ""
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bug reports and feature requests have templates. Use them: the questions they
+        ask are the ones that make a report actionable without a round trip.
+
+        Benchmarks are not a feature request. A benchmark row is a result, and it goes
+        in a pull request or a bug report with the result file attached. Every row must
+        carry the checker's output verbatim, the byte counts and sha256 digests of what
+        it graded, and the per-call audit ledger, so the claimed solve stays a transcript
+        somebody else can re-run. See `README.md:1159-1161`.

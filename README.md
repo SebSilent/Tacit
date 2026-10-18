@@ -123,7 +123,7 @@ That is the cost Tacit exists to make visible, and the profiles exist to let you
 
 ### Reproducing it
 
-Tacit's row is read from its own profile selector, in **Settings > Profile**: the Minimal profile
+Tacit's row is read from its own profile selector, in **Settings > General**: the Minimal profile
 reports the same figure with seven tools. The other rows were measured from the installed programs
 on this machine, and every one of them is reproducible from their own tooling.
 
@@ -452,7 +452,7 @@ only (21); `jit` and `full` retrieve mid-turn as well, so they get the search to
 that could only ever answer "not enabled" is not put in front of the model.
 
 The extra cost is those schemas plus whatever the budget lets through, and it is recomputed from
-the live configuration by **Settings > Profile** (the same estimator the dashboard uses) so the
+the live configuration by **Settings > General** (the same estimator the dashboard uses) so the
 table cannot drift without the interface disagreeing with it.
 
 No profile turns learning on, not even proposing. That is a deliberate choice: a profile sets cost
@@ -740,10 +740,10 @@ outside your machine.
 
 ## Profile selector
 
-**Settings > Profile** is the profile selector: the named bundles, their measured cost, apply and
+The profile selector sits at the top of **Settings > General**: the named bundles, their measured cost, apply and
 delete, and a box to save the current setup under your own name. Switching applies immediately. The
 token tables that used to sit under it were removed at the operator's request, the accounting still
-happens and is still local, but the tab's job is to choose a bundle, not to report on it.
+happens and is still local, but the section's job is to choose a bundle, not to report on it.
 
 ---
 
@@ -917,12 +917,12 @@ directory, and no assumption about where your projects are stored.
 | `skill`, `research`, `fetch`, `browser` | knowledge on demand |
 | `mcp_search_tools` `mcp_activate_tools` `mcp_call` `mcp_list_servers` | external tools without the prompt cost; offered only when an MCP server is configured |
 | `evidence` | citable facts |
-| `memory_recall` `memory_add` `memory_update` `memory_delete` `memory_list_summary` | memory, only with the Memory switch on |
+| `memory_add` `memory_recall` | memory, and only with the Memory switch on. `memory_recall` is dropped again in `explicit` mode, where retrieval is refused by design |
 
 Version control is off for the agent by default. A model left to itself commits and pushes far more
 than anyone asked for, and cleaning that up by hand is nobody's idea of a good afternoon. The panel
 is the intended route for the person using Tacit. If you would rather the agent handled it,
-**Settings > Tools** has a switch for exactly that, and it is yours to flip.
+**Settings > General** has a switch for exactly that, under Permissions, and it is yours to flip.
 
 The learning analyzer and the migration importer deliberately have no tools at all. They are driven
 from the interface, so they cost nothing in the schema budget and cannot be invoked by a model.
@@ -951,6 +951,12 @@ probes instead: which is how a task needing one large write ended as thirty thin
 
 ## Configuration
 
+Every variable below is read from the environment by name, in `backend/config.py`, or by
+`backend/vcs.py` for the three git rows. There is no aliasing and no second spelling: a name that is
+not in this table is not a setting, and a default that is not in this table is not the one the code
+uses. Where a variable duplicates a preference that **Settings** can also set, the environment wins
+and the interface says so.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `TACIT_PORT` | `8550` | web host port |
@@ -965,7 +971,8 @@ probes instead: which is how a task needing one large write ended as thirty thin
 | `TACIT_CONTEXT_FILL_FLOOR` | `0.5` | never compact below this fraction, for small windows |
 | `TACIT_COMPACT_TAIL_TOKENS` | `8000` | recent transcript kept verbatim through a compaction |
 | `TACIT_COMPACT_TAIL_SHARE` | `0.4` | cap on that tail as a share of the fill target |
-| `TACIT_COMPACT_TAIL_MIN` / `_MAX` | `4` / `40` | message bounds on the tail |
+| `TACIT_COMPACT_TAIL_MIN` | `4` | fewest messages kept verbatim through a compaction |
+| `TACIT_COMPACT_TAIL_MAX` | `40` | most messages kept verbatim through a compaction |
 | `TACIT_COMPACT_PRUNE_KEEP` | `400` | head of an old tool result kept by the pre-pass |
 | `TACIT_COMPACT_MODEL` | none | a cheap model to write summaries with |
 | `TACIT_SUMMARY_INPUT_MAX` | `160000` | cap on what the summariser is sent |
@@ -977,8 +984,44 @@ probes instead: which is how a task needing one large write ended as thirty thin
 | `TACIT_PROMPT_CACHE` | `auto` | `auto` marks only endpoints known to understand it; `on` forces; `off` never |
 | `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | default output ceiling; the Messages API requires one |
 | `TACIT_ANTHROPIC_THINKING` | `4096` | base extended-thinking budget, scaled by the level picked |
+| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | the version header sent to the Messages API |
+| `TACIT_COMPACT_KEEP` | `6` | messages of tail kept when no summary model is configured |
+| `TACIT_COMPACT_PRUNE_MIN` | `1200` | a tool result shorter than this is never pruned |
+| `TACIT_TURN_WORKER` | `process` | `thread` restores the old in-process turn worker |
+| `TACIT_DELIVER_GUARANTEE` | `1` | `0` lets a turn stop when the model stops, with no forced final round |
 | `TACIT_TURN_TOKEN_BUDGET` | `0` | hard token ceiling per turn; `0` means no ceiling |
-| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | default output ceiling for the Messages API, which requires one |
+| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
+| `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
+| `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
+| `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
+| `TACIT_SHELL_OVERLAP` | `block` | what happens to a shell command that re-implements a tool: `block`, `advise` or `off`. Set it and the **Skills & Tools** switch stops working, the environment outranks the stored preference, and the switch says so rather than pretending |
+| `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
+| `TACIT_SUBAGENT_DEPTH` | `1` | how deep a sub-agent may delegate again |
+| `TACIT_DELEGATE_MODEL` | session model | a `provider/model` ref to run sub-agents and research on instead |
+| `TACIT_FETCH_LIMIT` | `6000` | characters `fetch` returns |
+| `TACIT_BROWSER_TIMEOUT` | `90` | seconds a browser action may take |
+| `TACIT_BROWSER_TEXT_LIMIT` | `6000` | characters of page text `browser` returns |
+| `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | seconds a search-and-open round may take |
+| `TACIT_RESEARCH_ASPECTS` | `3` | sub-agents one `research` question may spend |
+| `TACIT_RESEARCH_STEPS` | `6` | tool steps per `research` sub-agent |
+| `TACIT_RESEARCH_TIMEOUT` | `240` | wall-clock seconds a `research` call may take |
+| `TACIT_SKILL_INDEX_LIMIT` | `24` | skills listed in the system prompt |
+| `TACIT_SNAPSHOT_MAX_FILE` | `2097152` | bytes; a larger file is skipped by a snapshot |
+| `TACIT_SNAPSHOT_MAX_FILES` | `3000` | files one snapshot may capture |
+| `TACIT_PLAN_TASKS` | `4` | tasks a plan may hold |
+| `TACIT_PLAN_QUESTIONS` | `4` | open questions a plan may hold |
+| `TACIT_VCS_TIMEOUT` | `120` | seconds a git command may run |
+| `TACIT_VCS_NAME` | none | commit identity, used only together with `TACIT_VCS_EMAIL` |
+| `TACIT_VCS_EMAIL` | none | commit identity, used only together with `TACIT_VCS_NAME` |
+| `TACIT_USER_HOME` | your home | where `~/.tacit` lives, without moving the state directory itself |
+| `TACIT_OS` | detected | report a different OS to the harness, for tests |
+| `TACIT_PLATFORM` | detected | report a different platform family to the harness, for tests |
+
+The installers read four more, and the server never does: `TACIT_REPO_URL` and `TACIT_BRANCH` choose
+what to clone (`install.sh:10-11`, `install.ps1:13-14`), `TACIT_APP_DIR` and `TACIT_BIN_DIR` choose
+where it lands and where the launcher goes (`install.sh:14-15`, `install.ps1:16-17`).
+`TACIT_NO_BROWSER=1` skips the Playwright download and `TACIT_NO_PATH=1` declines to edit `PATH`;
+both are Windows installer flags (`install.ps1:18`, `install.ps1:200`).
 
 Container isolation is configured in **Settings > Capabilities** rather than by environment, since it
 is a capability choice: the image (default `python:3.12-slim`), whether a missing image may be pulled
@@ -996,12 +1039,6 @@ General**); on Windows each child is also bound to a kill-on-close job object, s
 takes its children with it. At startup the server sweeps the registry: a dead pid is dropped, and a
 live pid whose command line still proves it is Tacit's is killed as an orphan from a previous crash.
 Nothing is ever matched on the executable name.
-| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
-| `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
-| `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
-| `TACIT_SHELL_TIMEOUT` | `180` | seconds a shell command may run; enforced by killing the process tree |
-| `TACIT_SHELL_OVERLAP` | `block` | what happens to a shell command that re-implements a tool: `block`, `advise` or `off`. Set it and **Settings > Tools > Shell overlap stops working**, the environment outranks the stored preference, and the switch says so rather than pretending |
-| `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
 
 ---
 
@@ -1042,7 +1079,7 @@ downloaded or applied without the button.
 - The agent's file tools refuse the key store.
 - **The audit ledger masks secrets** before writing, at any depth, so a pasted token does not end up
   in a readable file.
-- **Version control** is off for the agent unless you enable it in **Settings > Tools**.
+- **Version control** is off for the agent unless you enable it in **Settings > General**.
 - **External tools and plugins** run only after you enable them, and their activity is recorded in a
   readable audit log.
 - **No feature calls out to another harness.** Not on start, not on a timer, not on a tool call.
@@ -1124,6 +1161,31 @@ same cells is what turns this from one box's word into a field.
   solve is a transcript you can re-run.
 - One build, one fingerprint, both operating system lanes. The profile rows are two tool bundles
   over the same cells, so the profile comparison is an experiment, not an anecdote.
+
+---
+
+## Documentation
+
+The README states what Tacit is and what it costs. `docs/` states how it works, where each setting
+lives, and which line of code decides it. Start at [docs/index.md](docs/index.md).
+
+| Page | What it answers |
+|---|---|
+| [Install](docs/install.md) | getting it running, and what the installers do |
+| [Interface](docs/interface.md) | the three regions, snapshots, restart, sounds |
+| [Settings](docs/settings.md) | which tab owns which switch and which file it writes |
+| [Configuration](docs/configuration.md) | every environment variable, every preference key, and which one wins |
+| [Tools](docs/tools.md) | the 22 tools, and the four rules that decide whether one appears |
+| [Architecture](docs/architecture.md) | server, session runtime, turn worker, the agent loop |
+| [Cost and profiles](docs/cost-and-profiles.md) | how a token figure is produced, and what a profile changes |
+| [Isolation and audit](docs/isolation-and-audit.md) | what a command was allowed to touch, and what it changed |
+| [Memory and learning](docs/memory-and-learning.md) | the four memory modes, the budget, and how a proposal becomes a rule |
+| [MCP and plugins](docs/mcp-and-plugins.md) | external tools without the prompt cost |
+| [Data and privacy](docs/data-and-privacy.md) | every file Tacit writes and what is in it |
+| [Testing and benchmarks](docs/testing-and-benchmarks.md) | how to run the suite and where the numbers came from |
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the two executable rules: the documentation is checked like a
+specification, and the prose rules are enforced by a script.
 
 ---
 

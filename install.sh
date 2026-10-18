@@ -144,15 +144,15 @@ ok "dependencies installed"
 
 # ── optional browser tool ─────────────────────────────────────────────────
 if [ "$WANT_BROWSER" = true ] && command -v npm >/dev/null 2>&1; then
-    say "installing the browser driver (Playwright, ~130 MB — skip with --no-browser)"
+    say "installing the browser driver (Playwright, ~130 MB; skip with --no-browser)"
     if (cd "$APP_DIR" && npm install --silent --no-audit --no-fund >/dev/null 2>&1 \
         && npx --yes playwright install chromium >/dev/null 2>&1); then
         ok "browser automation available"
     else
-        warn "browser install failed — everything else works; run 'npm install && npx playwright install chromium' in $APP_DIR later"
+        warn "browser install failed. Everything else works; run 'npm install && npx playwright install chromium' in $APP_DIR later"
     fi
 elif [ "$WANT_BROWSER" = true ]; then
-    warn "node/npm not found — skipping the browser tool (everything else works)"
+    warn "node/npm not found, so the browser tool is skipped (everything else works)"
 fi
 
 # ── launcher ──────────────────────────────────────────────────────────────

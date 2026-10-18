@@ -1,0 +1,48 @@
+name: Feature request
+about: A capability the product should have
+title: ""
+labels: enhancement
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tacit is one Python program serving plain web pages, with no build step, no
+        frontend toolchain and no database to install. Proposals that add any of those
+        need to argue why the property can be afforded.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you cannot do today, and what you do instead.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The change
+      description: What should happen instead. Be specific about the surface.
+    validations:
+      required: true
+  - type: textarea
+    id: off-by-default
+    attributes:
+      label: Can it default to off?
+      description: |
+        Nothing optional is on by default here. A new capability has to default off in one
+        place, and its absence has to be free: no schema, no prompt block, no worker. Say
+        what the feature costs a person who never turns it on. If the honest answer is
+        nothing, say that.
+  - type: textarea
+    id: refused
+    attributes:
+      label: What this does not fix
+      description: The nearest thing that already exists, and why it is not enough.
+  - type: textarea
+    id: docs
+    attributes:
+      label: Docs and settings this implies
+      description: |
+        The documentation is a specification. If the feature adds a setting, name the
+        variable and the line that reads it. If it changes behavior that is documented,
+        say which page moves.

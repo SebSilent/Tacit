@@ -1,0 +1,87 @@
+name: Bug report
+about: Something does not do what the docs say it does
+title: ""
+labels: bug
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you file: run the server with the behavior in question once and read the
+        audit ledger. If the answer is already in `~/.tacit/audit.jsonl`, the report is
+        about why that happened, not about what happened, and that is a much faster thread.
+
+        Tacit stores its state under `~/.tacit` (Windows: `%USERPROFILE%\.tacit`). Nothing
+        leaves your machine unless you configured a hosted provider. Redact anything from
+        those files that you do not want in a public issue before you paste it.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Say what you expected, what you got, and how fast it reproduced.
+      placeholder: |
+        Expected: ...
+        Got: ...
+        Reproduced: first try / every time / about 1 in ...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A short path from a running server to the failure. If a session export reproduces it, attach the export.
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The VERSION file, or the version the launcher prints.
+      placeholder: "0.1.12"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Web UI
+        - Agent turn
+        - Assistant
+        - Settings
+        - Installer
+        - Benchmark or eval
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Container
+    validations:
+      required: true
+  - type: textarea
+    id: provider
+    attributes:
+      label: Provider and profile
+      description: Which provider, which model, which cost profile. A profile changes tool schemas, so a bug that reproduces on economy may not reproduce on full.
+  - type: textarea
+    id: isolation
+    attributes:
+      label: Isolation backend and mode
+      description: The isolation backend and mode you were running. The backend reports what it cannot enforce instead of pretending, so this is part of the bug, not trivia.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Server output, the audit ledger lines, or the traceback. Pasted text is fine, but redact secrets first.
+      render: text
