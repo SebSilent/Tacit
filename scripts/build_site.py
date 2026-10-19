@@ -96,12 +96,13 @@ DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
         </div>
         <p>The frame below loads <code>demo.html?view=basic</code>, which the build
         generates out of <code>static/index.html</code> and <code>static/style.css</code>
-        rather than drawing: the sidebar, the top bar, the transcript, the tool cards and
-        the meter are the real parts, driven by one scripted turn with a pointer that
-        moves to the composer, types the ask and presses send. Every documentation page
-        embeds a still view of its own choosing. The whole thing, with the Assistant asked
-        several questions per session, the Delegation panel, the terminal, the Git panel and
-        the Prompts tab, is <code>demo.html</code> full screen.</p>
+        rather than drawing: the top bar, the transcript, the tool cards and the meter are
+        the real parts, driven by one scripted turn with a pointer that moves to the
+        composer, types the ask and presses send. The sidebar is dropped inside the frame,
+        because a list of sessions nobody can click is decoration. The whole thing, with
+        the Assistant asked several questions per session, the Delegation panel, the
+        terminal, the Git panel and the Prompts tab, is <code>demo.html</code> full
+        screen. The documentation pages are text.</p>
         <div class="demo-actions">
           <a href="demo.html" target="_blank" rel="noopener">Open full screen</a>
           <a href="interface.html">How the interface works</a>
@@ -118,60 +119,6 @@ DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
     </section>
 
 """
-
-# Each documentation page shows one part of the interface, chosen for what that page is
-# about, in a frame small enough to read as a card. These are still frames of the real
-# panels, not a tour: the pointer does not walk the tabs here. The running mock, with the
-# pointer, the Assistant and the Delegation panel, is `demo.html` itself, which is what the
-# landing page embeds and what "Open full screen" leads to.
-FRAGMENTS = {
-    "install.html": ("empty", "What the page shows before a workspace is picked: the empty "
-        "state and the four asks under it."),
-    "interface.html": ("transcript", "One transcript row: the thinking block collapsed, the "
-        "answer, and the meter the turn moved."),
-    "settings.html": ("settings", "The General tab, the half people skip: profiles, "
-        "permissions, the fallback picker, density, sounds."),
-    "configuration.html": ("budget", "The turn budget as the server reports it, with the "
-        "bounds each field clamps to."),
-    "tools.html": ("tools", "Four tool cards in flight, one of them failed, each with its "
-        "own time and size."),
-    "architecture.html": ("plan", "The plan strip and the task list a phase leaves behind."),
-    "cost-and-profiles.html": ("meter", "The context meter climbing into the compaction zone, "
-        "then coming back down."),
-    "isolation-and-audit.html": ("git", "The Git panel: the branch and its tracking, the "
-        "changed files, the console underneath."),
-    "memory-and-learning.html": ("skills", "Skills and the tools they ride on, in the Tools tab."),
-    "mcp-and-plugins.html": ("mcp", "The four MCP helper rows, gated until a server is "
-        "configured, and what the gate says about itself."),
-    "testing-and-benchmarks.html": ("testrun", "A test run that fails first and passes "
-        "second, because that is the order it usually happens in."),
-    "data-and-privacy.html": ("snapshots", "The snapshots one turn took, and what restore "
-        "does and does not touch."),
-    "readme.html": ("transcript", "The thing the README describes, in the frame it runs in."),
-    "contributing.html": ("testrun", "The suite a change has to pass, shown failing once "
-        "first."),
-}
-
-FRAGMENT = """    <section class="demo-frag" aria-label="{label}">
-      <div class="demo-frag-head">
-        <p class="eyebrow">In the interface</p>
-        <p>{caption}</p>
-        <a href="demo.html?view={view}" target="_blank" rel="noopener">Open this view</a>
-      </div>
-      <iframe class="demo-frag-frame" src="demo.html?view={view}" title="{label}"></iframe>
-    </section>
-
-"""
-
-
-def fragment_html(href: str) -> str:
-    entry = FRAGMENTS.get(href)
-    if not entry:
-        return ""
-    view, caption = entry
-    label = "Tacit interface, the %s view, running without a server" % view
-    return FRAGMENT.format(view=view, caption=esc_attr(caption), label=esc_attr(label))
-
 
 HERO = """    <section class="hero">
       <p class="eyebrow">A coding agent you run yourself</p>
@@ -361,7 +308,9 @@ def main() -> None:
             nav_docs=docs_html,
             nav_repo=repo_html,
             md_src=out_rel,
-            hero=fragment_html(href),
+            # Documentation pages are text only. The interface is shown in one place,
+            # `demo.html`, which the landing page embeds and links to.
+            hero="",
             version=esc_attr(version),
             repo=repo,
             source_link=f"https://github.com/{repo}",

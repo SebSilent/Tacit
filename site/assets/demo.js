@@ -2180,11 +2180,11 @@
   }
 
   // ── views ──────────────────────────────────────────────────────────────
-  // A docs page asks for one part of the interface with `?view=name` and gets a short scene
-  // of that part and nothing else: no Assistant, no Delegation, no idle loop. A 320-pixel
-  // frame cannot show a whole session honestly, and a scene that needs the rest of the app
-  // to make sense is a screenshot nobody can read. The full mock is this same file with no
-  // query string, and it is the only place the loop runs.
+  // The landing page embeds this file with `?view=basic` and gets one scripted turn: no
+  // Assistant, no Delegation, no idle loop. A 360-pixel frame cannot show a whole session
+  // honestly, and the documentation pages are text, so nothing else asks for a view. The
+  // full mock is this same file with no query string, and it is the only place the loop
+  // runs.
   async function sceneBasic() {
     loadSession('shell-timeout', true);
     await curTo(composerEl);
@@ -2219,149 +2219,9 @@
     finishTurn(5240);
   }
 
-  async function sceneTranscript() {
-    loadSession('prompt-cost', true);
-    const row = addAgent();
-    await streamReason(row, 'The question is about size, so measure it instead of recalling it: '
-      + 'the prompt is a list of groups, and the counter the session uses is the same one.');
-    await content(row, 'The fixed prompt is 14 groups and 89 entries. The tool list is the largest '
-      + 'single group, and every character of it is readable under Settings, because the panel is '
-      + 'generated from the constants that send it.');
-    finishTurn(2140);
-  }
-
-  async function sceneTools() {
-    loadSession('shell-timeout', true);
-    const row = addAgent();
-    await tool(row, 'grep_files', 'pattern: "TimeoutExpired" in backend/', {
-      ms: 900, tokens: 480, meta: '0.9s · 3 files',
-    });
-    await tool(row, 'read_file', 'backend/tools/shell.py', {
-      ms: 700, tokens: 1180, meta: '0.7s · 62 lines', open: true,
-      result: '96\t    try:\n97\t        proc.wait(timeout)\n98\t    except TimeoutExpired:\n'
-        + '99\t        proc.kill()   # the parent only\n',
-    });
-    await tool(row, 'browser', 'open https://example.com', {
-      err: true, ms: 600, meta: '0.6s · no browser installed',
-      result: 'browser: this tool needs a driver you install yourself; nothing was fetched',
-    });
-    await tool(row, 'edit_file', 'backend/tools/shell.py:112', {
-      ms: 500, tokens: 240, meta: '0.5s · replaced 1 line',
-    });
-  }
-
-  async function sceneTestrun() {
-    loadSession('audit-rotation', true);
-    const row = addAgent();
-    await tool(row, 'run_shell', 'python -m unittest tests.test_audit_rotation', {
-      ms: 1400, tokens: 900, meta: '1.4s · exit 1', err: true,
-      result: 'AssertionError: the ledger was truncated, not rotated\n\nFAILED (failures=1)',
-    });
-    await content(row, 'The first run is the finding: a reader mid-write saw a torn line. Rotate by '
-      + 'rename, then start the fresh file.');
-    await tool(row, 'run_shell', 'python -m unittest tests.test_audit_rotation', {
-      ms: 1200, tokens: 640, meta: '1.2s · exit 0',
-      result: 'Ran 4 tests in 0.31s\n\nOK',
-    });
-    finishTurn(3100);
-  }
-
-  async function sceneMeter() {
-    loadSession('shell-timeout', true);
-    setTokens(41000);
-    for (const n of [58000, 74000, 92000, 108000, 116400]) {
-      await wait(900);
-      setTokens(n);
-    }
-    await wait(900);
-    S.compacting = true;
-    setTokens(S.tokens);
-    toast('compaction: summarising the middle of the transcript, keeping the tail', true);
-    await wait(2600);
-    S.compacting = false;
-    setTokens(24100);
-    toast('compacted: 24,100 tokens in context');
-  }
-  sceneMeter.repeat = true;
-
-  async function scenePlan() {
-    loadSession('shell-timeout', true);
-    const row = addAgent();
-    planStatus('executing', 'phase 2 of 3, 2 sub-agents finished', 2);
-    tasks([{ text: 'Find the code the request names', done: true },
-      { text: 'Write the failing test', done: true },
-      { text: 'Change it', done: false }, { text: 'Run the suite', done: false }]);
-    await tool(row, 'read_file', 'backend/tools/shell.py', {
-      ms: 700, tokens: 1180, meta: '0.7s · 62 lines',
-    });
-    tasks([{ text: 'Find the code the request names', done: true },
-      { text: 'Write the failing test', done: true },
-      { text: 'Change it', done: true }, { text: 'Run the suite', done: false }]);
-  }
-
-  // The Settings scenes are still frames, not a tour: a docs page about configuration shows
-  // the panel it names, scrolled to the part it describes, and stops there. The pointer does
-  // not walk the tabs here; that was the demo nobody asked for.
-  async function sceneSettings() {
-    openSettings('general');
-    await wait(400);
-  }
-
-  async function sceneBudget() {
-    openSettings('general');
-    const el = $('#lim-turn_token_budget');
-    if (el) el.closest('.mcp-add').scrollIntoView({ block: 'center' });
-  }
-
-  async function sceneSkills() {
-    openSettings('tools');
-    // The third section header in that tab is Skills. Count the headers rather than
-    // trusting a positional selector, which counts element types and not classes.
-    const el = $$('#panel-tools .ho-section')[2];
-    if (el) el.scrollIntoView({ block: 'start' });
-  }
-
-  async function sceneMcp() {
-    openSettings('tools');
-    const el = $('#panel-tools .tool-row[data-name="mcp_call"]');
-    if (el) el.scrollIntoView({ block: 'center' });
-  }
-
-  async function sceneGit() {
-    openGit();
-    await wait(400);
-  }
-
-  async function sceneSnapshots() {
-    loadSession('shell-timeout', true);
-    const row = addAgent();
-    snapshot(row, 'snap-02', 3);
-    await content(row, 'Two files changed and one added. Restore puts the workspace back and '
-      + 'leaves the transcript alone, which is the only reason an agent can be trusted to edit.');
-    openSnapshots();
-  }
-
-  async function sceneEmpty() {
-    // Nothing to build: the shell already boots on its empty state, with the four asks
-    // under it. This is what a first run of Tacit looks like before a workspace is picked.
-    $('#emptyTag').textContent = 'Pick a workspace and say what you need.';
-  }
-
-  const SCENES = {
-    basic: sceneBasic,
-    transcript: sceneTranscript,
-    tools: sceneTools,
-    testrun: sceneTestrun,
-    meter: sceneMeter,
-    plan: scenePlan,
-    settings: sceneSettings,
-    budget: sceneBudget,
-    skills: sceneSkills,
-    mcp: sceneMcp,
-    git: sceneGit,
-    snapshots: sceneSnapshots,
-    empty: sceneEmpty,
-  };
+  // One view, asked for by the one frame the site embeds. Anything narrower would put a
+  // strip of the interface on a documentation page, and a documentation page is text.
+  const SCENES = { basic: sceneBasic };
 
   // ── boot ───────────────────────────────────────────────────────────────
   $('#brandVersion').hidden = false;

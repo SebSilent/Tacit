@@ -117,28 +117,17 @@
 	to { opacity: 0; transform: scale(3.6); }
 }
 
-/* A frame asked for one view is an excerpt, not the running page: the control strip
+/* The landing page's frame is an excerpt, not the running page: the control strip
    belongs to the full mock, where Pause and Replay mean something to the person reading
    it, and the sidebar belongs to a page you can navigate. `demo.js` sets data-view from
-   the query string, and the scene it runs is the short one written for that view. The
-   sidebar is a flex child, so hiding it costs the frame no empty column. */
+   the query string. The sidebar is a flex child, so hiding it costs the frame no empty
+   column. */
 html[data-view] .demo-chrome {
 	display: none;
 }
 
 html[data-view] .sidebar {
 	display: none;
-}
-
-/* The pointer only belongs where a scene actually drives something: `basic` sends a
-   turn, and `transcript` does not. Everywhere else it would be a decoration pretending
-   to be an interaction. */
-html[data-view] .demo-cursor {
-	display: none;
-}
-
-html[data-view="basic"] .demo-cursor {
-	display: block;
 }
 
 html[data-view] .messages {

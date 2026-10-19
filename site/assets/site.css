@@ -516,62 +516,6 @@ h1, h2, h3, h4 { text-wrap: balance; }
 	.demo-frame { height: 70vh; }
 }
 
-/* One part of the interface, at the top of the page that is about it. The frame is the
-   same `demo.html`, asked for a single view, so a docs page shows the thing rather than
-   a picture of the thing, without turning the page into a television. */
-.demo-frag {
-	margin: 0 0 var(--sp-8);
-	display: grid;
-	gap: var(--sp-4);
-}
-
-.demo-frag-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: var(--sp-4);
-}
-
-.demo-frag-head p {
-	margin: 0;
-	flex: 1 1 34ch;
-	max-width: 72ch;
-	font-size: var(--fs-2);
-	line-height: 1.6;
-	color: var(--muted);
-}
-
-.demo-frag-head a {
-	font-family: var(--mono);
-	font-size: var(--fs-2);
-	letter-spacing: .04em;
-	padding: var(--sp-2) var(--sp-4);
-	border: 1px solid var(--line-2);
-	border-radius: var(--radius-pill);
-	background: var(--bg-2);
-	color: var(--text);
-	text-decoration: none;
-	white-space: nowrap;
-}
-
-.demo-frag-head a:hover {
-	border-color: var(--accent);
-	color: var(--accent);
-}
-
-.demo-frag-frame {
-	display: block;
-	width: 100%;
-	height: 360px;
-	border: 1px solid var(--line-2);
-	border-radius: var(--radius);
-	background: var(--bg);
-}
-
-@media (max-width: 720px) {
-	.demo-frag-frame { height: 300px; }
-}
-
 .demo-note {
 	margin: 0;
 	max-width: 76ch;

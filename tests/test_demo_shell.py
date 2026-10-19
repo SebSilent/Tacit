@@ -112,8 +112,8 @@ class DriverQueriesRealNodes(unittest.TestCase):
         self.assertEqual({c for c in toggled if c not in styled}, set())
 
 
-class DocsFragments(unittest.TestCase):
-    """Each documentation page embeds one small view, and the view has to exist."""
+class DocsAreText(unittest.TestCase):
+    """The documentation pages are prose. The interface is shown in exactly one place."""
 
     @classmethod
     def setUpClass(cls):
@@ -121,35 +121,42 @@ class DocsFragments(unittest.TestCase):
         import build_site
 
         cls.build = build_site
-        cls.scenes = set(re.findall(r"^    (\w+): scene\w+,", DEMO_JS, re.M))
 
-    def test_the_mock_declares_its_scenes(self):
-        self.assertGreaterEqual(len(self.scenes), 10, "the scene table was not parsed")
-
-    def test_every_fragment_view_has_a_scene(self):
-        for href, (view, _caption) in self.build.FRAGMENTS.items():
-            self.assertIn(view, self.scenes, "%s asks for a view the mock does not have" % href)
-
-    def test_every_docs_page_gets_exactly_one_frame(self):
+    def test_no_docs_page_embeds_a_frame(self):
         for path in sorted((ROOT / "site").glob("*.html")):
-            if path.name == "demo.html":
+            if path.name in ("demo.html", "index.html"):
                 continue
             html = path.read_text(encoding="utf-8")
-            views = re.findall(r'src="demo\.html\?view=([\w-]+)"', html)
-            self.assertEqual(len(views), 1, "%s embeds %d frames" % (path.name, len(views)))
-            self.assertIn(views[0], self.scenes, path.name)
+            self.assertNotIn("demo-frag", html, "%s embeds a frame" % path.name)
+            self.assertNotIn('src="demo.html', html, "%s embeds a frame" % path.name)
 
-    def test_the_landing_frame_is_a_scene_too(self):
-        self.assertIn("demo.html?view=basic", self.build.DEMO)
+    def test_the_builder_keeps_no_fragment_table(self):
+        """A view nobody links to is dead code in the driver, so the table goes too."""
+        self.assertFalse(hasattr(self.build, "FRAGMENTS"))
+        self.assertFalse(hasattr(self.build, "fragment_html"))
+
+    def test_the_landing_page_embeds_the_one_view(self):
+        index = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('src="demo.html?view=basic"', index)
+        views = sorted(set(re.findall(r'demo\.html\?view=([\w-]+)', index)))
+        self.assertEqual(views, ["basic"])
         self.assertIn('href="demo.html"', self.build.DEMO)
 
-    def test_a_fragment_page_asks_for_no_chrome(self):
+    def test_the_mock_has_only_that_scene(self):
+        # Read the table itself rather than its formatting, so reflowing one entry onto
+        # one line is not a test failure.
+        table = re.search(r"const SCENES = \{(?P<body>.*?)\n?\};", DEMO_JS, re.S)
+        self.assertIsNotNone(table, "the scene table is gone from the driver")
+        scenes = set(re.findall(r"(\w+):\s*scene\w+", table.group("body")))
+        self.assertEqual(scenes, {"basic"})
+
+    def test_the_frame_page_asks_for_no_chrome(self):
         # The scene name arrives through the query string and becomes an attribute; the
         # stylesheet keys the dropped sidebar and control strip off it.
-        self.assertIn('document.documentElement.dataset.view = VIEW', DEMO_JS)
+        self.assertIn("document.documentElement.dataset.view = VIEW", DEMO_JS)
         css = (ROOT / "site" / "assets" / "demo.css").read_text(encoding="utf-8")
-        self.assertIn('html[data-view] .sidebar', css)
-        self.assertIn('html[data-view] .demo-chrome', css)
+        self.assertIn("html[data-view] .sidebar", css)
+        self.assertIn("html[data-view] .demo-chrome", css)
 
 
 if __name__ == "__main__":
