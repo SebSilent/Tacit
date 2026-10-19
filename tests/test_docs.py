@@ -266,5 +266,131 @@ class TestDocSetIsComplete(unittest.TestCase):
                       "the repository root cannot find them")
 
 
+class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
+    """The README's cost table is a measurement claim, so it gets measured again.
+
+    ``1,889`` tokens for the default profile outlived the tool schemas that grew past
+    it, and nothing noticed, because every other number in these docs is a line the
+    reader can open while this one was a figure somebody had run once. It is now
+    re-derived from `profiles.cost_of` on every run, and a row that disagrees fails
+    the suite rather than the reader's wallet.
+    """
+
+    def setUp(self):
+        """Measure a fresh install, because that is the install the table describes.
+
+        `cost_of` reads the real `~/.tacit` for plugins, MCP servers and memory, so
+        measured against this machine it reports whatever this person has installed
+        and the README's row is wrong for everybody else. The published figures are
+        the built-in profiles on an empty home, so that is the condition measured.
+        """
+        import tempfile   # noqa: PLC0415
+        from backend import config, profiles   # noqa: PLC0415
+        from backend.ai import prompts   # noqa: PLC0415
+        from tests.helpers import state_paths   # noqa: PLC0415
+        self.profiles = profiles
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = pathlib.Path(tmp.name)
+        keys = state_paths(config)
+        orig = {key: getattr(config, key) for key in keys}
+        prior_home = config.HOME
+
+        def restore():
+            config.HOME = prior_home
+            for key, value in orig.items():
+                setattr(config, key, value)
+        self.addCleanup(restore)
+        config.HOME = home
+        for key in keys:
+            target = home / pathlib.Path(orig[key]).name
+            setattr(config, key, target)
+            if key.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
+        self.measured = {name: profiles.cost_of(cfg)
+                         for name, cfg in profiles.BUILTIN.items()}
+        self.prompt_chars = len(prompts.system_prompt(None, False, chat=False))
+
+    def _readme(self):
+        return _read(README)
+
+    # | **minimal** | 7 | none | off | off | ~768 tokens |
+    PROFILE_ROW = re.compile(
+        r"^\| \*\*(minimal|default)\*\* \| *(\d+) \|.*?~([\d,]+) tokens \|", re.M)
+    # | **Tacit, default profile** | **974 chars** | **20** | **6.5 KB** | **~1,914** |
+    COMPARISON_ROW = re.compile(
+        r"^\| \*\*Tacit, (Minimal|default profile)\*\* \| \*\*(\d+) chars\*\* \| \*\*(\d+)\*\* "
+        r"\| \*\*([\d.]+) KB\*\* \| \*\*~([\d,]+)(?: tokens)?\*\* \|", re.M)
+
+    def test_the_profile_table_publishes_what_the_code_measures(self):
+        found = {m.group(1): (int(m.group(2)), int(m.group(3).replace(",", "")))
+                 for m in self.PROFILE_ROW.finditer(self._readme())}
+        self.assertEqual(sorted(found), ["default", "minimal"],
+                         "the README's profile table no longer holds the two rows this "
+                         "test reads, so the figures it publishes are unchecked")
+        bad = []
+        for name, (tools, shown) in sorted(found.items()):
+            cost = self.measured[name]
+            if tools != cost["tool_count"]:
+                bad.append(f"{name}: README says {tools} tools, cost_of says "
+                           f"{cost['tool_count']}")
+            if shown != cost["total"]:
+                bad.append(f"{name}: README says ~{shown:,} tokens, cost_of says "
+                           f"{cost['total']:,}")
+        self.assertEqual(bad, [], "\n  ".join(bad))
+
+    def test_the_comparison_rows_are_the_measured_ones(self):
+        """The row the README argues with other agents on, checked cell by cell."""
+        import json     # noqa: PLC0415
+        from backend import tokens   # noqa: PLC0415
+        chars = self.prompt_chars
+        rows = {m.group(1): m.groups() for m in self.COMPARISON_ROW.finditer(self._readme())}
+        self.assertEqual(sorted(rows), ["Minimal", "default profile"],
+                         "the comparison table lost the Tacit rows")
+        want = {"Minimal": "minimal", "default profile": "default"}
+        bad = []
+        for label, (_shown_label, shown_chars, shown_tools, shown_kb, shown_tokens) in rows.items():
+            name = want[label]
+            cost = self.measured[name]
+            size = sum(len(json.dumps(t)) for t in self.profiles._tool_set(
+                self.profiles.BUILTIN[name]))
+            kb = round(size / 1024, 1)
+            checks = ((int(shown_chars), chars, "system prompt chars"),
+                      (int(shown_tools), cost["tool_count"], "tool count"),
+                      (float(shown_kb), kb, "tool schema KB"),
+                      (int(shown_tokens.replace(",", "")), cost["total"], "fixed cost"))
+            for got, expected, what in checks:
+                if got != expected:
+                    bad.append(f"{label}: README {what} is {got}, measured {expected}")
+        self.assertEqual(bad, [], "\n  ".join(bad))
+
+    def test_the_prose_figures_are_the_measured_ones(self):
+        text = self._readme()
+        minimal = self.measured["minimal"]["total"]
+        default = self.measured["default"]["total"]
+        # The figure is stated twice, once in Key properties and once in the
+        # accounting section, and both have to move together or one of them lies.
+        hits = text.count(f"{minimal:,} tokens on Minimal and {default:,} on Default")
+        self.assertGreaterEqual(hits, 2,
+                                f"expected the measured pair in both prose places, saw {hits}")
+
+    def test_the_standing_prompt_length_is_real(self):
+        from backend.ai import prompts   # noqa: PLC0415
+        chars = len(prompts.system_prompt(None, False, chat=False))
+        self.assertIn(f"{chars} characters of standing", self._readme(),
+                      f"README publishes a different standing-prompt length than {chars}")
+
+    def test_the_spread_across_profiles_is_the_measured_extremes(self):
+        totals = sorted(c["total"] for c in self.measured.values())
+        self.assertIn(f"~{totals[0]:,} to ~{totals[-1]:,}", self._readme(),
+                      f"the published range is not {totals[0]:,} to {totals[-1]:,}")
+
+    def test_the_docs_page_agrees_with_the_readme(self):
+        text = _read(DOCS / "cost-and-profiles.md")
+        default = self.measured["default"]["total"]
+        self.assertIn(f"{default:,} on Default", text,
+                      "docs/cost-and-profiles.md publishes a different default figure")
+
+
 if __name__ == "__main__":
     unittest.main()
