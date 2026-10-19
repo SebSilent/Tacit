@@ -94,6 +94,10 @@ class DriverQueriesRealNodes(unittest.TestCase):
         made_by_driver = set(ID_ATTR.findall(DEMO_JS)) | set(
             re.findall(r"\.id = '([\w-]+)'", DEMO_JS)
         )
+        # The turn-budget inputs are written as 'lim-' plus the field key, so the id never
+        # appears whole in the source. Name the keys rather than teach the test to read
+        # string concatenation.
+        made_by_driver |= {"lim-" + k for k in re.findall(r"key: '([\w-]+)'", DEMO_JS)}
         unmet = JS_QUERY.findall(DEMO_JS)
         unmet = [i for i in unmet if i not in ids_of(self.page) and i not in made_by_driver]
         self.assertEqual(sorted(set(unmet)), [])
@@ -106,6 +110,46 @@ class DriverQueriesRealNodes(unittest.TestCase):
         toggled = set(re.findall(r"classList\.(?:add|remove|toggle)\('([\w-]+)'", DEMO_JS))
         self.assertGreater(len(toggled), 5, "this check went vacuous")
         self.assertEqual({c for c in toggled if c not in styled}, set())
+
+
+class DocsFragments(unittest.TestCase):
+    """Each documentation page embeds one small view, and the view has to exist."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import build_site
+
+        cls.build = build_site
+        cls.scenes = set(re.findall(r"^    (\w+): scene\w+,", DEMO_JS, re.M))
+
+    def test_the_mock_declares_its_scenes(self):
+        self.assertGreaterEqual(len(self.scenes), 10, "the scene table was not parsed")
+
+    def test_every_fragment_view_has_a_scene(self):
+        for href, (view, _caption) in self.build.FRAGMENTS.items():
+            self.assertIn(view, self.scenes, "%s asks for a view the mock does not have" % href)
+
+    def test_every_docs_page_gets_exactly_one_frame(self):
+        for path in sorted((ROOT / "site").glob("*.html")):
+            if path.name == "demo.html":
+                continue
+            html = path.read_text(encoding="utf-8")
+            views = re.findall(r'src="demo\.html\?view=([\w-]+)"', html)
+            self.assertEqual(len(views), 1, "%s embeds %d frames" % (path.name, len(views)))
+            self.assertIn(views[0], self.scenes, path.name)
+
+    def test_the_landing_frame_is_a_scene_too(self):
+        self.assertIn("demo.html?view=basic", self.build.DEMO)
+        self.assertIn('href="demo.html"', self.build.DEMO)
+
+    def test_a_fragment_page_asks_for_no_chrome(self):
+        # The scene name arrives through the query string and becomes an attribute; the
+        # stylesheet keys the dropped sidebar and control strip off it.
+        self.assertIn('document.documentElement.dataset.view = VIEW', DEMO_JS)
+        css = (ROOT / "site" / "assets" / "demo.css").read_text(encoding="utf-8")
+        self.assertIn('html[data-view] .sidebar', css)
+        self.assertIn('html[data-view] .demo-chrome', css)
 
 
 if __name__ == "__main__":

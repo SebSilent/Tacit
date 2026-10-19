@@ -5,23 +5,33 @@
    rather than at a corner because the composer and the panel buttons already own the
    edges. */
 
+/* Bottom-left, in the gutter beside the composer rather than across the top bar, and
+   small enough to read as a status line: this page is a mock, and the strip says so
+   without dressing the interface up in its own disclaimer. */
 .demo-chrome {
 	position: fixed;
-	top: var(--sp-4);
-	left: 50%;
-	transform: translateX(-50%);
+	bottom: var(--sp-8);
+	left: calc(var(--sidebar-w) + var(--sp-4));
 	z-index: 60;
 	display: flex;
 	align-items: center;
-	gap: var(--sp-3);
-	padding: var(--sp-2) var(--sp-4);
-	border: 1px solid var(--line-2);
+	gap: var(--sp-2);
+	padding: var(--sp-1) var(--sp-3);
+	border: 1px solid var(--line);
 	border-radius: var(--radius-pill);
 	background: var(--bg-2);
 	font-family: var(--mono);
-	font-size: var(--fs-1);
+	font-size: var(--fs-meta);
 	color: var(--fadetext);
 	white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+	.demo-chrome-label { display: none; }
+}
+
+@media (max-width: 860px) {
+	.demo-chrome { display: none; }
 }
 
 .demo-chrome-label {
@@ -56,4 +66,79 @@
 
 @media (max-width: 720px) {
 	.demo-chrome-label { display: none; }
+}
+
+/* The mock's own pointer. Page chrome, not app chrome: the product has no reason to
+   draw a cursor, and every node it clicks is an app node styled by app.css. The press
+   scales the glyph rather than the wrapper because the wrapper's transform is what
+   carries the position. */
+.demo-cursor {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: 300;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity var(--dur-2) var(--ease-out);
+	will-change: transform;
+}
+
+.demo-cursor.on {
+	opacity: 1;
+}
+
+.demo-cursor svg {
+	display: block;
+	transition: transform var(--dur-1) var(--ease-out);
+	filter: drop-shadow(0 1px 3px var(--shade));
+}
+
+.demo-cursor.down svg {
+	transform: scale(.8);
+}
+
+.demo-cursor-ring {
+	position: absolute;
+	top: -4px;
+	left: -4px;
+	width: 9px;
+	height: 9px;
+	border: 1px solid var(--accent);
+	border-radius: 50%;
+	opacity: 0;
+}
+
+.demo-cursor.ping .demo-cursor-ring {
+	animation: demo-cursor-ping .48s var(--ease-out) 1;
+}
+
+@keyframes demo-cursor-ping {
+	from { opacity: .85; transform: scale(.4); }
+	to { opacity: 0; transform: scale(3.6); }
+}
+
+/* Fragments. A documentation page embeds one small view of the interface, chosen for
+   what that page is about: not the running app, so no sidebar to navigate and no
+   control strip. `demo.js` sets data-view from the query string, and the scene it runs
+   is the short one written for that view. */
+html[data-view] .demo-chrome {
+	display: none;
+}
+
+html[data-view] .sidebar {
+	display: none;
+}
+
+/* The pointer only belongs where a scene actually drives something: `basic` sends a
+   turn. Everywhere else it would be a decoration pretending to be an interaction. */
+html[data-view] .demo-cursor {
+	display: none;
+}
+
+html[data-view="basic"] .demo-cursor {
+	display: block;
+}
+
+html[data-view] .messages {
+	padding-top: var(--sp-6);
 }

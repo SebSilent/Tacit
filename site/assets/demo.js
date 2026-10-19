@@ -40,7 +40,17 @@
     autoCompact: true,
     session: 'shell-timeout',
     run: 0,
+    pending: null,
   };
+
+  // ── what this page is showing ──────────────────────────────────────────
+  // `demo.html` with no query string is the whole running mock: the pointer, the turns,
+  // the Assistant, the Delegation panel, Settings. A documentation page asks for one
+  // part of it with `?view=name`, and gets a short scene of that part only. The attribute
+  // is what `demo.css` reads to drop the sidebar and the control strip.
+  const VIEW = (new URLSearchParams(window.location.search).get('view') || '').trim();
+  const FRAGMENT = !!VIEW;
+  if (FRAGMENT) document.documentElement.dataset.view = VIEW;
 
   // ── timing ─────────────────────────────────────────────────────────────
   // One gate decides whether the script may move, so Pause stops the animation
@@ -59,6 +69,107 @@
     const atEnd = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
     if (force || atEnd || S.busy) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+
+  // ── the pointer ────────────────────────────────────────────────────────
+  // A cursor that belongs to this page. It travels along an arc, presses, and then
+  // clicks the real node, so the handler that runs is the one the mock ships: nothing is
+  // faked by sliding a picture over a button. It obeys the same Pause and speed gate as
+  // the script, and a reader who moves their own mouse is left alone for a few seconds.
+  const REDUCED = !!(window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const cur = document.createElement('div');
+  cur.className = 'demo-cursor';
+  cur.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">'
+    + '<path d="M5 2.5 18.6 10 12.3 11.6 9.4 18.9z" stroke="var(--bg)" stroke-width="1.4"'
+    + ' stroke-linejoin="round" fill="var(--text)"/></svg><span class="demo-cursor-ring"></span>';
+  document.body.appendChild(cur);
+
+  const curPos = { x: window.innerWidth * 0.55, y: window.innerHeight * 0.3 };
+  let curBow = 1, curAnim = 0, curHideUntil = 0;
+  curPlace();
+
+  function curPlace() {
+    cur.style.transform = 'translate3d(' + curPos.x.toFixed(1) + 'px,'
+      + curPos.y.toFixed(1) + 'px,0)';
+  }
+  function curShow() {
+    if (Date.now() >= curHideUntil) cur.classList.add('on');
+  }
+  const easeInOut = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+
+  function curMove(x, y, ms) {
+    curShow();
+    if (REDUCED) {
+      curPos.x = x; curPos.y = y; curPlace();
+      return Promise.resolve();
+    }
+    return new Promise((res) => {
+      const fx = curPos.x, fy = curPos.y;
+      const dist = Math.hypot(x - fx, y - fy);
+      const dur = ms || Math.min(1500, 200 + dist * 2.4);
+      // A straight line is mechanical. The path bows sideways, alternating which side,
+      // by an amount that scales with the distance: a long throw arcs, a nudge does not.
+      curBow = -curBow;
+      const nx = -(y - fy) / (dist || 1), ny = (x - fx) / (dist || 1);
+      const bow = Math.min(64, dist * 0.16) * curBow;
+      let spent = 0, last = 0;
+      function frame(now) {
+        if (!last) last = now;
+        // Pause freezes it in place rather than letting it teleport on resume.
+        if (S.paused) { last = now; curAnim = requestAnimationFrame(frame); return; }
+        spent += (now - last) * S.speed;
+        last = now;
+        const p = Math.min(1, spent / dur), e = easeInOut(p);
+        curPos.x = fx + (x - fx) * e + nx * bow * Math.sin(Math.PI * p);
+        curPos.y = fy + (y - fy) * e + ny * bow * Math.sin(Math.PI * p);
+        curPlace();
+        if (p < 1) { curAnim = requestAnimationFrame(frame); return; }
+        curAnim = 0;
+        res();
+      }
+      if (curAnim) cancelAnimationFrame(curAnim);
+      curAnim = requestAnimationFrame(frame);
+    });
+  }
+
+  async function curTo(node, opt) {
+    if (!node) return;
+    const o = opt || {};
+    // Bring it into view inside its own scroller, then measure: a node that is off-screen
+    // has no viewport point worth aiming at.
+    if (node.scrollIntoView) node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await wait(70);
+    const r = node.getBoundingClientRect();
+    if (r.width < 2 && r.height < 2) return;
+    const x = r.left + r.width * (o.fx == null ? 0.5 : o.fx) + (o.dx || 0);
+    const y = r.top + r.height * (o.fy == null ? 0.5 : o.fy) + (o.dy || 0);
+    await curMove(x, y, o.ms);
+  }
+
+  async function curClick(node, opt) {
+    if (!node) return;
+    await curTo(node, opt);
+    cur.classList.add('down');
+    await wait(120);
+    node.click();
+    cur.classList.remove('down');
+    cur.classList.add('ping');
+    setTimeout(() => cur.classList.remove('ping'), 480);
+    await wait(160);
+  }
+
+  // A cursor held still looks broken, so it breathes: a few pixels now and then in the
+  // direction it last went, never while a move is in flight.
+  setInterval(() => {
+    if (S.paused || curAnim || !cur.classList.contains('on')) return;
+    curMove(curPos.x + (Math.random() * 16 - 8), curPos.y + (Math.random() * 12 - 6), 1300);
+  }, 5200);
+
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    curHideUntil = Date.now() + 4500;
+    cur.classList.remove('on');
+  }, true);
 
   // ── context meter ──────────────────────────────────────────────────────
   function setTokens(n) {
@@ -372,20 +483,130 @@
   });
 
   // ── Assistant panel ────────────────────────────────────────────────────
-  // The Assistant thread is its own markup, not the transcript's: `.as-msg.me` is the
-  // reader's line and `.as-msg.them` is the assistant's, with markdown rendered into
-  // `.as-body.md`.
-  function asMsg(role, text) {
+  // The thread is the app's own markup, not the transcript's: `.as-msg.me` is the
+  // reader's line, `.as-msg.them` the assistant's, markdown into `.as-body.md`, and the
+  // assistant's own tool calls in `.as-tools`. An answer that ends in a fenced block
+  // grows the same `.as-acts` row the real panel does, with "Send to agent" on it, and
+  // that button is the whole point of the panel: what it carries starts a turn.
+  const AS_MSGS = [];
+  let AS_TOOLS = [];
+
+  function asToolsHtml() {
+    if (!AS_TOOLS.length) return '';
+    return '<div class="as-tools">' + AS_TOOLS.map((t) =>
+      '<div class="tool-card' + (t.open ? ' open' : '') + (t.err ? ' err' : '') + '">'
+      + '<div class="tool-head"><span class="tool-badge">' + esc(t.name) + '</span>'
+      + '<span class="tool-args">' + esc(t.args) + '</span></div>'
+      + '<div class="tool-body"><pre>' + esc(t.text || 'running\u2026') + '</pre></div>'
+      + '</div>').join('') + '</div>';
+  }
+
+  function asRender() {
     const box = $('#asMessages');
-    if (box.querySelector('.as-empty')) box.innerHTML = '';
-    const el = document.createElement('div');
-    el.className = 'as-msg ' + (role === 'user' ? 'me' : 'them');
-    el.innerHTML = '<div class="as-body' + (role === 'user' ? '' : ' md') + '"></div>';
-    const body = el.querySelector('.as-body');
-    if (role === 'user') body.textContent = text;
-    else body.innerHTML = md(text);
-    box.appendChild(el);
+    if (!AS_MSGS.length) {
+      box.innerHTML = '<div class="as-empty">Ask about this session. Draft a prompt, think an '
+        + 'approach through, or ask what the agent just did.<br><br>'
+        + '<span class="as-note">The agent cannot see this conversation.</span></div>';
+      return;
+    }
+    box.innerHTML = AS_MSGS.map((m, i) => {
+      const mine = m.role === 'user';
+      // The same rule the app uses: only an answer that actually offers a fenced prompt
+      // can be handed over, so the button never sends prose the agent would misread.
+      const offers = /```[\s\S]*?\S[\s\S]*?```/.test(m.content || '');
+      const acts = mine ? '' : '<div class="as-acts">'
+        + (offers ? '<button class="ho-btn small" data-send="' + i
+          + '" title="Hand this prompt to the agent now">Send to agent</button>' : '')
+        + '<button class="ho-btn small" data-del="' + i
+        + '" title="Remove this message from the assistant\'s memory">delete</button></div>';
+      return '<div class="as-msg ' + (mine ? 'me' : 'them') + '">'
+        + (i === AS_MSGS.length - 1 ? asToolsHtml() : '')
+        + '<div class="as-body' + (mine ? '' : ' md') + '">'
+        + (mine ? esc(m.content) : md(m.content)) + '</div>' + acts + '</div>';
+    }).join('');
     box.scrollTop = box.scrollHeight;
+  }
+
+  // The fenced block is what travels, exactly as on the server: the index travels to the
+  // handler and the text is pulled out of the stored message, so the transcript and the
+  // panel cannot drift into showing two different prompts.
+  function asFenced(text) {
+    const m = /```[\s\S]*?\n([\s\S]*?)```/.exec(text || '');
+    return m ? m[1].trim() : '';
+  }
+
+  function asHandoff(index) {
+    const prompt = asFenced((AS_MSGS[index] || {}).content);
+    if (!prompt) return;
+    if (S.busy) { toast('a turn is already running in this session', true); return; }
+    runTurn(SESSIONS[S.session].script, prompt);
+  }
+
+  // One delegated handler over the thread, like the app's: the list re-renders on every
+  // change, so a listener per button would have to be re-attached each time.
+  $('#asMessages').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) { AS_MSGS.splice(parseInt(del.dataset.del, 10), 1); asRender(); return; }
+    const btn = e.target.closest('[data-send]');
+    if (btn) asHandoff(parseInt(btn.dataset.send, 10));
+  });
+
+  function asAskText(text) {
+    AS_MSGS.push({ role: 'user', content: text });
+    asRender();
+  }
+
+  // The answer streams into the last body, which is what the app does while a run is in
+  // flight; the full re-render at the end is what attaches `.as-acts`.
+  async function asAnswer(lead, prompt, tools) {
+    AS_TOOLS = [];
+    if (tools) {
+      AS_TOOLS = tools.map((t) => ({ name: t.name, args: t.args, text: '', open: true }));
+      AS_MSGS.push({ role: 'assistant', content: '' });
+      asRender();
+      for (let i = 0; i < AS_TOOLS.length; i += 1) {
+        await wait(520);
+        AS_TOOLS[i].text = tools[i].text;
+        asRender();
+      }
+      await wait(320);
+    }
+    AS_MSGS.push({ role: 'assistant', content: '' });
+    asRender();
+    const full = lead + '\n\n```text\n' + prompt + '\n```';
+    const body = $$('#asMessages .as-body').pop();
+    let shown = '';
+    for (let i = 0; i < full.length; i += 4) {
+      shown = full.slice(0, i + 4);
+      body.innerHTML = md(shown);
+      $('#asMessages').scrollTop = $('#asMessages').scrollHeight;
+      await wait(16);
+    }
+    AS_TOOLS = [];
+    AS_MSGS[AS_MSGS.length - 1].content = full;
+    asRender();
+  }
+
+  // What a reader can do by hand, the pointer does on its own, through the same handler:
+  // open the panel, type the question, press Send, wait for the answer to finish
+  // streaming, then click "Send to agent". The turn starts from that click, so this
+  // function never calls runTurn and never has to know which session is open.
+  async function consultAssistant(spec) {
+    if (!asPanel.classList.contains('open')) await curClick($('#asToggle'));
+    await curTo($('#asInput'));
+    await typeIntoEl($('#asInput'), spec.ask);
+    await curClick($('#asSend'));
+    // The button exists only once the answer has landed with a fenced block in it, so
+    // waiting for it is waiting for the stream, with no second clock to keep in sync.
+    let btn = null;
+    for (let i = 0; i < 300 && !btn; i += 1) {
+      await wait(120);
+      btn = $('#asMessages').querySelector('[data-send]');
+    }
+    if (!btn) return spec.prompt;
+    await wait(900);
+    await curClick(btn);
+    return spec.prompt;
   }
 
   // ── sessions ───────────────────────────────────────────────────────────
@@ -413,6 +634,67 @@
       tokens: 12980,
       ask: 'How much of the fixed prompt is the tool list, and can I read it anywhere?',
       script: scriptAnswer,
+    },
+  };
+
+  // What the assistant is asked, and the prompt it hands back. The prompt is the fenced
+  // block, so the text the transcript receives is the text on screen rather than a second
+  // copy of it that could disagree.
+  const CONSULT = {
+    'shell-timeout': {
+      ask: 'What should I do first here? The shell tool times out but the children keep running.',
+      tools: [{
+        name: 'read',
+        args: 'backend/tools/shell.py:88-140',
+        text: 'def run(cmd, timeout=180):\n    proc = Popen(argv, ...)\n'
+          + '    try:\n        proc.wait(timeout)\n    except TimeoutExpired:\n'
+          + '        proc.kill()          # the parent only\n',
+      }],
+      lead: 'Two things are already true: the timeout path kills the parent and nothing walks '
+        + 'the tree. Fix the failing case first, because the test is what tells you the '
+        + 'difference between a kill and a cleanup.\n\nName the behaviour precisely: a command '
+        + 'that outlives its timeout must leave no descendant behind. Then replace the single '
+        + '`proc.kill()` with a tree kill and bound the drain, so a child that ignores the '
+        + 'signal cannot hold the turn open forever.',
+      prompt: 'The shell tool kills a timed-out command but the children keep running. Write a '
+        + 'failing test that proves a descendant survives the timeout, then replace proc.kill() '
+        + 'with a process-tree kill and bound the drain. Run the full suite last.',
+    },
+    'audit-rotation': {
+      ask: 'The audit ledger never rotates. Where do I start without losing the current file?',
+      tools: [{
+        name: 'grep',
+        args: 'ledger path in backend/',
+        text: 'backend/audit.py:42   def append(event)\n'
+          + 'backend/audit.py:58   LEDGER = home / ".tacit" / "audit.jsonl"\n',
+      }],
+      lead: 'Rotation belongs on the write path, not in a background job nobody installs. '
+        + 'The constraint that decides the design is that a reader must never see a torn '
+        + 'line, so the switch is a rename and not a truncate.\n\nMove the full file to a '
+        + 'dated sibling, start an empty ledger, and keep a fixed number of old files so the '
+        + 'folder cannot grow forever. The race to test is two appends crossing the size '
+        + 'threshold at once.',
+      prompt: 'The audit ledger never rotates. Add size-based rotation to the append path: '
+        + 'rename a full file to a dated sibling, start a fresh ledger, keep the last four, '
+        + 'and never leave a torn line readable. Test the rename race.',
+    },
+    'prompt-cost': {
+      ask: 'How much of the fixed prompt is the tool list, and can I read it anywhere?',
+      tools: [{
+        name: 'grep',
+        args: 'prompts_catalog.py',
+        text: 'backend/prompts_catalog.py:1   GROUPS = [...]\n'
+          + 'backend/prompts_catalog.py:88   def live_blocks(session)\n',
+      }],
+      lead: 'The fixed prompt is 14 groups. The tool list is the largest single one, and it '
+        + 'is measured rather than guessed: the same counter the session uses writes the '
+        + 'number down at build time.\n\nWhat you can read is everything that goes out. There '
+        + 'is a tab for it in Settings, and it is generated from the constants that send it, '
+        + 'so it cannot show you a friendlier version of the prompt than the model sees. Ask '
+        + 'for the breakdown by group and you get the same figures the meter uses.',
+      prompt: 'Break the fixed prompt down by group and say how many entries and roughly how '
+        + 'many tokens the tool list alone costs. Point at the file that holds each group, and '
+        + 'show me where in the interface I can read the exact text that goes out.',
     },
   };
 
@@ -501,7 +783,7 @@
     await content(row, 'Done. `kill_tree` walks the children before the root dies, and the test now '
       + 'waits for the grandchild instead of guessing. Two files changed, one snapshot taken, so '
       + 'the whole turn is undoable from the clock in the top bar.');
-    finishTurn(11840, '$0.0193');
+    finishTurn(11840);
   }
 
   async function scriptLedger() {
@@ -555,7 +837,7 @@
     await content(row, 'Rotated at 4 MB with three files kept, and the test that did not exist now '
       + 'does. The ledger never disappears mid-read because the rename happens before the new '
       + 'handle opens.');
-    finishTurn(6120, '$0.0104');
+    finishTurn(6120);
   }
 
   async function scriptAnswer() {
@@ -575,7 +857,7 @@
     await content(row, 'That is the contract: if a sentence goes to a model, you can read it in the '
       + 'interface that sent it. The tab is on the right, and this page has the same texts copied '
       + 'out of the source that sends them.');
-    finishTurn(2140, '$0.0037');
+    finishTurn(2140);
   }
 
   async function scriptGeneric(text) {
@@ -606,17 +888,18 @@
       { text: 'Change it', done: true }, { text: 'Run the suite', done: true }]);
     await content(row, 'Green. Nothing on this page was written to your disk: there is no server '
       + 'behind it, which is the only honest thing a mock can say about itself.');
-    finishTurn(4180, '$0.0071');
+    finishTurn(4180);
   }
 
-  function finishTurn(spent, cost) {
+  // The turn ends in the transcript, not in the Assistant. The panel used to be opened by
+  // the script to announce a cost it had not been asked about, which is the one thing the
+  // real assistant never does: it answers when it is spoken to.
+  function finishTurn(spent) {
     setTokens(S.tokens + spent);
     $('#topMeta').textContent = 'Agent · local / ' + SESSIONS[S.session].model
-      + ' · ' + comma(spent) + ' tok · ' + cost;
-    asPanel.classList.add('open');
-    asMsg('assistant', 'Turn cost **' + cost + '**, ' + comma(spent) + ' tokens, 3 edits, 1 snapshot. '
-      + 'The agent was never told this panel exists.');
-    $('#asBudget').textContent = 'runs 2 · ' + comma(spent) + ' tok of 200,000';
+      + ' · ' + comma(spent) + ' tok';
+    $('#asBudget').textContent = 'runs ' + S.run + ' · ' + comma(S.tokens)
+      + ' tok of ' + comma(CTX);
   }
 
   // ── the runner ─────────────────────────────────────────────────────────
@@ -649,14 +932,39 @@
   // still image. Compaction fires once, because a context that only grows is a demo
   // of nothing.
   const LOOP = ['shell-timeout', 'audit-rotation', 'prompt-cost'];
-  let loopAt = 0, compacted = false;
+  let loopAt = 0, compacted = false, toured = false;
+  // Each session is consulted through the Assistant once. After that the loop types the
+  // ask itself, so both routes through the interface are on the page every few minutes.
+  const CONSULTED = {};
+
+  let firstPass = true;
+
+  // A short walk through the advanced half of Settings: open it, switch to General, turn
+  // on the mid-turn sounds, make the transcript roomy, put it back, close. Every step
+  // goes through the same handler a reader's own click would hit, and the density change
+  // really does change the transcript, because it sets the attribute the app's stylesheet
+  // reads.
+  async function settingsTour() {
+    await curClick($('#harnessBtn'));
+    await curClick($('#hoTabs [data-tab="general"]'));
+    await wait(400);
+    await curClick($('#panel-general [data-perm="alert-sound"] .tgl'));
+    await wait(700);
+    await curClick($('#densitySeg [data-dens="roomy"]'));
+    await wait(1400);
+    await curClick($('#densitySeg [data-dens="default"]'));
+    await curClick($('#hoClose'));
+  }
 
   async function idleLoop() {
     while (true) {
       await wait(6500);
       if (S.busy) continue;
-      loopAt = (loopAt + 1) % LOOP.length;
-      if (!compacted && loopAt === 0) {
+      // The first pass is the session the page booted on, so the loop only moves once it
+      // has run something.
+      if (!firstPass) loopAt = (loopAt + 1) % LOOP.length;
+      firstPass = false;
+      if (!compacted && S.run > 0 && loopAt === 0) {
         compacted = true;
         S.compacting = true;
         setTokens(S.tokens);
@@ -667,25 +975,36 @@
         toast('compacted: 24,100 tokens in context');
         await wait(1200);
       }
-      loadSession(LOOP[loopAt], true);
-      const ask = SESSIONS[LOOP[loopAt]].ask;
-      await typeInto(ask);
-      await runTurn(SESSIONS[LOOP[loopAt]].script, ask);
+      const key = LOOP[loopAt];
+      if (!toured) { toured = true; await settingsTour(); }
+      loadSession(key, true);
+      if (CONSULT[key] && !CONSULTED[key]) {
+        CONSULTED[key] = true;
+        // The pointer asks the assistant, reads the answer, and clicks "Send to agent".
+        // That click is what starts the turn, so nothing below has to know it happened.
+        await consultAssistant(CONSULT[key]);
+        continue;
+      }
+      await curTo(composerEl);
+      await typeIntoEl(composerEl, SESSIONS[key].ask);
+      S.pending = SESSIONS[key].script;
+      await curClick($('#sendBtn'));
     }
   }
 
-  // The ask is typed into the composer before it is sent, because watching the
-  // message arrive already written is watching a screenshot, not a session.
-  async function typeInto(text) {
-    composerEl.value = '';
+  // The ask is typed before it is sent, because watching a message arrive already written
+  // is watching a screenshot, not a session. The composer and the Assistant input share
+  // this: one typer, whichever field the pointer is standing over. Nothing here clears
+  // the field: the button does that, the same way it does for a reader's own typing.
+  async function typeIntoEl(el, text) {
+    el.value = '';
+    if (el.focus) el.focus();
     for (const ch of text) {
-      composerEl.value += ch;
-      autoGrow();
+      el.value += ch;
+      if (el === composerEl) autoGrow();
       await wait(15);
     }
     await wait(420);
-    composerEl.value = '';
-    autoGrow();
   }
 
   // ── controls that are really the app's ─────────────────────────────────
@@ -698,7 +1017,11 @@
     if (!text || S.busy) return;
     composerEl.value = '';
     autoGrow();
-    runTurn(scriptGeneric, text);
+    // The scripted loop types into this field and clicks this same button, so it leaves
+    // behind the turn it wants run. A reader's own message gets the generic answer.
+    const script = S.pending || scriptGeneric;
+    S.pending = null;
+    runTurn(script, text);
   }
   $('#sendBtn').addEventListener('click', send);
   composerEl.addEventListener('keydown', (e) => {
@@ -821,9 +1144,9 @@
       const p = $('#panel-' + id);
       if (p) p.hidden = id !== tab;
     });
-    $('#hoNote').textContent = tab === 'prompts'
+    hoNote(tab === 'prompts'
       ? 'Every character that goes to a model, read from the constants that send it.'
-      : 'Mock panel. The real Settings writes to the state folder.';
+      : 'Mock panel. The real Settings writes to the state folder.');
   }
   $('#hoTabs').addEventListener('click', (e) => {
     const b = e.target.closest('.ho-tab');
@@ -877,40 +1200,390 @@
         + g.entries.map((e) => item(e.name, e.text)).join('') + '</details>').join('');
   }
 
-  $('#panel-general').innerHTML =
-    '<div class="ho-section">Session</div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">Mode</span>'
-    + '<span class="ho-sub">Agent. Chat gives no tools and no sandbox.</span></div>'
-    + '<div class="ctl-row"><span class="ctl-label">Workspace</span>'
-    + '<span class="ho-sub">C:\\Projects\\Tacit</span></div>'
-    + '<div class="ctl-row"><span class="ctl-label">Turn token budget</span>'
-    + '<span class="ho-sub">200,000</span></div></div>'
-    + '<div class="ho-section">Context</div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">Window</span>'
-    + '<span class="ho-sub">128,000 tokens, 12,000 held back for compaction</span></div>'
-    + '<div class="ctl-row"><span class="ctl-label">Auto compaction</span>'
-    + '<span class="ho-sub">on</span></div></div>';
+  // ── Settings, the advanced half ────────────────────────────────────────
+  // These tabs are the app's own structure, taken from `static/platform.js` and
+  // `static/harness.js`: `.ho-section` headers, `.prof-row` profiles, `.tool-row`
+  // permissions with a `.tgl` switch, the turn budget as number inputs with the bounds
+  // the server clamps to, `.prov-card` providers over a `.model-list`, and the built-in
+  // tool list with its shell-overlap select. The tool names are the real 22 from
+  // `backend/agent.py`; the numbers and the shorter descriptions are invented, because
+  // there is no server here to ask. Every switch moves: a settings panel you cannot
+  // change is a brochure.
+  const CFG = {
+    profile: 'default',
+    profiles: [
+      { name: 'default', label: 'Default', cost: '14,800',
+        desc: 'The balance every figure in the docs is measured against.' },
+      { name: 'cheap', label: 'Cheap', cost: '6,200',
+        desc: 'Fewer tools offered, thinking off, a smaller budget per turn.' },
+      { name: 'thorough', label: 'Thorough', cost: '31,400',
+        desc: 'Every tool, thinking on, roomy budget, sub-agents encouraged.' },
+    ],
+    perms: [
+      { key: 'version-control', name: 'Version control', on: false,
+        desc: 'Off by default. Left to itself a model commits and pushes far more than '
+          + 'anyone asked for. The Git panel is the deliberate route.' },
+      { key: 'deliver-guarantee', name: 'Delivery guarantee', on: true,
+        desc: 'On by default. When a turn would end without the file the task names, the '
+          + 'harness orders it written and spends the last rounds landing it.' },
+      { key: 'turn-sound', name: 'Turn-end sound', on: true,
+        desc: 'A short two-note chime when a turn finishes: rising for a finished turn, '
+          + 'lower for one that ended on an error.' },
+      { key: 'alert-sound', name: 'Mid-turn sounds', on: false,
+        desc: 'Off by default. A drop in pitch at the budget warning, one tick each time '
+          + 'an autonomous cycle starts. These repeat on their own.' },
+      { key: 'autoupdater-enabled', name: 'Auto-updater', on: true,
+        desc: 'Checks GitHub for new commits every hour and can pull changed files. Tacit '
+          + 'has no releases, so every push is an update.' },
+    ],
+    budget: [
+      { key: 'max_steps', label: 'Steps per turn', value: 60, min: 4, max: 400,
+        hint: 'Tool calls one turn may take before it is asked to wrap up.' },
+      { key: 'subagent_steps', label: 'Steps per sub-agent', value: 30, min: 1, max: 200,
+        hint: 'The same cap, applied to one delegated task.' },
+      { key: 'research_steps', label: 'Steps per research aspect', value: 12, min: 1, max: 40,
+        hint: 'The same cap, applied to one aspect of a research sweep.' },
+      { key: 'turn_token_budget', label: 'Token cap per turn', value: 200000,
+        min: 0, max: 2000000, hint: 'Tokens one turn may bill before it stops and reports. 0 means no cap.' },
+    ],
+    density: 'default',
+    overlap: 'block',
+    fallback: '',
+    processes: [
+      { role: 'server', pid: '18224', started: '16:31' },
+      { role: 'turn worker', pid: '18902', started: '16:33' },
+    ],
+    tools: [
+      ['list_files', 'List a folder, relative paths resolve against the workspace.', true],
+      ['read_file', 'Read a file as numbered lines, with a window and a continuation offset.', true],
+      ['write_file', 'Create or overwrite a file.', true],
+      ['edit_file', 'Replace one snippet that appears exactly once.', true],
+      ['glob_files', 'Find files by name pattern.', true],
+      ['grep_files', 'Search file contents with a regular expression.', true],
+      ['run_shell', 'Run a command in the workspace, with a timeout and a reported exit code.', true],
+      ['skill', 'Read a skill\'s full instructions before following it.', true],
+      ['bg_start', 'Start a long-running command in the background.', true],
+      ['bg_output', 'Read a background job and whether it is still running.', true],
+      ['bg_stop', 'Stop a background job.', true],
+      ['fetch', 'Fetch a URL and return its text.', true],
+      ['browser', 'Drive a real browser: open, click, type, screenshot.', true],
+      ['research', 'Bounded multi-source check, then one cited report.', true],
+      ['evidence', 'Record and re-read a citable fact.', true],
+      ['task', 'Delegate a focused investigation to a sub-agent.', true],
+      ['mcp_list_servers', 'One of four helper schemas, hidden until an MCP server is added.', false],
+      ['mcp_search_tools', 'Hidden with no server configured.', false],
+      ['mcp_activate_tools', 'Hidden with no server configured.', false],
+      ['mcp_call', 'Hidden with no server configured.', false],
+      ['memory_recall', 'Read the long-term memory store.', false],
+      ['memory_add', 'Write to it. Off unless the memory mode is on.', false],
+    ],
+  };
+  const SKILLS = [
+    { name: 'commit-message-style', kind: 'skill',
+      desc: 'Writes a commit message the way this repository does it: one short clause, no ticket noise.',
+      body: '# Steps\n\n1. Name what changed in three words or fewer.\n'
+        + '2. Never write "fix bug" without naming the bug.\n3. No body unless the why is not obvious.\n' },
+    { name: 'prose-denylist', kind: 'skill',
+      desc: 'Checks documentation prose against scripts/check_prose.py before a commit.',
+      body: '# Rule\n\nEm dashes, hollow adjectives and hedged claims are banned in prose.\n'
+        + 'Run the checker on the files you touched, not only the docs set.\n' },
+    { name: 'theme-tokens', kind: 'knowledge',
+      desc: 'Where the palette lives and which test measures its contrast.',
+      body: 'static/style.css holds one token block per theme.\n'
+        + 'tests/test_style_themes.py measures contrast and hue distance; it counts themes, so a new\n'
+        + 'palette has to be added to its expected number.\n' },
+  ];
+  const PERM = {};
+  CFG.perms.forEach((p) => { PERM[p.key] = p.on; });
+  const TOOL = CFG.tools.map((t) => ({ name: t[0], desc: t[1], on: t[2] }));
+  const mcpLive = false;
 
-  $('#panel-providers').innerHTML =
-    '<div class="ho-section">Providers</div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">local</span>'
-    + '<span class="ho-sub">http://127.0.0.1:8080/v1, no key</span></div>'
-    + '<div class="ctl-row"><span class="ctl-label">Model</span>'
-    + '<span class="ho-sub">glm-5.2 · fp8 · 128k window</span></div></div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">Profiles</span>'
-    + '<span class="ho-sub">default, cheap, thorough. Each one changes tools, thinking and budget, '
-    + 'and every prompt it sends is listed under Prompts.</span></div></div>';
+  function hoNote(text, err) {
+    const el = $('#hoNote');
+    el.textContent = text;
+    el.classList.toggle('err', !!err);
+  }
 
-  $('#panel-tools').innerHTML =
-    '<div class="ho-section">Tools offered</div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">20 of 22</span>'
-    + '<span class="ho-sub">read, write, edit, glob, grep, bash, task, research, evidence, fetch, '
-    + 'browser, bg_start, bg_output, bg_stop, skill, skill_run, skill_install, skill_remove, '
-    + 'skill_disable, skill_enable</span></div></div>'
-    + '<div class="ho-section">Skills</div>'
-    + '<div class="card"><div class="ctl-row"><span class="ctl-label">3 installed</span>'
-    + '<span class="ho-sub">Only names and triggers sit in the prompt. The body is read when a '
-    + 'skill runs, which is what keeps 89 entries affordable.</span></div></div>';
+  function permRow(p) {
+    const on = PERM[p.key];
+    return '<div class="tool-row ' + (on ? '' : 'off') + '" data-perm="' + esc(p.key) + '">'
+      + '<span class="tool-name">' + esc(p.name) + '</span>'
+      + '<span class="tool-desc">' + esc(p.desc) + '</span>'
+      + '<button class="tgl ' + (on ? 'on' : '') + '" data-act="toggle-perm" role="switch"'
+      + ' aria-checked="' + on + '" title="' + (on ? 'Disable' : 'Enable') + '">'
+      + '<span class="tgl-knob"></span></button></div>';
+  }
+
+  function renderGeneral() {
+    const profiles = CFG.profiles.map((p) => '<div class="prof-row '
+      + (p.name === CFG.profile ? 'on' : '') + '" data-name="' + esc(p.name) + '">'
+      + '<span class="prof-name">' + esc(p.label) + '</span>'
+      + '<span class="badge">' + esc(p.cost) + ' tokens</span>'
+      + (p.name === CFG.profile ? '<span class="badge on">active</span>'
+        : '<button class="ho-btn small" data-act="apply">Apply</button>')
+      + '<span class="prof-desc">' + esc(p.desc) + '</span></div>').join('');
+    const budget = CFG.budget.map((b) => '<label class="ho-sub sm" title="' + esc(b.hint) + '">'
+      + esc(b.label) + '<input class="mcp-in sm" id="lim-' + esc(b.key) + '" type="number"'
+      + ' min="' + b.min + '" max="' + b.max + '" value="' + b.value + '"></label>').join('');
+    const procs = '<div class="tok-table">' + CFG.processes.map((p) =>
+      '<div class="tok-row"><span class="tok-label">' + esc(p.role) + '</span>'
+      + '<span class="tok-value">pid ' + esc(p.pid) + '</span>'
+      + '<span class="tok-hint">started ' + esc(p.started) + '</span></div>').join('')
+      + '</div>';
+
+    $('#panel-general').innerHTML =
+      '<div class="ho-section">Profile <span class="ho-sub sm">a named bundle of cost and containment</span></div>'
+      + '<div class="prof-list">' + profiles + '</div>'
+      + '<div class="mcp-add"><input class="mcp-in" id="profName"'
+      + ' placeholder="save current setup as…" spellcheck="false">'
+      + '<button class="ho-btn small" id="profSave">Save profile</button>'
+      + '<span class="ho-sub sm">Switching a profile applies immediately.</span></div>'
+      + '<div class="ho-section">Permissions <span class="ho-sub sm">what the agent may do on its own</span></div>'
+      + CFG.perms.slice(0, 2).map(permRow).join('')
+      + '<div class="tool-row" data-perm="fallback-model"><span class="tool-name">Fallback model</span>'
+      + '<span class="tool-desc">No fallback by default. A session whose model is gone runs on '
+        + 'this one instead; with none the turn stops and says which model it could not find.</span>'
+      + '<div class="as-row as-pickers"><select class="ctl-select as-sel" id="fbProvider">'
+      + '<option value="">(no fallback)</option><option value="local">local</option>'
+      + '<option value="openrouter">openrouter</option></select>'
+      + '<select class="ctl-select as-sel" id="fbModel"><option value="">(no fallback)</option>'
+      + '<option value="local:glm-5.2">local/glm-5.2</option>'
+      + '<option value="local:qwen2.5-coder:14b">local/qwen2.5-coder:14b</option></select></div></div>'
+      + '<div class="ho-section">Interface</div>'
+      + CFG.perms.slice(2, 4).map(permRow).join('')
+      + '<div class="tool-row" data-perm="chime-audition"><span class="tool-name">Chime audition</span>'
+      + '<span class="tool-desc">Plays all four past both switches, so you hear what they control.'
+      + ' This page makes no sound.</span>'
+      + '<button class="ho-btn small" id="chimePreviewBtn">Hear them</button></div>'
+      + '<div class="tool-row" data-perm="density"><span class="tool-name">Transcript density</span>'
+      + '<span class="tool-desc">How much vertical room the transcript gives its rows. A view '
+        + 'preference, stored in this browser only.</span>'
+      + '<div class="seg" id="densitySeg"><button data-dens="default">Default</button>'
+      + '<button data-dens="compact">Compact</button><button data-dens="roomy">Roomy</button></div></div>'
+      + '<div class="ho-section">Server</div>'
+      + '<div class="tool-row" data-perm="restart"><span class="tool-name">Restart</span>'
+      + '<span class="tool-desc">listening on 127.0.0.1:8571 · pid 18224. Stop this process and '
+        + 'start a fresh one on the same port; a turn that is running is cut off.</span>'
+      + '<button class="ho-btn small danger" id="srvRestartBtn">Restart</button></div>'
+      + '<div class="tool-row" data-perm="mcp-helpers"><span class="tool-name">MCP helper tools</span>'
+      + '<span class="tool-desc">Hidden, no MCP server configured. The four helper schemas cost '
+        + 'nothing and appear the moment a server is added in the MCP tab.</span>'
+      + '<span class="badge">off</span></div>'
+      + '<div class="ho-section">Turn budget</div>'
+      + '<div class="mcp-add">' + budget
+      + '<button class="ho-btn small" id="limSave">Save</button></div>'
+      + '<div class="ho-section">Tacit processes <span class="ho-count">'
+      + CFG.processes.length + '</span></div>' + procs
+      + '<div class="ho-section">Auto-Updater</div>' + permRow(CFG.perms[4])
+      + '<div class="tool-row" data-perm="autoupdater-check"><span class="tool-name">Check for updates</span>'
+      + '<span class="tool-desc">Manually check GitHub for new commits and changed files.</span>'
+      + '<button class="ho-btn small" id="auCheckBtn">Check now</button></div>';
+
+    $$('#densitySeg button').forEach((b) => b.classList.toggle('active', b.dataset.dens === CFG.density));
+    wireGeneral();
+  }
+
+  function applyDensity(id) {
+    CFG.density = (id === 'compact' || id === 'roomy') ? id : 'default';
+    if (CFG.density === 'default') delete document.documentElement.dataset.density;
+    else document.documentElement.dataset.density = CFG.density;
+    $$('#densitySeg button').forEach((b) => b.classList.toggle('active', b.dataset.dens === CFG.density));
+    hoNote('density: ' + CFG.density + ' (this browser only, nothing about the session changes)');
+  }
+
+  function wireGeneral() {
+    $$('#panel-general [data-act="toggle-perm"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.tool-row');
+        const key = row.dataset.perm;
+        PERM[key] = !PERM[key];
+        row.classList.toggle('off', !PERM[key]);
+        btn.classList.toggle('on', PERM[key]);
+        btn.setAttribute('aria-checked', String(PERM[key]));
+        btn.title = PERM[key] ? 'Disable' : 'Enable';
+        hoNote(key + ' ' + (PERM[key] ? 'on' : 'off') + ' (mock: nothing is written to disk)');
+      });
+    });
+    $$('#panel-general [data-act="apply"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.prof-row');
+        CFG.profile = row.dataset.name;
+        renderGeneral();
+        hoNote('profile ' + CFG.profile + ' applied to new turns');
+      });
+    });
+    $('#profSave').addEventListener('click', () => {
+      const name = $('#profName').value.trim();
+      if (!name) { hoNote('name the profile first', true); return; }
+      CFG.profiles.push({ name: name, label: name, cost: '14,800',
+        desc: 'Saved from the mock interface; it is not on your disk.' });
+      $('#profName').value = '';
+      renderGeneral();
+      hoNote('saved profile ' + name);
+    });
+    $('#chimePreviewBtn').addEventListener('click', () => {
+      hoNote('this page makes no sound: the four chimes are finished, error, budget warning and cycle tick');
+    });
+    $('#densitySeg').addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b) applyDensity(b.dataset.dens);
+    });
+    $('#srvRestartBtn').addEventListener('click', () => {
+      hoNote('a mock cannot restart a server that is not running', true);
+    });
+    $('#limSave').addEventListener('click', () => {
+      const saved = CFG.budget.map((b) => {
+        const el = $('#lim-' + b.key);
+        const clamped = Math.max(b.min, Math.min(b.max, parseInt(el.value, 10) || 0));
+        b.value = clamped;
+        el.value = String(clamped);
+        return b.label.toLowerCase() + ' ' + comma(clamped);
+      }).join(', ');
+      hoNote('saved: ' + saved + ' (mock, nothing is written to disk)');
+    });
+    $('#auCheckBtn').addEventListener('click', () => {
+      hoNote('up to date, version ' + (window.TACIT_VERSION || '') + ', nothing to pull');
+    });
+    $('#fbProvider').addEventListener('change', (e) => {
+      CFG.fallback = e.target.value;
+      hoNote(e.target.value ? 'fallback provider ' + e.target.value
+        + ' chosen, pick a model beside it' : 'no fallback: a missing model stops the turn and says so');
+    });
+    $('#fbModel').addEventListener('change', (e) => {
+      CFG.fallback = e.target.value;
+      hoNote(e.target.value ? 'fallback ' + e.target.value + ' (mock)' : 'no fallback');
+    });
+  }
+
+  const PROV = {
+    name: 'local',
+    base: 'http://127.0.0.1:8080/v1',
+    api: 'openai',
+    models: [{ id: 'glm-5.2', ctx: '128k', def: true },
+      { id: 'qwen2.5-coder:14b', ctx: '32k', def: false }],
+    probe: '',
+  };
+
+  function renderProviders() {
+    const rows = PROV.models.map((m) => '<div class="model-row '
+      + (m.def ? 'is-default' : '') + '" data-model="' + esc(m.id) + '">'
+      + '<span class="model-id">' + esc(m.id) + '</span>'
+      + '<span class="model-ctx">' + esc(m.ctx || '') + '</span><span class="model-spacer"></span>'
+      + (m.def ? '<span class="badge default">default</span>'
+        : '<button class="ho-btn small" data-act="set-default">Set default</button>')
+      + '<button class="ho-btn small danger" data-act="del-model" title="Remove">×</button></div>'
+      ).join('');
+    $('#panel-providers').innerHTML =
+      '<div class="ho-toolbar"><span class="ho-sub">Registry: <code>~/.tacit/models.json</code></span>'
+      + '<button class="ho-btn primary" id="pvAddBtn">Add provider</button></div>'
+      + '<div class="card prov-card" data-prov="' + esc(PROV.name) + '">'
+      + '<div class="card-head prov-head"><div class="prov-name">' + esc(PROV.name)
+      + ' <span class="badge key">no-key</span></div>'
+      + '<div class="card-actions"><button class="ho-btn small" data-act="probe">Re-scan</button>'
+      + '<button class="ho-btn small danger" data-act="del">Delete</button></div></div>'
+      + '<div class="prov-meta"><code>' + esc(PROV.base) + '</code> · ' + esc(PROV.api) + '</div>'
+      + '<div class="model-list">' + (rows
+        || '<div class="ho-empty sm">No models discovered, hit Re-scan to pull the live list from the endpoint.</div>')
+      + '</div><div class="model-add"><input class="model-add-id" placeholder="model id, e.g. qwen2.5-coder:7b"'
+      + ' spellcheck="false"><input class="model-add-name" placeholder="display name (optional)"'
+      + ' spellcheck="false"><input class="model-add-ctx" placeholder="context window (tokens)"'
+      + ' spellcheck="false"><label class="chk"><input type="checkbox" class="model-add-reason" checked>'
+      + ' reasoning</label><button class="ho-btn small primary" data-act="add-model">Add model</button></div>'
+      + '<div class="probe-results"' + (PROV.probe ? '' : ' hidden') + '><span class="ho-sub">'
+      + esc(PROV.probe) + '</span></div></div>';
+
+    $$('#panel-providers [data-act="set-default"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.closest('.model-row').dataset.model;
+        PROV.models.forEach((m) => { m.def = m.id === id; });
+        renderProviders();
+        hoNote('default model ' + id + ' (mock registry, nothing is written to disk)');
+      });
+    });
+    $$('#panel-providers [data-act="del-model"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.closest('.model-row').dataset.model;
+        PROV.models = PROV.models.filter((m) => m.id !== id);
+        if (!PROV.models.some((m) => m.def) && PROV.models.length) PROV.models[0].def = true;
+        renderProviders();
+        hoNote('removed ' + id + ' from the mock registry');
+      });
+    });
+    $('#panel-providers [data-act="probe"]').addEventListener('click', () => {
+      PROV.probe = 'Endpoint reachable, ' + PROV.models.length
+        + ' model(s), all already added.';
+      renderProviders();
+      hoNote('re-scanned ' + PROV.base);
+    });
+    $('#panel-providers [data-act="add-model"]').addEventListener('click', () => {
+      const id = $('#panel-providers .model-add-id').value.trim();
+      if (!id) { hoNote('a model id first', true); return; }
+      PROV.models.push({ id: id, ctx: '', def: false });
+      renderProviders();
+      hoNote('added ' + id + ' to the mock registry');
+    });
+    $('#pvAddBtn').addEventListener('click', () => {
+      hoNote('one provider is enough for a mock: the real form asks for a base URL and a key', true);
+    });
+  }
+
+  function renderTools() {
+    const row = (t) => {
+      const gated = t.name.indexOf('mcp_') === 0 && !mcpLive;
+      return '<div class="tool-row ' + (t.on && !gated ? '' : 'off') + '" data-name="'
+        + esc(t.name) + '"><span class="tool-name">' + esc(t.name) + '</span>'
+        + '<span class="tool-desc">' + esc(t.desc)
+        + (gated ? ' <b>Hidden from the agent, no MCP server configured.</b>' : '')
+        + '</span>'
+        + (gated ? '<span class="badge">gated</span>'
+          : '<button class="tgl ' + (t.on ? 'on' : '') + '" data-act="toggle" role="switch"'
+            + ' aria-checked="' + t.on + '" title="' + (t.on ? 'Disable' : 'Enable') + '">'
+            + '<span class="tgl-knob"></span></button>') + '</div>';
+    };
+    const offered = TOOL.filter((t) => t.on && !(t.name.indexOf('mcp_') === 0)).length;
+    $('#panel-tools').innerHTML =
+      '<div class="ho-toolbar"><span class="ho-sub">22 tools in the registry, '
+      + offered + ' offered to this session. A profile and four rules decide the rest.</span></div>'
+      + '<div class="ho-section">Shell overlap <span class="ho-sub sm">commands that re-implement a tool</span></div>'
+      + '<div class="mcp-add"><select class="git-select" id="toolOverlap">'
+      + '<option value="block">Block, refuse the command, return the tool call</option>'
+      + '<option value="advise">Advise, run it, append one line</option>'
+      + '<option value="off">Off, no interception</option></select>'
+      + '<button class="ho-btn small" id="toolOverlapSave">Save</button></div>'
+      + '<div class="ho-section">Built-in tools <span class="ho-count">' + TOOL.length + '</span></div>'
+      + '<div class="tool-list">' + TOOL.map(row).join('') + '</div>'
+      + '<div class="ho-section">Skills <span class="ho-count">' + SKILLS.length + '</span></div>'
+      + SKILLS.map((s) => '<div class="card skill-card" data-name="' + esc(s.name) + '">'
+        + '<div class="card-head skill-head"><span class="skill-name">' + esc(s.name) + '</span>'
+        + '<span class="badge">' + esc(s.kind) + '</span>'
+        + '<button class="ho-btn small danger skill-del" title="Delete">Delete</button></div>'
+        + '<div class="skill-desc">' + esc(s.desc) + '</div>'
+        + '<details class="skill-body"><summary>content</summary><pre>' + esc(s.body)
+        + '</pre></details></div>').join('');
+    $('#toolOverlap').value = CFG.overlap;
+
+    $$('#panel-tools [data-act="toggle"]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const r = btn.closest('.tool-row');
+        const t = TOOL.find((x) => x.name === r.dataset.name);
+        t.on = !t.on;
+        hoNote(t.name + ' ' + (t.on ? 'enabled' : 'disabled') + ' (applies to new agent sessions)');
+        renderTools();
+      });
+    });
+    $('#toolOverlapSave').addEventListener('click', () => {
+      CFG.overlap = $('#toolOverlap').value;
+      hoNote('shell overlap: ' + CFG.overlap + ' (applies to new agent turns)');
+    });
+    $$('#panel-tools .skill-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const name = btn.closest('.skill-card').dataset.name;
+        SKILLS.splice(SKILLS.findIndex((s) => s.name === name), 1);
+        renderTools();
+        hoNote('removed ' + name + ' (mock: nothing is deleted from your disk)');
+      });
+    });
+  }
 
   // ── Snapshots overlay ──────────────────────────────────────────────────
   const snapOverlay = $('#snapOverlay');
@@ -1313,6 +1986,184 @@
     runTurn(SESSIONS[S.session].script);
   });
 
+  // ── fragments for the documentation pages ──────────────────────────────
+  // A docs page asks for one view with `?view=name` and gets a short scene of that part
+  // and nothing else. No Assistant, no Delegation, no idle loop: a 320-pixel frame
+  // cannot show a whole session honestly, and a scene that needs the rest of the app to
+  // make sense is a screenshot nobody can read.
+  async function sceneBasic() {
+    loadSession('shell-timeout', true);
+    await curTo(composerEl);
+    await typeIntoEl(composerEl, SESSIONS['shell-timeout'].ask);
+    S.pending = scriptLite;
+    await curClick($('#sendBtn'));
+  }
+
+  async function scriptLite() {
+    const row = addAgent();
+    await streamReason(row, 'The ask names one behaviour, so start where the timeout is handled '
+      + 'rather than in the tests. Read what it does to the children, then write the case that '
+      + 'proves it wrong.');
+    await tool(row, 'grep_files', 'pattern: "TimeoutExpired" in backend/', {
+      ms: 1100, tokens: 620, meta: '1.1s · 3 files',
+    });
+    await tool(row, 'read_file', 'backend/tools/shell.py, offset 96', {
+      ms: 900, tokens: 1180, meta: '0.9s · 62 lines',
+    });
+    snapshot(row, 'snap-01', 2);
+    await tool(row, 'edit_file', 'backend/tools/shell.py:112', {
+      ms: 800, tokens: 240, meta: '0.8s · replaced 1 line',
+    });
+    await tool(row, 'run_shell', 'python -m unittest discover -s tests -t .', {
+      ms: 3600, tokens: 2100, meta: '3.6s · exit 0',
+      live: [{ at: 1100, text: '.' }, { at: 2200, text: '................' }],
+      result: 'Ran 1315 tests in 84.419s\n\nOK (skipped=1)',
+    });
+    await content(row, 'The timeout path now kills the process tree and bounds the drain, so a '
+      + 'child that ignores the signal cannot hold the turn open. The new test fails without the '
+      + 'change and passes with it.');
+    finishTurn(5240);
+  }
+
+  async function sceneTranscript() {
+    loadSession('prompt-cost', true);
+    const row = addAgent();
+    await streamReason(row, 'The question is about size, so measure it instead of recalling it: '
+      + 'the prompt is a list of groups, and the counter the session uses is the same one.');
+    await content(row, 'The fixed prompt is 14 groups and 89 entries. The tool list is the largest '
+      + 'single group, and every character of it is readable under Settings, because the panel is '
+      + 'generated from the constants that send it.');
+    finishTurn(2140);
+  }
+
+  async function sceneTools() {
+    loadSession('shell-timeout', true);
+    const row = addAgent();
+    await tool(row, 'grep_files', 'pattern: "TimeoutExpired" in backend/', {
+      ms: 900, tokens: 480, meta: '0.9s · 3 files',
+    });
+    await tool(row, 'read_file', 'backend/tools/shell.py', {
+      ms: 700, tokens: 1180, meta: '0.7s · 62 lines', open: true,
+      result: '96\t    try:\n97\t        proc.wait(timeout)\n98\t    except TimeoutExpired:\n'
+        + '99\t        proc.kill()   # the parent only\n',
+    });
+    await tool(row, 'browser', 'open https://example.com', {
+      err: true, ms: 600, meta: '0.6s · no browser installed',
+      result: 'browser: this tool needs a driver you install yourself; nothing was fetched',
+    });
+    await tool(row, 'edit_file', 'backend/tools/shell.py:112', {
+      ms: 500, tokens: 240, meta: '0.5s · replaced 1 line',
+    });
+  }
+
+  async function sceneTestrun() {
+    loadSession('audit-rotation', true);
+    const row = addAgent();
+    await tool(row, 'run_shell', 'python -m unittest tests.test_audit_rotation', {
+      ms: 1400, tokens: 900, meta: '1.4s · exit 1', err: true,
+      result: 'AssertionError: the ledger was truncated, not rotated\n\nFAILED (failures=1)',
+    });
+    await content(row, 'The first run is the finding: a reader mid-write saw a torn line. Rotate by '
+      + 'rename, then start the fresh file.');
+    await tool(row, 'run_shell', 'python -m unittest tests.test_audit_rotation', {
+      ms: 1200, tokens: 640, meta: '1.2s · exit 0',
+      result: 'Ran 4 tests in 0.31s\n\nOK',
+    });
+    finishTurn(3100);
+  }
+
+  async function sceneMeter() {
+    loadSession('shell-timeout', true);
+    setTokens(41000);
+    for (const n of [58000, 74000, 92000, 108000, 116400]) {
+      await wait(900);
+      setTokens(n);
+    }
+    await wait(900);
+    S.compacting = true;
+    setTokens(S.tokens);
+    toast('compaction: summarising the middle of the transcript, keeping the tail', true);
+    await wait(2600);
+    S.compacting = false;
+    setTokens(24100);
+    toast('compacted: 24,100 tokens in context');
+  }
+  sceneMeter.repeat = true;
+
+  async function scenePlan() {
+    loadSession('shell-timeout', true);
+    const row = addAgent();
+    planStatus('executing', 'phase 2 of 3, 2 sub-agents finished', 2);
+    tasks([{ text: 'Find the code the request names', done: true },
+      { text: 'Write the failing test', done: true },
+      { text: 'Change it', done: false }, { text: 'Run the suite', done: false }]);
+    await tool(row, 'read_file', 'backend/tools/shell.py', { ms: 700, tokens: 1180, meta: '0.7s · 62 lines' });
+    tasks([{ text: 'Find the code the request names', done: true },
+      { text: 'Write the failing test', done: true },
+      { text: 'Change it', done: true }, { text: 'Run the suite', done: false }]);
+  }
+
+  async function sceneSettings() {
+    openSettings('general');
+    await wait(400);
+  }
+
+  async function sceneBudget() {
+    openSettings('general');
+    const el = $('#lim-turn_token_budget');
+    if (el) el.closest('.mcp-add').scrollIntoView({ block: 'center' });
+  }
+
+  async function sceneSkills() {
+    openSettings('tools');
+    // The third section header in that tab is Skills. Count the headers rather than
+    // trusting a positional selector, which counts element types and not classes.
+    const el = $$('#panel-tools .ho-section')[2];
+    if (el) el.scrollIntoView({ block: 'start' });
+  }
+
+  async function sceneMcp() {
+    openSettings('tools');
+    const el = $('#panel-tools .tool-row[data-name="mcp_call"]');
+    if (el) el.scrollIntoView({ block: 'center' });
+  }
+
+  async function sceneGit() {
+    openGit();
+    await wait(400);
+  }
+
+  async function sceneSnapshots() {
+    loadSession('shell-timeout', true);
+    const row = addAgent();
+    snapshot(row, 'snap-02', 3);
+    await content(row, 'Two files changed and one added. Restore puts the workspace back and '
+      + 'leaves the transcript alone, which is the only reason an agent can be trusted to edit.');
+    openSnapshots();
+  }
+
+  async function sceneEmpty() {
+    // Nothing to build: the shell already boots on its empty state, with the four asks
+    // under it. This is what a first run of Tacit looks like before a workspace is picked.
+    $('#emptyTag').textContent = 'Pick a workspace and say what you need.';
+  }
+
+  const SCENES = {
+    basic: sceneBasic,
+    transcript: sceneTranscript,
+    tools: sceneTools,
+    testrun: sceneTestrun,
+    meter: sceneMeter,
+    plan: scenePlan,
+    settings: sceneSettings,
+    budget: sceneBudget,
+    skills: sceneSkills,
+    mcp: sceneMcp,
+    git: sceneGit,
+    snapshots: sceneSnapshots,
+    empty: sceneEmpty,
+  };
+
   // ── boot ───────────────────────────────────────────────────────────────
   $('#brandVersion').hidden = false;
   $('#brandVersion').textContent = 'v' + (window.TACIT_VERSION || '');
@@ -1330,41 +2181,62 @@
   $('#connHint').textContent = 'connected';
   renderAppearance();
   renderPrompts();
+  renderGeneral();
+  renderProviders();
+  renderTools();
   selectTab('appearance');
   settings.hidden = true;
   asPanel.classList.remove('open');
   dgPanel.classList.remove('open');
   $('#steerHint').hidden = true;
-  $('#asMessages').innerHTML = '<div class="as-empty">Ask about this session. Draft a prompt, think an '
-    + 'approach through, or ask what the agent just did.<br><br>'
-    + '<span class="as-note">The agent cannot see this conversation.</span></div>';
+  asRender();
 
+  // A reader who types to the assistant gets what the pointer gets: an answer that ends in
+  // a fenced prompt, and a "Send to agent" button that starts a turn with it.
+  function asSend() {
+    const box = $('#asInput');
+    const text = box.value.trim();
+    if (!text) return;
+    box.value = '';
+    asAskText(text);
+    const c = CONSULT[S.session] || CONSULT[LOOP[0]];
+    setTimeout(() => { asAnswer(c.lead, c.prompt, c.tools); }, 620);
+  }
+  $('#asSend').addEventListener('click', asSend);
   $('#asInput').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
-    const v = e.currentTarget.value.trim();
-    if (!v) return;
-    e.currentTarget.value = '';
-    asMsg('user', v);
-    setTimeout(() => asMsg('assistant', 'Answered from the transcript, not a copy of it: the last '
-      + 'turn changed two files and ran 13 tests. Nothing you ask me reaches the agent.'), 900);
+    asSend();
   });
 
   // A system that asks for less motion gets a still frame instead of a turn that
   // writes itself: the strip starts paused, and Replay or Resume starts it on request.
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (REDUCED) {
     S.paused = true;
     const p = $('#demoPause');
     p.textContent = 'Resume';
     p.classList.add('on');
   }
 
-  loadSession(LOOP[0], true);
-  setTimeout(async () => {
-    if (S.busy) return;
-    const ask = SESSIONS[LOOP[0]].ask;
-    await typeInto(ask);
-    runTurn(SESSIONS[LOOP[0]].script, ask);
-  }, 1600);
-  idleLoop();
+  if (FRAGMENT) {
+    // One scene, then quiet. A scene that repeats is one whose point is the motion
+    // (the meter climbing and compacting), not a result.
+    const scene = SCENES[VIEW] || sceneBasic;
+    const run = () => {
+      if (S.busy) return;
+      try {
+        Promise.resolve(scene()).catch((err) => {
+          toast('mock stopped: ' + (err && err.message ? err.message : err), true);
+        });
+      } catch (err) {
+        toast('mock stopped: ' + (err && err.message ? err.message : err), true);
+      }
+    };
+    run();
+    if (scene.repeat) setInterval(run, 14000);
+  } else {
+    // Everything after this is the loop: it moves the pointer, asks, and runs the turn.
+    loadSession(LOOP[0], true);
+    setTimeout(idleLoop, 1600);
+  }
 })();
