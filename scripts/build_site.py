@@ -96,12 +96,12 @@ DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
         </div>
         <p>The frame below loads <code>demo.html?view=basic</code>, which the build
         generates out of <code>static/index.html</code> and <code>static/style.css</code>
-        rather than drawing: the top bar, the transcript, the tool cards and the meter are
-        the real parts, driven by one scripted turn with a pointer that moves to the
-        composer, types the ask and presses send. Every documentation page embeds a small
-        view of its own choosing. The whole thing, with the Assistant, the Delegation
-        panel, the terminal, the Git panel, the Settings tour and the Prompts tab, is
-        <code>demo.html</code> full screen.</p>
+        rather than drawing: the sidebar, the top bar, the transcript, the tool cards and
+        the meter are the real parts, driven by one scripted turn with a pointer that
+        moves to the composer, types the ask and presses send. Every documentation page
+        embeds a still view of its own choosing. The whole thing, with the Assistant asked
+        several questions per session, the Delegation panel, the terminal, the Git panel and
+        the Prompts tab, is <code>demo.html</code> full screen.</p>
         <div class="demo-actions">
           <a href="demo.html" target="_blank" rel="noopener">Open full screen</a>
           <a href="interface.html">How the interface works</a>
@@ -120,9 +120,10 @@ DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
 """
 
 # Each documentation page shows one part of the interface, chosen for what that page is
-# about, in a frame small enough to read as a card. The whole running mock, with the
-# pointer, the Assistant, the Delegation panel and the Settings tour, is `demo.html`
-# itself, which is what the landing page embeds and what "Open full screen" leads to.
+# about, in a frame small enough to read as a card. These are still frames of the real
+# panels, not a tour: the pointer does not walk the tabs here. The running mock, with the
+# pointer, the Assistant and the Delegation panel, is `demo.html` itself, which is what the
+# landing page embeds and what "Open full screen" leads to.
 FRAGMENTS = {
     "install.html": ("empty", "What the page shows before a workspace is picked: the empty "
         "state and the four asks under it."),

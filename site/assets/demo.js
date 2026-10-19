@@ -52,6 +52,26 @@
   const FRAGMENT = !!VIEW;
   if (FRAGMENT) document.documentElement.dataset.view = VIEW;
 
+  // ── what this session actually did ─────────────────────────────────────
+  // The Assistant is bounded by a session, so it may only say what happened in the one it
+  // is standing beside. Every builder below records into this table as it draws and the
+  // panel reads from it, which is the difference between a helper and a second
+  // transcript: an answer that names files this session never touched is a lie with a
+  // nicer font.
+  const SESSION_DONE = {};
+
+  function recReset() {
+    SESSION_DONE[S.session] = {
+      tools: [], edits: [], snapshot: '', files: 0, answer: '',
+      tokens: 0, tests: '', done: false,
+    };
+  }
+
+  function rec() {
+    if (!SESSION_DONE[S.session]) recReset();
+    return SESSION_DONE[S.session];
+  }
+
   // ── timing ─────────────────────────────────────────────────────────────
   // One gate decides whether the script may move, so Pause stops the animation
   // without losing its place and the speed control changes every wait at once.
@@ -272,6 +292,7 @@
   }
 
   async function content(row, text) {
+    rec().answer = text;
     const target = row.querySelector('.msg-content');
     for (let shown = 6; shown <= text.length; shown += 5) {
       target.innerHTML = md(text.slice(0, shown));
@@ -374,6 +395,16 @@
     railSum(tools);
     if (o.tokens) setTokens(S.tokens + o.tokens);
     if (o.open) card.classList.add('open');
+    const r = rec();
+    r.tools.push({ name: name, args: args, ms: ms, err: !!o.err });
+    if (!o.err && (name === 'edit_file' || name === 'write_file')) {
+      r.edits.push(args.split(',')[0].trim());
+    }
+    const ran = /Ran (\d+) tests/.exec(o.result || '');
+    if (ran) {
+      r.tests = 'Ran ' + ran[1] + ' tests, '
+        + ((o.result || '').indexOf('FAILED') >= 0 ? 'one failing' : 'all passing');
+    }
     scrollBottom();
     return card;
   }
@@ -381,6 +412,9 @@
   function snapshot(row, name, files) {
     const role = row.querySelector('.msg-role');
     if (!role) return;
+    const r = rec();
+    r.snapshot = name;
+    r.files = files;
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'msg-snap';
@@ -488,12 +522,26 @@
   // assistant's own tool calls in `.as-tools`. An answer that ends in a fenced block
   // grows the same `.as-acts` row the real panel does, with "Send to agent" on it, and
   // that button is the whole point of the panel: what it carries starts a turn.
-  const AS_MSGS = [];
-  let AS_TOOLS = [];
+  //
+  // One thread per session, because that is what the server keeps. An assistant that
+  // remembered the other session's work would be a second transcript, not a helper
+  // bounded by the session it is standing beside.
+  const AS_THREADS = {};
+  let AS_KEY = null;
 
-  function asToolsHtml() {
-    if (!AS_TOOLS.length) return '';
-    return '<div class="as-tools">' + AS_TOOLS.map((t) =>
+  function asThread() {
+    if (!AS_THREADS[AS_KEY]) AS_THREADS[AS_KEY] = { msgs: [], tools: [] };
+    return AS_THREADS[AS_KEY];
+  }
+
+  function asBind(key) {
+    AS_KEY = key;
+    asRender();
+  }
+
+  function asToolsHtml(tools) {
+    if (!tools.length) return '';
+    return '<div class="as-tools">' + tools.map((t) =>
       '<div class="tool-card' + (t.open ? ' open' : '') + (t.err ? ' err' : '') + '">'
       + '<div class="tool-head"><span class="tool-badge">' + esc(t.name) + '</span>'
       + '<span class="tool-args">' + esc(t.args) + '</span></div>'
@@ -503,13 +551,15 @@
 
   function asRender() {
     const box = $('#asMessages');
-    if (!AS_MSGS.length) {
+    const th = asThread();
+    if (!th.msgs.length) {
       box.innerHTML = '<div class="as-empty">Ask about this session. Draft a prompt, think an '
         + 'approach through, or ask what the agent just did.<br><br>'
-        + '<span class="as-note">The agent cannot see this conversation.</span></div>';
+        + '<span class="as-note">The agent cannot see this conversation. This thread belongs to '
+        + 'the session in the title bar, and to no other.</span></div>';
       return;
     }
-    box.innerHTML = AS_MSGS.map((m, i) => {
+    box.innerHTML = th.msgs.map((m, i) => {
       const mine = m.role === 'user';
       // The same rule the app uses: only an answer that actually offers a fenced prompt
       // can be handed over, so the button never sends prose the agent would misread.
@@ -520,7 +570,7 @@
         + '<button class="ho-btn small" data-del="' + i
         + '" title="Remove this message from the assistant\'s memory">delete</button></div>';
       return '<div class="as-msg ' + (mine ? 'me' : 'them') + '">'
-        + (i === AS_MSGS.length - 1 ? asToolsHtml() : '')
+        + (i === th.msgs.length - 1 ? asToolsHtml(th.tools) : '')
         + '<div class="as-body' + (mine ? '' : ' md') + '">'
         + (mine ? esc(m.content) : md(m.content)) + '</div>' + acts + '</div>';
     }).join('');
@@ -536,77 +586,130 @@
   }
 
   function asHandoff(index) {
-    const prompt = asFenced((AS_MSGS[index] || {}).content);
+    const th = asThread();
+    const prompt = asFenced((th.msgs[index] || {}).content);
     if (!prompt) return;
     if (S.busy) { toast('a turn is already running in this session', true); return; }
-    runTurn(SESSIONS[S.session].script, prompt);
+    runTurn(SESSIONS[AS_KEY].script, prompt);
   }
 
   // One delegated handler over the thread, like the app's: the list re-renders on every
   // change, so a listener per button would have to be re-attached each time.
   $('#asMessages').addEventListener('click', (e) => {
     const del = e.target.closest('[data-del]');
-    if (del) { AS_MSGS.splice(parseInt(del.dataset.del, 10), 1); asRender(); return; }
+    if (del) {
+      asThread().msgs.splice(parseInt(del.dataset.del, 10), 1);
+      asRender();
+      return;
+    }
     const btn = e.target.closest('[data-send]');
     if (btn) asHandoff(parseInt(btn.dataset.send, 10));
   });
 
   function asAskText(text) {
-    AS_MSGS.push({ role: 'user', content: text });
+    const th = asThread();
+    // Tools belong to the answer that follows the last prompt, so a new question starts
+    // the run clean. That is the app's rule, not a rendering trick.
+    if (th.msgs.length && th.msgs[th.msgs.length - 1].role === 'user') th.tools = [];
+    th.msgs.push({ role: 'user', content: text });
     asRender();
   }
 
   // The answer streams into the last body, which is what the app does while a run is in
   // flight; the full re-render at the end is what attaches `.as-acts`.
-  async function asAnswer(lead, prompt, tools) {
-    AS_TOOLS = [];
-    if (tools) {
-      AS_TOOLS = tools.map((t) => ({ name: t.name, args: t.args, text: '', open: true }));
-      AS_MSGS.push({ role: 'assistant', content: '' });
+  async function asAnswer(full, tools) {
+    const th = asThread();
+    th.tools = [];
+    if (tools && tools.length) {
+      th.tools = tools.map((t) => ({ name: t.name, args: t.args, text: '', open: true }));
+      th.msgs.push({ role: 'assistant', content: '' });
       asRender();
-      for (let i = 0; i < AS_TOOLS.length; i += 1) {
+      for (let i = 0; i < th.tools.length; i += 1) {
         await wait(520);
-        AS_TOOLS[i].text = tools[i].text;
+        th.tools[i].text = tools[i].text;
         asRender();
       }
       await wait(320);
     }
-    AS_MSGS.push({ role: 'assistant', content: '' });
+    th.msgs.push({ role: 'assistant', content: '' });
     asRender();
-    const full = lead + '\n\n```text\n' + prompt + '\n```';
     const body = $$('#asMessages .as-body').pop();
-    let shown = '';
     for (let i = 0; i < full.length; i += 4) {
-      shown = full.slice(0, i + 4);
-      body.innerHTML = md(shown);
+      body.innerHTML = md(full.slice(0, i + 4));
       $('#asMessages').scrollTop = $('#asMessages').scrollHeight;
-      await wait(16);
+      await wait(14);
     }
-    AS_TOOLS = [];
-    AS_MSGS[AS_MSGS.length - 1].content = full;
+    th.msgs[th.msgs.length - 1].content = full;
     asRender();
   }
 
-  // What a reader can do by hand, the pointer does on its own, through the same handler:
-  // open the panel, type the question, press Send, wait for the answer to finish
-  // streaming, then click "Send to agent". The turn starts from that click, so this
-  // function never calls runTurn and never has to know which session is open.
-  async function consultAssistant(spec) {
-    if (!asPanel.classList.contains('open')) await curClick($('#asToggle'));
-    await curTo($('#asInput'));
-    await typeIntoEl($('#asInput'), spec.ask);
-    await curClick($('#asSend'));
-    // The button exists only once the answer has landed with a fenced block in it, so
-    // waiting for it is waiting for the stream, with no second clock to keep in sync.
-    let btn = null;
-    for (let i = 0; i < 300 && !btn; i += 1) {
+  function asFencedBlock(prompt) {
+    return '\n\n```text\n' + prompt + '\n```';
+  }
+
+  // Wait for a node in the thread rather than counting milliseconds: the answer is
+  // finished when the thing it produces exists, and that stays true if the prose changes.
+
+  // `asAnswer` writes the finished text into the thread only when the stream ends, so
+  // "the last message is an assistant one with content" is the honest signal that an
+  // answer has landed. No timing guesswork, and it survives a longer sentence.
+  async function asWaitForAnswer(needLen, tries) {
+    for (let i = 0; i < (tries || 300); i += 1) {
+      const th = asThread();
+      const last = th.msgs[th.msgs.length - 1];
+      if (th.msgs.length >= needLen && last && last.role === 'assistant' && last.content) {
+        return last;
+      }
       await wait(120);
-      btn = $('#asMessages').querySelector('[data-send]');
     }
+    return null;
+  }
+
+  async function asAsk(el, question) {
+    if (!asPanel.classList.contains('open')) await curClick($('#asToggle'));
+    await curTo(el);
+    await typeIntoEl(el, question);
+    await curClick($('#asSend'));
+  }
+
+  // Before the turn: ask what to strike first, wait for the answer, and hand its prompt
+  // over. The click on "Send to agent" is what starts the turn, so nothing here calls
+  // runTurn or has to know which session is open.
+  async function consultAssistant(spec) {
+    const before = asThread().msgs.length;
+    await asAsk($('#asInput'), spec.ask);
+    const landed = await asWaitForAnswer(before + 2);
+    // The button is addressed by the index of the message that just landed, never by
+    // "the first one in the thread": an older answer with a prompt in it would otherwise
+    // be handed over again and the turn would not match the question.
+    const btn = landed
+      ? $('#asMessages').querySelector('[data-send="' + (asThread().msgs.length - 1) + '"]')
+      : null;
     if (!btn) return spec.prompt;
     await wait(900);
     await curClick(btn);
     return spec.prompt;
+  }
+
+  // After the turn: ask about the work that actually happened. The answers are built
+  // from the session's own record, so the panel can only say what this session did, and
+  // an answer with no fenced block correctly grows no "Send to agent" button.
+  async function consultFollowups(spec) {
+    for (const f of (spec.follow || [])) {
+      if (S.busy) await wait(1400);
+      const before = asThread().msgs.length;
+      await asAsk($('#asInput'), f.ask);
+      const landed = await asWaitForAnswer(before + 2);
+      if (!landed) break;
+      await wait(f.dwell || 1900);
+    }
+    // Tidying one answer away is the last thing the pointer does here, because the row
+    // action is part of the panel and a reader should see it work.
+    const del = $('#asMessages').querySelector('[data-del]');
+    if (del) {
+      await curClick(del);
+      await wait(600);
+    }
   }
 
   // ── sessions ───────────────────────────────────────────────────────────
@@ -659,6 +762,16 @@
       prompt: 'The shell tool kills a timed-out command but the children keep running. Write a '
         + 'failing test that proves a descendant survives the timeout, then replace proc.kill() '
         + 'with a process-tree kill and bound the drain. Run the full suite last.',
+      follow: [
+        { ask: 'What did it just change?', dwell: 2300 },
+        { ask: 'Why a tree kill rather than a longer timeout?', dwell: 2600 },
+      ],
+      why: (r) => 'A longer timeout only buys time: the same children are still running when it '
+        + 'expires, and the next one expires later. The fix has to sit in the path that already '
+        + 'knows the command is done, which is the one `' + (r.tools[0] ? r.tools[0].name : 'grep_files')
+        + '` found in ' + r.tools.length + ' call' + (r.tools.length === 1 ? '' : 's')
+        + ' above. Bounding the drain matters as much as the signal: a child that ignores the '
+        + 'kill would otherwise hold the turn open forever.',
     },
     'audit-rotation': {
       ask: 'The audit ledger never rotates. Where do I start without losing the current file?',
@@ -677,6 +790,14 @@
       prompt: 'The audit ledger never rotates. Add size-based rotation to the append path: '
         + 'rename a full file to a dated sibling, start a fresh ledger, keep the last four, '
         + 'and never leave a torn line readable. Test the rename race.',
+      follow: [
+        { ask: 'Did the tests cover the race?', dwell: 2200 },
+        { ask: 'Why on the write path instead of a scheduled job?', dwell: 2600 },
+      ],
+      why: (r) => 'A scheduled job needs something to run it, and Tacit installs no services. '
+        + 'The size check sits where the bytes are written, so the switch happens under the same '
+        + 'lock that produced the ' + (r.edits.length || 1) + ' edit'
+        + ((r.edits.length || 1) === 1 ? '' : 's') + ' above, and a reader never sees a torn line.',
     },
     'prompt-cost': {
       ask: 'How much of the fixed prompt is the tool list, and can I read it anywhere?',
@@ -695,12 +816,22 @@
       prompt: 'Break the fixed prompt down by group and say how many entries and roughly how '
         + 'many tokens the tool list alone costs. Point at the file that holds each group, and '
         + 'show me where in the interface I can read the exact text that goes out.',
+      follow: [
+        { ask: 'What did you read to answer that?', dwell: 2100 },
+        { ask: 'Where can I see the exact text?', dwell: 2400 },
+      ],
+      where: 'Settings, Prompts tab: 14 groups, every entry in full. This session read the '
+        + 'catalog rather than a summary of it, which is why the figures above match what goes out.',
+      why: (r) => 'The count comes from the same list the session sends: '
+        + (r.tools.length || 1) + ' call' + ((r.tools.length || 1) === 1 ? '' : 's')
+        + ' in the transcript above, and the largest group in it is the tool list.',
     },
   };
 
   function loadSession(key, quiet) {
     const s = SESSIONS[key];
     S.session = key;
+    asBind(key);   // the Assistant's memory is per session, so it changes with the title
     $$('.session-item').forEach((el) => {
       el.classList.toggle('active', el.dataset.key === key);
       el.classList.toggle('working', el.dataset.key === key && S.busy);
@@ -895,6 +1026,9 @@
   // the script to announce a cost it had not been asked about, which is the one thing the
   // real assistant never does: it answers when it is spoken to.
   function finishTurn(spent) {
+    const r = rec();
+    r.tokens = spent;
+    r.done = true;
     setTokens(S.tokens + spent);
     $('#topMeta').textContent = 'Agent · local / ' + SESSIONS[S.session].model
       + ' · ' + comma(spent) + ' tok';
@@ -907,6 +1041,7 @@
     if (S.busy) return;
     S.busy = true;
     S.run += 1;
+    recReset();
     const myRun = S.run;
     $('#sendBtn').hidden = true;
     $('#stopBtn').hidden = false;
@@ -932,28 +1067,25 @@
   // still image. Compaction fires once, because a context that only grows is a demo
   // of nothing.
   const LOOP = ['shell-timeout', 'audit-rotation', 'prompt-cost'];
-  let loopAt = 0, compacted = false, toured = false;
+  let loopAt = 0, compacted = false, quietSwitch = false;
   // Each session is consulted through the Assistant once. After that the loop types the
   // ask itself, so both routes through the interface are on the page every few minutes.
   const CONSULTED = {};
 
   let firstPass = true;
 
-  // A short walk through the advanced half of Settings: open it, switch to General, turn
-  // on the mid-turn sounds, make the transcript roomy, put it back, close. Every step
-  // goes through the same handler a reader's own click would hit, and the density change
-  // really does change the transcript, because it sets the attribute the app's stylesheet
-  // reads.
-  async function settingsTour() {
-    await curClick($('#harnessBtn'));
-    await curClick($('#hoTabs [data-tab="general"]'));
-    await wait(400);
-    await curClick($('#panel-general [data-perm="alert-sound"] .tgl'));
-    await wait(700);
-    await curClick($('#densitySeg [data-dens="roomy"]'));
-    await wait(1400);
-    await curClick($('#densitySeg [data-dens="default"]'));
-    await curClick($('#hoClose'));
+  // The pointer changes sessions the way a reader does, by clicking the row. `quietSwitch`
+  // tells that handler not to reprint the stored ask, because the loop is about to type a
+  // new one into the composer where the reader can watch it.
+  async function switchSession(key) {
+    const row = $('.session-item[data-key="' + key + '"]');
+    if (!row) { loadSession(key, true); return; }
+    quietSwitch = true;
+    try {
+      await curClick(row);
+    } finally {
+      quietSwitch = false;
+    }
   }
 
   async function idleLoop() {
@@ -976,13 +1108,14 @@
         await wait(1200);
       }
       const key = LOOP[loopAt];
-      if (!toured) { toured = true; await settingsTour(); }
-      loadSession(key, true);
+      await switchSession(key);
       if (CONSULT[key] && !CONSULTED[key]) {
         CONSULTED[key] = true;
-        // The pointer asks the assistant, reads the answer, and clicks "Send to agent".
-        // That click is what starts the turn, so nothing below has to know it happened.
+        // Ask first, and the answer's prompt becomes the turn. Then wait the turn out and
+        // ask about the work it actually did, in this session's thread only.
         await consultAssistant(CONSULT[key]);
+        while (S.busy) await wait(900);
+        await consultFollowups(CONSULT[key]);
         continue;
       }
       await curTo(composerEl);
@@ -1080,7 +1213,7 @@
     el.addEventListener('click', () => {
       if (S.busy || !SESSIONS[el.dataset.key]) return;
       loopAt = LOOP.indexOf(el.dataset.key);
-      loadSession(el.dataset.key);
+      loadSession(el.dataset.key, quietSwitch);
     });
   });
   $('#suggestions').addEventListener('click', (e) => {
@@ -1986,11 +2119,72 @@
     runTurn(SESSIONS[S.session].script);
   });
 
-  // ── fragments for the documentation pages ──────────────────────────────
-  // A docs page asks for one view with `?view=name` and gets a short scene of that part
-  // and nothing else. No Assistant, no Delegation, no idle loop: a 320-pixel frame
-  // cannot show a whole session honestly, and a scene that needs the rest of the app to
-  // make sense is a screenshot nobody can read.
+  // The panel answers from the session it belongs to. A question about the work gets the
+  // facts of that work, from the record the builders wrote while drawing it; a question
+  // before any work gets the prompt that session is about. Anything else would be the
+  // assistant inventing a session it was never part of.
+  function asFactsText(r) {
+    const names = r.tools.map((t) => t.name);
+    const lines = ['Read from this session only. It ran ' + names.length + ' tool call'
+      + (names.length === 1 ? '' : 's') + ': ' + names.join(', ') + '.'];
+    if (r.edits.length) {
+      lines.push('\nIt touched ' + r.edits.join(' and ')
+        + (r.snapshot ? ', under snapshot `' + r.snapshot + '`, ' + r.files
+          + ' file' + (r.files === 1 ? '' : 's') + ' recorded.' : '.'));
+    }
+    const failed = r.tools.filter((t) => t.err);
+    if (failed.length) {
+      lines.push('\nOne call did not land: `' + failed[0].name + '` (' + failed[0].args + ').');
+    }
+    if (r.tests) lines.push('\n' + r.tests + '.');
+    if (r.tokens) {
+      lines.push('\nThe turn billed about ' + comma(r.tokens)
+        + ' tokens, which is what moved the meter in the top bar.');
+    }
+    return lines.join('\n');
+  }
+
+  function asReplyFor(question) {
+    const key = AS_KEY;
+    const r = SESSION_DONE[key];
+    const c = CONSULT[key];
+    const q = String(question || '').toLowerCase();
+    const ran = !!(r && r.done);
+
+    // Four shapes of answer, in the order a reader would expect them. Each one is only
+    // available when this session has the record to back it: no turn, no facts.
+    if (ran && /why|rather than|instead of/.test(q) && c && c.why) {
+      return { text: c.why(r), tools: null };
+    }
+    if (ran && /test|suite|cover/.test(q)) {
+      return { text: (r.tests || 'No test run was recorded in this session.')
+        + (r.tools.some((t) => t.err) ? ' One tool call failed on the way and is in the '
+          + 'transcript above.' : ''), tools: null };
+    }
+    if (ran && /just did|what did|changed|landed|read|touched|snapshot|where/.test(q)) {
+      if (c && c.where && /where|see|read it/.test(q)) return { text: c.where, tools: null };
+      return { text: asFactsText(r), tools: null };
+    }
+    if (ran && c) {
+      return {
+        text: 'This session has already landed its turn. If you want another one, the next '
+          + 'prompt I would send is this:',
+        fenced: c.prompt, tools: null,
+      };
+    }
+    if (!c) {
+      return { text: 'Nothing has happened in this session yet, so there is nothing to report '
+        + 'on it. Run a turn and ask me again.', tools: null };
+    }
+    return { text: c.lead + asFencedBlock(c.prompt), tools: c.tools };
+  }
+
+  // ── views ──────────────────────────────────────────────────────────────
+  // A docs page asks for one part of the interface with `?view=name` and gets a short scene
+  // of that part and nothing else: no Assistant, no Delegation, no idle loop. A 320-pixel
+  // frame cannot show a whole session honestly, and a scene that needs the rest of the app
+  // to make sense is a screenshot nobody can read. The full mock is this same file with no
+  // query string, and it is the only place the loop runs.
   async function sceneBasic() {
     loadSession('shell-timeout', true);
     await curTo(composerEl);
@@ -2097,12 +2291,17 @@
     tasks([{ text: 'Find the code the request names', done: true },
       { text: 'Write the failing test', done: true },
       { text: 'Change it', done: false }, { text: 'Run the suite', done: false }]);
-    await tool(row, 'read_file', 'backend/tools/shell.py', { ms: 700, tokens: 1180, meta: '0.7s · 62 lines' });
+    await tool(row, 'read_file', 'backend/tools/shell.py', {
+      ms: 700, tokens: 1180, meta: '0.7s · 62 lines',
+    });
     tasks([{ text: 'Find the code the request names', done: true },
       { text: 'Write the failing test', done: true },
       { text: 'Change it', done: true }, { text: 'Run the suite', done: false }]);
   }
 
+  // The Settings scenes are still frames, not a tour: a docs page about configuration shows
+  // the panel it names, scrolled to the part it describes, and stops there. The pointer does
+  // not walk the tabs here; that was the demo nobody asked for.
   async function sceneSettings() {
     openSettings('general');
     await wait(400);
@@ -2199,8 +2398,9 @@
     if (!text) return;
     box.value = '';
     asAskText(text);
-    const c = CONSULT[S.session] || CONSULT[LOOP[0]];
-    setTimeout(() => { asAnswer(c.lead, c.prompt, c.tools); }, 620);
+    const reply = asReplyFor(text);
+    const body = reply.fenced ? reply.text + asFencedBlock(reply.fenced) : reply.text;
+    setTimeout(() => { asAnswer(body, reply.tools); }, 620);
   }
   $('#asSend').addEventListener('click', asSend);
   $('#asInput').addEventListener('keydown', (e) => {
