@@ -11,7 +11,7 @@ setting lives, and which line of code decides it. Every citation is a file and a
 | [Configuration](configuration.md) | every environment variable, every preference key, and which one wins |
 | [Tools](tools.md) | the 22 tools in the registry, and the four rules that decide how many of them a given session is offered |
 | [Architecture](architecture.md) | server, session runtime, turn worker, routers, the agent loop |
-| [Cost and profiles](cost-and-profiles.md) | how a token figure is produced, and what each profile changes |
+| [Cost and profiles](cost-and-profiles.md) | how a token figure is produced, what each profile changes, and how a long session is managed |
 | [Isolation and audit](isolation-and-audit.md) | what a command was allowed to touch, and what it changed |
 | [Memory and learning](memory-and-learning.md) | the four memory modes, the budget, and how a proposal becomes a rule |
 | [MCP and plugins](mcp-and-plugins.md) | external tools without the prompt cost |

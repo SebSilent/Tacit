@@ -89,6 +89,24 @@ by hand (`backend/sandbox.py:663-666`). `--pids-limit` is passed on the command 
 (`backend/sandbox.py:609`). Docker is tried before Podman and both are accepted, because which one a
 person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:554-560`).
 
+## The container backend, checked against a real daemon
+
+These are hand results, not assertions: Docker Engine 29.8.1 with a WSL2 backend, run once, on this
+machine. `--network none` really refused a connection to `1.1.1.1:53`. A read-only bind was rejected by
+the kernel (`cannot create /workspace/...: Read-only file system`). A write from inside landed on the
+host and appeared in the change report. `/tmp` was a `tmpfs`. `NoNewPrivs` read back `1`. `pids.max`
+read back `64` when 64 was asked for, and `memory.max` read back `268435456` for `memory_mb=256`.
+Nothing of the host filesystem was reachable. A 4-second timeout returned in 5.8 seconds with exit 124
+and no surviving container in `docker ps -a`.
+
+The project is bind-mounted rather than copied, so the snapshot, the restore and the change report
+describe the files you actually have. Nothing is downloaded for you: a missing image is reported with
+the exact `docker pull` command that would fetch it, and installing it is your call.
+
+`test_isolation.py` covers the same ground against a stubbed runtime so the logic is tested on every
+commit. No live-daemon test is shipped, which means the results above are not re-run automatically, and
+a person with a daemon who wants them re-run is doing a useful thing by reporting the difference.
+
 ## The audit ledger
 
 One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:58`,

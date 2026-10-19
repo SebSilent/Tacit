@@ -109,6 +109,92 @@ value above the hard ceiling needs an explicit override flag, which lifts the ce
 (`backend/memory_store.py:140-149`, written by `backend/memory_store.py:157`). In `jit` and `full` modes half the budget is reserved for mid-turn
 retrieval rather than spent at startup (`backend/memory_modes.py:25`).
 
+## Context management, against the alternatives
+
+Prompt size is half of it. The other half is what happens when a session gets long, and that is where
+these designs differ most. Everything in this table was read out of the programs themselves on one
+machine, not from their documentation.
+
+| | Tacit | Claude Code | Hermes | little-coder | DSH |
+|---|---|---|---|---|---|
+| Standing prompt | **974 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
+| Tool schemas | **5.2 KB / 16** (6.6 KB / 20 once an MCP server is configured) | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
+| External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
+| Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
+| Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | none | none |
+| Tail kept | **token budget, 4-40 msgs** | none | token budget, floor 8 | none | none |
+| Cheap pre-pass before summarising | **yes** | none | yes | none | none |
+| Summariser model | **the session's own**, or the fallback a person chose | none | cheap auxiliary | none | none |
+| Fallback if summarising fails | **deterministic digest** | none | digest + cooldown | none | none |
+| Compaction mid-turn | **yes** | none | yes | none | none |
+| Task pinned against elision | **yes** | none | head protected | none | none |
+| Per-turn guidance, appended | **yes** | none | none | yes (originated it) | none |
+| Project instructions | **indexed, not inlined** | inlined always | a prompt section | guidance hint | a prompt section |
+| Task state outside the window | **plugin, off by default** | todo list | state store | none | none |
+| Concurrent sub-agents | **yes** | yes | yes | up to 4 | none |
+| Prompt-cache breakpoints | **sent on Anthropic** | yes | none | none | none |
+| Cost reported while running | **yes** | percentage only | none | none | none |
+
+### Where each piece came from
+
+None of this was invented here.
+
+- **The reserve model is Claude Code's.** Its trigger is not a percentage: it is the window minus a
+  roughly fixed ~33K-token reserve, which works out at about 83% of a 200K window and 97% of a 1M one.
+  Tacit used a flat 0.65 and was wrong at both ends: it compacted a 1M-token model at 650,000, throwing
+  away 350,000 tokens of usable context, and an 8K model at 5,200, leaving too little to answer in.
+  Adopting the reserve model is worth 317,000 extra usable tokens on a 1M window, and the triggers now
+  agree with Claude Code's (`backend/config.py:104-114`).
+- **The compaction mechanics are Hermes'.** Its `context_compressor.py` was ahead of what was here: a
+  token-budget tail rather than a fixed message count, a cheap pre-pass that clears old tool output
+  before paying a model to summarise it, iterative summaries that refine one handover note instead of
+  stacking, headings marked *reference only* so the summary is not read as new instructions, and a
+  deterministic fallback when the summariser fails. Tacit previously kept a fixed six messages, had no
+  pre-pass, and returned nothing at all on a failed summary, which meant the transcript stayed full and
+  the window cap silently elided it.
+- **The per-turn guidance pattern is little-coder's**, with credit: the cleanest version of the idea,
+  fitted here to this architecture.
+
+### What the mechanics do, and why each is there
+
+- **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
+  size actually is (`backend/agent.py:1102`).
+- **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
+  of each result plus the fact that there was more (`backend/agent.py:1200-1228`). It shrinks what the
+  summariser is sent; it does not replace it, and the summariser is still called.
+- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
+  messages is six huge tool results on one turn and six one-line answers on the next: the first
+  overflows the summariser's input and the second discards recent work that was cheap to keep.
+- **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
+  note falls into the region being summarised rather than being pinned
+  (`backend/agent.py:1316-1329`).
+- **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
+  failed and the most recent activity (`backend/agent.py:1234-1241`).
+- **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
+  acted on, which is how a compacted session restarts work it already finished.
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1431-1466`). Checking the
+  size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
+  108,000-token transcript with nothing reclaimed.
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:936-956`). Pinning
+  only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
+  question.
+
+### Where Tacit is still behind
+
+- **Prompt caching is directed where it can be, and shallowly.** Anthropic does not cache
+  automatically: a request has to mark where the cacheable prefix ends, so Tacit speaks the native
+  Messages API for Anthropic endpoints and places those breakpoints itself. Everywhere else it adds
+  nothing, because OpenAI-compatible servers cache the prefix on their own and an unrecognised field can
+  get a request rejected. What it does not do is place breakpoints along the growing transcript for
+  Anthropic: two marks cover the stable prefix and the last message, which is the documented pattern,
+  but a rolling strategy is possible.
+- **The task strip is read-only.** The Task List plugin keeps the remaining work outside the window as
+  data and survives compaction because it was never in the transcript, and the strip above the composer
+  draws it, open over total, ticking items off. The model owns the list; a person cannot reorder or add
+  to it from the strip the way Claude Code's panel allows.
+- **Retrieval is keyword-only.** SQLite full-text search where the build has it, plain matching where it
+  does not. No embeddings, deliberately, but that is a ceiling as well as a choice.
+
 ## What a turn costs as it runs
 
 `backend/metrics.py` keeps the counters that make the cost of context discipline legible: what was

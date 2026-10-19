@@ -134,9 +134,21 @@ How it holds up (`README.md:1155-1163`):
 - the profile rows are two tool bundles over the same cells, which makes the profile comparison an
   experiment rather than an anecdote.
 
-Tokens are uncached input plus output with cache reads excluded, counted the way OpenBench counts them
-(`README.md:1093-1094`). Schemelike is graded on Linux only so far, because its checker reads
-`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:1113-1115`).
+Tokens are uncached input plus output with cache reads excluded, counted the way OpenBench counts them.
+Schemelike is graded on Linux only so far, because its checker reads `os.O_NONBLOCK`, which Windows Python
+does not provide.
+
+The per-task cells behind those tables, tokens per cell, default profile first:
+
+| Task | Linux, default | Linux, minimal | Windows, default | Windows, minimal |
+|---|---|---|---|---|
+| feal | 3/3 at 32,673 | 3/3 at 23,437 | 3/3 at 30,407 | 3/3 at 33,228 |
+| llm | 3/3 at 235,379 | 3/3 at 226,896 | 3/3 at 182,646 | 2/3 at 157,192 |
+| schemelike | 3/3 at 201,348 | 3/3 at 151,312 | not graded | not graded |
+
+Every row carries the checker's output verbatim, a byte count and a sha256 for every file it graded, and a
+per-call audit ledger of which tools ran and what came back, so a claimed solve stays a transcript somebody
+else can re-run.
 
 ## Harness behaviour that changes a score
 
