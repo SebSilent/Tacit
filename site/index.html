@@ -15,6 +15,7 @@
     <a class="wordmark" href="index.html">Tacit</a>
     <span class="masthead-tag">The coding agent where nothing is hidden</span>
     <nav class="masthead-links">
+      <a href="demo.html">Interface</a>
       <a href="readme.html">README</a>
       <a href="contributing.html">Contributing</a>
       <a href="https://github.com/SebSilent/Tacit" rel="noopener noreferrer" target="_blank">Repository</a>
@@ -45,37 +46,34 @@
       is on until you turn it on, and the sandbox reports what it actually enforces.</p>
     </section>
 
-    <section class="demo" id="demo" aria-label="Tacit at work">
-      <div class="demo-bar">
-        <span class="demo-title">Tacit</span>
-        <span class="demo-chip">glm-5.2 · fp8</span>
-        <span class="demo-chip">default profile · 20 tools</span>
-        <span class="demo-status" id="demo-status">idle</span>
-        <span class="demo-meter" id="demo-meter" aria-hidden="true"><i></i></span>
-        <span class="demo-tokens" id="demo-tokens">0 / 128,000</span>
-        <button class="demo-play" id="demo-play" type="button">Run the turn</button>
-      </div>
-      <div class="demo-grid">
-        <aside class="demo-sessions">
-          <p class="demo-rail-label">Sessions</p>
-          <div class="d-sess"><span class="d-dot"></span>audit ledger rotation</div>
-          <div class="d-sess on"><span class="d-dot working"></span>shell timeout leaves orphans</div>
-          <div class="d-sess"><span class="d-dot"></span>compaction tail budget</div>
-          <div class="d-sess"><span class="d-dot"></span>mcp lazy activation</div>
-        </aside>
-        <div class="demo-main">
-          <div class="demo-transcript" id="demo-transcript"></div>
-          <div class="demo-strip" id="demo-strip"></div>
-          <div class="demo-composer">message Tacit</div>
+    <section class="demo-band" id="demo" aria-label="Tacit at work">
+      <div class="demo-band-head">
+        <div>
+          <p class="eyebrow">The interface</p>
+          <h2>The whole app, with no server behind it</h2>
         </div>
-        <aside class="demo-assistant" id="demo-assistant"></aside>
+        <p>The frame below loads <code>demo.html</code>, which the build generates out of
+        <code>static/index.html</code> and <code>static/style.css</code> rather than
+        drawing: the sidebar, the top bar, the transcript, the task strip, the Delegation
+        panel, the Assistant, the terminal, the Git panel and Settings are the real parts,
+        driven by a scripted turn. Tool cards open, the thinking block collapses, the
+        context meter climbs and then compacts, a test fails before it passes, the Prompts
+        tab lists the same texts this repository sends, and staging a file in the Git panel
+        changes what <code>git status</code> prints in the terminal.</p>
+        <div class="demo-actions">
+          <a href="demo.html" target="_blank" rel="noopener">Open full screen</a>
+          <a href="interface.html">How the interface works</a>
+        </div>
       </div>
+      <div class="demo-frame-wrap">
+        <iframe class="demo-frame" src="demo.html" title="Tacit interface, running without a server"></iframe>
+      </div>
+      <p class="demo-note">Nothing in the frame touches your machine: there is no backend,
+      no WebSocket and no disk. The transcript is a script, the theme list and the prompt
+      texts are copied out of the repository at build time, and the handlers are written
+      against the app's markup rather than being the app's own, because the app's scripts
+      have no server here to talk to.</p>
     </section>
-    <p class="demo-caption">A turn drawn with the interface's own parts, and no server behind
-    it. The tool cards open, the thinking block collapses, the task strip sits outside the
-    transcript where a compaction cannot summarise it away, and the panel on the right is the
-    Assistant: a second conversation the agent is never told exists. The counter in the bar is
-    the context window filling as the turn spends it.</p>
 
     <p class="eyebrow">Start here</p>
     <div class="card-grid">
@@ -107,6 +105,5 @@
 
 <script src="assets/markdown.js"></script>
 <script src="assets/site.js"></script>
-<script src="assets/demo.js"></script>
 </body>
 </html>

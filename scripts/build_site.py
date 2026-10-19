@@ -13,9 +13,14 @@ is the same list a reader of the repository sees first. Nothing here duplicates 
 
 from __future__ import annotations
 
+import json
 import pathlib
+import sys
 import re
 import shutil
+
+# `demo_shell` lives beside this file, which is sys.path[0] however the build is started.
+import demo_shell
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
@@ -41,6 +46,7 @@ TEMPLATE = """<!DOCTYPE html>
     <a class="wordmark" href="index.html">Tacit</a>
     <span class="masthead-tag">{tagline}</span>
     <nav class="masthead-links">
+      <a href="demo.html">Interface</a>
       <a href="readme.html">README</a>
       <a href="contributing.html">Contributing</a>
       <a href="{source_link}" rel="noopener noreferrer" target="_blank">Repository</a>
@@ -69,7 +75,6 @@ TEMPLATE = """<!DOCTYPE html>
 
 <script src="assets/markdown.js"></script>
 <script src="assets/site.js"></script>
-<script src="assets/demo.js"></script>
 </body>
 </html>
 """
@@ -80,41 +85,37 @@ NAV_GROUP = '<div class="nav-group">\n      <p class="nav-label">{label}</p>\n  
 CARD = ('<a class="card" href="{href}"><span class="card-key">{key}</span>'
         '<h2>{title}</h2><p>{description}</p></a>')
 
-# The interface mock. `assets/demo.js` fills the three empty containers and bails out
-# on every page that has no #demo, so this markup is the only thing that decides where
-# the demo appears. It is a shell: no sentence of it is a claim about a product, and
-# the text inside it is a turn about a defect this harness really had.
-DEMO = """    <section class="demo" id="demo" aria-label="Tacit at work">
-      <div class="demo-bar">
-        <span class="demo-title">Tacit</span>
-        <span class="demo-chip">glm-5.2 · fp8</span>
-        <span class="demo-chip">default profile · 20 tools</span>
-        <span class="demo-status" id="demo-status">idle</span>
-        <span class="demo-meter" id="demo-meter" aria-hidden="true"><i></i></span>
-        <span class="demo-tokens" id="demo-tokens">0 / 128,000</span>
-        <button class="demo-play" id="demo-play" type="button">Run the turn</button>
-      </div>
-      <div class="demo-grid">
-        <aside class="demo-sessions">
-          <p class="demo-rail-label">Sessions</p>
-          <div class="d-sess"><span class="d-dot"></span>audit ledger rotation</div>
-          <div class="d-sess on"><span class="d-dot working"></span>shell timeout leaves orphans</div>
-          <div class="d-sess"><span class="d-dot"></span>compaction tail budget</div>
-          <div class="d-sess"><span class="d-dot"></span>mcp lazy activation</div>
-        </aside>
-        <div class="demo-main">
-          <div class="demo-transcript" id="demo-transcript"></div>
-          <div class="demo-strip" id="demo-strip"></div>
-          <div class="demo-composer">message Tacit</div>
+# The interface, embedded at full width. The frame is `demo.html`: the app's own markup
+# and the app's own stylesheet, with a scripted turn running in it. Everything inside the
+# frame is clickable, including the composer, so a reader who types gets an answer.
+DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
+      <div class="demo-band-head">
+        <div>
+          <p class="eyebrow">The interface</p>
+          <h2>The whole app, with no server behind it</h2>
         </div>
-        <aside class="demo-assistant" id="demo-assistant"></aside>
+        <p>The frame below loads <code>demo.html</code>, which the build generates out of
+        <code>static/index.html</code> and <code>static/style.css</code> rather than
+        drawing: the sidebar, the top bar, the transcript, the task strip, the Delegation
+        panel, the Assistant, the terminal, the Git panel and Settings are the real parts,
+        driven by a scripted turn. Tool cards open, the thinking block collapses, the
+        context meter climbs and then compacts, a test fails before it passes, the Prompts
+        tab lists the same texts this repository sends, and staging a file in the Git panel
+        changes what <code>git status</code> prints in the terminal.</p>
+        <div class="demo-actions">
+          <a href="demo.html" target="_blank" rel="noopener">Open full screen</a>
+          <a href="interface.html">How the interface works</a>
+        </div>
       </div>
+      <div class="demo-frame-wrap">
+        <iframe class="demo-frame" src="demo.html" title="Tacit interface, running without a server"></iframe>
+      </div>
+      <p class="demo-note">Nothing in the frame touches your machine: there is no backend,
+      no WebSocket and no disk. The transcript is a script, the theme list and the prompt
+      texts are copied out of the repository at build time, and the handlers are written
+      against the app's markup rather than being the app's own, because the app's scripts
+      have no server here to talk to.</p>
     </section>
-    <p class="demo-caption">A turn drawn with the interface's own parts, and no server behind
-    it. The tool cards open, the thinking block collapses, the task strip sits outside the
-    transcript where a compaction cannot summarise it away, and the panel on the right is the
-    Assistant: a second conversation the agent is never told exists. The counter in the bar is
-    the context window filling as the turn spends it.</p>
 
 """
 
@@ -168,6 +169,85 @@ def slug_of(file: str) -> str:
     return file.rsplit("/", 1)[-1].removesuffix(".md")
 
 
+THEME_BLOCK = re.compile(r"const THEMES = \[.*?^\];", re.S | re.M)
+
+
+def theme_literal() -> str:
+    """The app's own theme list, copied out of `static/app.js`.
+
+    The mock's Appearance tab has to offer the same themes in the same order with the
+    same hints, and a second list written here would drift the first time a theme is
+    added to the app.
+    """
+    source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    match = THEME_BLOCK.search(source)
+    if not match:
+        raise SystemExit("static/app.js no longer declares `const THEMES = [...]`")
+    return match.group(0).split("=", 1)[1].strip().rstrip(";")
+
+
+# (group id, entry name, how much of it to show). The live panel lists all 89 entries;
+# the mock shows enough of them that the claim on the landing page is checkable, and
+# says so when a text is cut.
+WANT_PROMPTS = [
+    ("standing", "BASE", 1500),
+    ("standing", "CHAT", 700),
+    ("tools", "read", 600),
+    ("tools", "edit", 600),
+    ("tools", "bash", 700),
+    ("guidance", "", 700),
+    ("compaction", "", 700),
+    ("assistant", "", 700),
+    ("plan", "", 700),
+]
+
+
+def prompt_groups() -> list:
+    """Real prompt text, read from the constants the sending code reads."""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from backend.prompts_catalog import catalog
+        cat = catalog(project=str(ROOT))
+    except Exception as exc:  # noqa: BLE001 - a docs build must not fail on the backend
+        print("  prompts unavailable: %s" % exc)
+        return []
+    by_id = {g["id"]: g for g in cat.get("groups", [])}
+    out: list = []
+    for gid, want, cap in WANT_PROMPTS:
+        group = by_id.get(gid)
+        if not group:
+            continue
+        for item in group["items"]:
+            if want and item["name"] != want:
+                continue
+            text = item["text"]
+            if len(text) > cap:
+                cut = text.rfind("\n", 0, cap)
+                text = text[:cut if cut > 200 else cap].rstrip() + "\n…"
+            out.append({"id": gid, "label": group["label"],
+                        "entries": [{"name": item["name"], "text": text}]})
+            break
+    live = (cat.get("live") or {}).get("blocks") or []
+    if live:
+        out.insert(0, {"id": "live", "label": "This session",
+                       "entries": [{"name": b["name"], "text": b["text"][:1200]}
+                                   for b in live[:2]]})
+    return out
+
+
+# The page the mock runs on is the app shell itself, patched by `demo_shell.py`. It is
+# filled with tokens rather than str.format because the theme list and the prompt texts
+# injected below are full of braces.
+def demo_page(here: str) -> str:
+    page = demo_shell.shell()
+    themes = "window.TACIT_THEMES = " + theme_literal() + ";"
+    prompts = json.dumps(prompt_groups(), ensure_ascii=False)
+    return (page.replace("@@VERSION@@", here)
+                .replace("@@THEMES@@", themes)
+                .replace("@@PROMPTS@@", prompts))
+
+
 def main() -> None:
     repo = "SebSilent/Tacit"
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").is_file() else ""
@@ -184,6 +264,10 @@ def main() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
 
     shutil.copyfile(ROOT / "static" / "markdown.js", ASSETS / "markdown.js")
+    # The interface mock runs on the app's own stylesheet rather than an imitation of
+    # it, so the site carries a byte copy of `static/style.css`. Nothing in
+    # `site/assets/demo.css` restyles a surface the app already draws.
+    shutil.copyfile(ROOT / "static" / "style.css", ASSETS / "app.css")
     (SITE / ".nojekyll").write_text("", encoding="utf-8")
 
     # docs/index.md is the landing page's prose, and it is not in its own table.
@@ -256,6 +340,10 @@ def main() -> None:
         repo=repo,
         source_link=f"https://github.com/{repo}",
     ), encoding="utf-8")
+
+    # The mock is a page of its own so it can be the app full screen, and the frame in
+    # the landing page is that same file rather than a second copy of anything.
+    (SITE / "demo.html").write_text(demo_page(version), encoding="utf-8")
 
     written = sorted(p.name for p in SITE.glob("*.html"))
     print(f"{len(written)} pages, {len(list(MD_OUT.glob('*.md')))} markdown sources")

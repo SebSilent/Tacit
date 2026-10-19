@@ -1,0 +1,59 @@
+/* Page chrome for the interface mock. Everything inside the app is styled by
+   `assets/app.css`, which is `static/style.css` copied verbatim by the site build, so
+   this file only draws the one strip that is not part of the product: the notice that
+   says this page has no server behind it. It floats in the empty middle of the top bar
+   rather than at a corner because the composer and the panel buttons already own the
+   edges. */
+
+.demo-chrome {
+	position: fixed;
+	top: var(--sp-4);
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	gap: var(--sp-3);
+	padding: var(--sp-2) var(--sp-4);
+	border: 1px solid var(--line-2);
+	border-radius: var(--radius-pill);
+	background: var(--bg-2);
+	font-family: var(--mono);
+	font-size: var(--fs-1);
+	color: var(--fadetext);
+	white-space: nowrap;
+}
+
+.demo-chrome-label {
+	letter-spacing: .08em;
+	text-transform: uppercase;
+}
+
+.demo-chrome-btn,
+.demo-chrome-link {
+	font: inherit;
+	color: var(--muted);
+	background: none;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-pill);
+	padding: 0 var(--sp-3);
+	cursor: pointer;
+	text-decoration: none;
+	line-height: 1.7;
+}
+
+.demo-chrome-btn:hover,
+.demo-chrome-link:hover {
+	color: var(--text);
+	border-color: var(--line-2);
+}
+
+/* The pause state has to read as a choice, not as a stalled page. */
+.demo-chrome-btn.on {
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+	.demo-chrome-label { display: none; }
+}
