@@ -702,7 +702,7 @@ TOOLS = [
     # with a stated budget, so the budget goes in the description, read from
     # config so the sentence cannot drift away from the caps.
     _fn("research", f"Bounded multi-source check: up to {config.RESEARCH_ASPECTS} read-only "
-                    f"sub-agents sweep in parallel ({config.RESEARCH_MAX_STEPS} steps each, "
+                    f"sub-agents sweep in parallel ({config.research_steps()} steps each, "
                     f"{config.RESEARCH_TIMEOUT_S}s wall clock), then one cited report with an "
                     "Uncertainties section. Costs far more than `fetch` — use it when the "
                     "question needs several sources, not one.",
@@ -1437,7 +1437,7 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
     report: list[str] = []
     spent = 0
     for ev in run_turn(messages, project=ctx.get("project"), ref=ref,
-                       max_steps=config.SUBAGENT_MAX_STEPS, depth=depth + 1,
+                       max_steps=config.subagent_steps(), depth=depth + 1,
                        readonly=True, nested=True, session=ctx.get("session") or "",
                        stop=ctx.get("stop")):
         kind = ev.get("type")
@@ -1816,7 +1816,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
              depth: int = 0, nested: bool = False, chat: bool = False,
              stop=None, steer=None, reasoning=None, trace: list | None = None,
              session: str = "", has_instructions: bool = False, deadline: float | None = None):
-    steps = max_steps or config.AGENT_MAX_STEPS
+    steps = max_steps or config.max_steps()
     tools = [] if chat else tools_for(readonly, depth)
     ctx = {"project": project, "ref": ref, "depth": depth, "readonly": readonly,
            "session": session, "stop": stop}
@@ -2408,10 +2408,11 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                            "message": (f"this turn has billed {token_mod.label(turn_tokens)} "
                                        f"tokens — {pct:g}% of the "
                                        f"{token_mod.format_token_count(window)} window")}
-        if config.TURN_TOKEN_BUDGET and turn_tokens >= config.TURN_TOKEN_BUDGET:
+        turn_cap = config.turn_token_budget()
+        if turn_cap and turn_tokens >= turn_cap:
             yield {"type": "notify", "level": "warn",
                    "message": (f"turn budget reached ({token_mod.label(turn_tokens)} of "
-                               f"{token_mod.label(config.TURN_TOKEN_BUDGET)} tokens) — "
+                               f"{token_mod.label(turn_cap)} tokens) — "
                                "stopping and reporting")}
             # This step's calls are already in messages; record them before the
             # closing report so the transcript does not lose the work just done.

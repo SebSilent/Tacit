@@ -50,22 +50,22 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:646-663`):
+One rule, shared by every caller (`backend/config.py:728-746`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
 - a project that is named but missing counts as no project, because silently working in the home
   folder is worse than working in a scratch folder and stale paths arrive from stored sessions;
 - only then does the session get `~/.tacit/workspaces/<sanitized id>`, created on demand
-  (`backend/config.py:595-609`).
+  (`backend/config.py:678-692`).
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:649-653`). The scratch folder is why
+blocklist in the way (`backend/config.py:732-736`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:580`, `:591-592`).
+an underscore and the result capped at 48 characters (`backend/config.py:663`, `:674-675`).
 
 ## Deleting
 

@@ -477,6 +477,89 @@ def allow_vcs() -> bool:
     return bool(prefs().get("allowVersionControl"))
 
 
+# ── turn budget ────────────────────────────────────────────────────────────
+# Each of these caps also has an environment variable, which is not the same
+# thing as being tunable: a limit that is too low for one task cannot be raised
+# without closing Tacit and editing whatever launches it. So the environment,
+# the stored preference and the constant are all read here, in that order, and
+# the call sites ask instead of importing a number.
+LIMIT_KEYS = {
+    "max_steps": ("maxSteps", "TACIT_MAX_STEPS", "AGENT_MAX_STEPS", 1, 200),
+    "subagent_steps": ("subagentSteps", "TACIT_SUBAGENT_STEPS", "SUBAGENT_MAX_STEPS", 1, 100),
+    "research_steps": ("researchSteps", "TACIT_RESEARCH_STEPS", "RESEARCH_MAX_STEPS", 1, 40),
+    "turn_token_budget": ("turnTokenBudget", "TACIT_TURN_TOKEN_BUDGET",
+                          "TURN_TOKEN_BUDGET", 0, 50000000),
+}
+
+
+def _limit(name: str) -> int:
+    """One budget: the env var, else the saved value, else the module constant.
+
+    The environment outranks the preference the way it does for every other
+    harness switch, so a pinned deploy cannot be talked out of its limit by a
+    click, and `limits_pinned` can tell the panel when that is the case. The
+    constant is looked up by name rather than captured, so a test that patches
+    `config.AGENT_MAX_STEPS` still moves what the loop reads.
+    """
+    pref_key, env_key, const_key, lo, hi = LIMIT_KEYS[name]
+    raw = os.environ.get(env_key)
+    if raw is None:
+        raw = prefs().get(pref_key)
+    if raw is None:
+        raw = globals()[const_key]
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = int(globals()[const_key])
+    return max(lo, min(hi, value))
+
+
+def max_steps() -> int:
+    """Tool steps one agent turn may take before it is asked to wrap up."""
+    return _limit("max_steps")
+
+
+def subagent_steps() -> int:
+    """Tool steps one delegated `task` may take."""
+    return _limit("subagent_steps")
+
+
+def research_steps() -> int:
+    """Tool steps one aspect of a research sweep may take."""
+    return _limit("research_steps")
+
+
+def turn_token_budget() -> int:
+    """Tokens one turn may bill before it stops and reports. 0 means no cap."""
+    return _limit("turn_token_budget")
+
+
+def limits() -> dict:
+    """The four budgets as one mapping, for the settings route."""
+    return {"max_steps": max_steps(), "subagent_steps": subagent_steps(),
+            "research_steps": research_steps(), "turn_token_budget": turn_token_budget()}
+
+
+def limit_bounds() -> dict:
+    """The floor and ceiling each budget is clamped to.
+
+    The panel asks for these instead of hardcoding them, so an input can refuse
+    a number the server would clamp anyway.
+    """
+    return {name: {"min": spec[3], "max": spec[4]} for name, spec in LIMIT_KEYS.items()}
+
+
+def limits_pinned() -> list[str]:
+    """Which env vars currently outrank what Settings stores.
+
+    The panel needs this the way the shell-overlap switch does: a control that
+    saves into an override and then reports the saved number is a control that
+    lies about the limit the next turn will actually pay.
+    """
+    return [env_key for (_pref, env_key, _const, _lo, _hi) in LIMIT_KEYS.values()
+            if os.environ.get(env_key) is not None]
+
+
 def registry() -> dict:
     return read_json(MODELS_FILE, {"default": "", "providers": {}})
 

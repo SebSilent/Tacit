@@ -56,6 +56,9 @@ def _stub_config(aspects: int = 2, steps: int = 4, cap: int = 120):
     return types.SimpleNamespace(
         RESEARCH_ASPECTS=aspects,
         RESEARCH_MAX_STEPS=steps,
+        # The budget is now asked for rather than read off the constant, so the
+        # stub has to answer the same question the real config does.
+        research_steps=lambda: steps,
         RESEARCH_TIMEOUT_S=cap,
         DELEGATE_MODEL="",
         delegate_model=lambda: "",

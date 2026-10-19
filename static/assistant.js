@@ -213,6 +213,8 @@
         ${chk('tools', 'Read-only tools', 'Lets the assistant read files. Off by default: schemas are expensive.')}
       </div>
       <label class="chk as-turns">Last <input type="number" min="1" max="200" value="${settings.turns}" data-set="turns"> turns</label>
+      <div class="as-group">Run budget</div>
+      <label class="chk as-turns">Stop after <input type="number" min="1" max="200" value="${autonomy.max_cycles || 0}" data-aut="max_cycles"> turns, or <input type="number" min="0" max="24" step="0.5" value="${autonomy.max_hours || 0}" data-aut="max_hours"> hours (0 means no cap)</label>
       <div class="as-group">Provider · Model · Thinking</div>
       <div class="as-row as-pickers">
         <select class="ctl-select as-sel" data-set="provider">
@@ -240,6 +242,16 @@
         // turn anything back off.
         if (el.type === 'checkbox') { save({ [key]: el.checked }); return; }
         save({ [key]: el.value });
+      });
+    });
+    // The two run caps live on the autonomy record, not the settings record, so
+    // they go to a different endpoint. `enabled` rides along as whatever it
+    // already is: changing a cap must not silently start or stop a run.
+    box.querySelectorAll('[data-aut]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const patch = { enabled: !!autonomy.enabled };
+        patch[el.dataset.aut] = parseFloat(el.value) || 0;
+        send(Object.assign({ type: 'assistant_autonomy' }, patch));
       });
     });
   }

@@ -36,6 +36,14 @@ The profile selector is here, not on a tab of its own. It shows each profile's m
 
 Project roots decide which folders the workspace picker offers. Tacit does not guess where your projects live, so the list starts empty: `TACIT_PROJECTS_ROOTS`, or `projectRoots` in `prefs.json`.
 
+Turn budget sets how long one reply runs: tool steps for the main loop, for a sub-agent, and for a
+research aspect, plus a token ceiling for the whole turn. The ceilings exist to keep a runaway turn
+from filling the context with tool results nobody asked for, so they are limits, not targets. Each
+field shows the default under the box; leaving a field empty puts the default back. A number the
+environment already set (`TACIT_MAX_STEPS`, `TACIT_SUBAGENT_STEPS`, `TACIT_RESEARCH_STEPS`,
+`TACIT_TURN_TOKEN_BUDGET`) is greyed out and carries a note saying so, because a control that looks
+editable and then ignores you is worse than one that is missing.
+
 Permissions lists what the agent may do without asking, including the version control switch. Server shows the host and port and holds the restart. The updater checks `VERSION` against the repository and, when you press it, replaces the checkout and runs `pip install -r requirements.txt` again. It never runs `npm install` and never pulls a browser build: those stay yours to decide.
 
 ## Providers

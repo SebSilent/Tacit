@@ -226,7 +226,7 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
         "session": rec["id"],
         "model": ref,
         "workdir": workdir,
-        "max_steps": max_steps or config.AGENT_MAX_STEPS,
+        "max_steps": max_steps or config.max_steps(),
         # What thinking contract this turn actually asked for. "default" means nothing was sent
         # and the endpoint decided, which is a fact about the run that a reader is entitled to.
         "reasoning": level,

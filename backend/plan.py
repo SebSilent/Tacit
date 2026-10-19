@@ -162,7 +162,7 @@ def explore(plan: Plan, limit: int | None = None):
         report = []
         last_activity = "exploring…"
         for ev in agent.run_turn(messages, project=plan.project, ref=plan.ref,
-                                 max_steps=config.SUBAGENT_MAX_STEPS, readonly=True, nested=True):
+                                 max_steps=config.subagent_steps(), readonly=True, nested=True):
             if ev.get("type") == "text":
                 report.append(ev["delta"])
             elif ev.get("type") == "tool_start":

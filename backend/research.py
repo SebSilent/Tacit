@@ -164,7 +164,7 @@ def research(question: str, project: str | None = None, ref: str | None = None,
     ref = _delegate_ref(ref)
 
     n = config.RESEARCH_ASPECTS
-    steps = config.RESEARCH_MAX_STEPS
+    steps = config.research_steps()
     cap = config.RESEARCH_TIMEOUT_S
 
     # The budget is announced, not hidden in config: a person watching a card
