@@ -983,10 +983,10 @@
       + 'no longer something you have to read out of the source. Settings has a **Prompts** tab '
       + 'that lists every one of them, and the block your current session is actually sending '
       + 'sits at the top of it.');
-    await wait(500);
-    openSettings('prompts');
+    // The tab is described, not opened. A turn that answers a question about a panel by
+    // throwing the panel across the transcript is the mock interrupting the reader.
     await content(row, 'That is the contract: if a sentence goes to a model, you can read it in the '
-      + 'interface that sent it. The tab is on the right, and this page has the same texts copied '
+      + 'interface that sent it. The tab is in Settings, and this page has the same texts copied '
       + 'out of the source that sends them.');
     finishTurn(2140);
   }
@@ -1090,8 +1090,11 @@
 
   async function idleLoop() {
     while (true) {
-      await wait(6500);
-      if (S.busy) continue;
+      // The gap is between turns, not before the first one. A page that sits still for
+      // six seconds after loading reads as a page that has not started, and the pointer
+      // is already where the first ask goes.
+      if (!firstPass) await wait(6500);
+      if (S.busy) { await wait(900); continue; }
       // The first pass is the session the page booted on, so the loop only moves once it
       // has run something.
       if (!firstPass) loopAt = (loopAt + 1) % LOOP.length;
@@ -2297,6 +2300,6 @@
   } else {
     // Everything after this is the loop: it moves the pointer, asks, and runs the turn.
     loadSession(LOOP[0], true);
-    setTimeout(idleLoop, 1600);
+    setTimeout(idleLoop, 400);
   }
 })();

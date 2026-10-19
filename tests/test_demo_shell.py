@@ -159,5 +159,33 @@ class DocsAreText(unittest.TestCase):
         self.assertIn("html[data-view] .demo-chrome", css)
 
 
+class TheLoopStartsMoving(unittest.TestCase):
+    """The mock is a thing that happens on a page, so it has to happen soon, and it has
+    to happen without dragging panels across the reader's own transcript."""
+
+    def test_the_first_pass_has_no_warm_up_pause(self):
+        # The gap belongs between turns. A page that sits still for six seconds after
+        # loading reads as a page that never started.
+        body = DEMO_JS.split("async function idleLoop", 1)[1].split("while (true) {", 1)[1]
+        code = [line.strip() for line in body.split("\n")
+                if line.strip() and not line.strip().startswith("//")]
+        # The first thing the loop does is decide whether to pause, and it pauses only
+        # between turns. A bare leading wait is the six-second blank screen.
+        self.assertIn("firstPass", code[0],
+                      "the loop warms up before it moves: " + code[0])
+
+    def test_the_boot_starts_it_inside_a_second(self):
+        delay = re.search(r"setTimeout\(idleLoop,\s*(\d+)\)", DEMO_JS)
+        self.assertIsNotNone(delay, "the loop is not started by the boot")
+        self.assertLessEqual(int(delay.group(1)), 1000)
+
+    def test_nothing_but_the_button_opens_settings(self):
+        """A turn that answers a question about a panel by opening the panel interrupts
+        the reader to make a point the sentence already made."""
+        self.assertEqual(re.findall(r"\bopenSettings\(", DEMO_JS),
+                         ["openSettings(", "openSettings("],
+                         "the definition and the Settings button, and nothing scripted")
+
+
 if __name__ == "__main__":
     unittest.main()
