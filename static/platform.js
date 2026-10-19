@@ -194,7 +194,7 @@
     // Tools are managed on the Skills & Tools tab only (one home per setting);
     // General fetches the server status, which now also reports the MCP
     // helper gate so the automatic on/off is visible where it is configured.
-    const [pf, vcs, dg, snd, au, srv, procs, lim] = await Promise.all([
+    const [pf, vcs, dg, snd, au, srv, procs, lim, fb] = await Promise.all([
       api('/api/profiles'),
       api('/api/harness/version-control'),
       api('/api/harness/deliver-guarantee'),
@@ -203,6 +203,7 @@
       api('/api/server/status').catch(() => null),
       api('/api/processes').catch(() => ({ processes: [] })),
       api('/api/harness/limits').catch(() => null),
+      api('/api/harness/fallback-model').catch(() => null),
     ]);
 
     // The caps one turn pays, with the bounds the server clamps to, so the form
@@ -231,6 +232,46 @@
         ${budgetField('turn_token_budget', 'Token cap per turn',
           'Tokens one turn may bill before it stops and reports. 0 means no cap.')}
         <button class="ho-btn small" id="limSave">Save</button>
+      </div>`;
+
+    // A session pointed at a model this machine no longer has used to be run on the
+    // first row of the registry, silently, at that model's cost and context window.
+    // The two honest answers are a backup a person chose and a turn that stops and
+    // says so, so the choice belongs here rather than in an environment variable.
+    const fbOk = !!(fb && fb.ok);
+    const fbList = fbOk ? (fb.models || []) : [];
+    const fbRef = fbOk ? String(fb.fallback_model || '') : '';
+    const fbChosen = fbList.find((m) => m.id === fbRef) || null;
+    const fbProviders = [];
+    fbList.forEach((m) => { if (fbProviders.indexOf(m.provider) < 0) fbProviders.push(m.provider); });
+    // A ref saved by hand, or set in the environment, that the registry no longer
+    // lists. Showing it is the point: the picker must report what is stored, not
+    // what would resolve, or the broken value stays invisible.
+    const fbStale = !!(fbRef && !fbChosen);
+    const fbProvider = (fbChosen && fbChosen.provider)
+      || (fbStale ? fbRef.partition('/')[0] : '');
+    if (fbStale && fbProviders.indexOf(fbProvider) < 0) fbProviders.push(fbProvider);
+    const fbModels = fbList.filter((m) => m.provider === fbProvider);
+    const fbOpt = (v, label, on) =>
+      `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+    const fallbackHtml = !fbOk ? '' : `
+      <div class="tool-row" data-perm="fallback-model">
+        <span class="tool-name">Fallback model</span>
+        <span class="tool-desc">No fallback by default. A session whose model is gone runs on this one
+          instead; with no fallback the turn stops and says which model it could not find, instead of
+          quietly paying for a different one. <code>TACIT_FALLBACK_MODEL</code> outranks what is saved
+          here.</span>
+        <div class="as-row as-pickers">
+          <select class="ctl-select as-sel" id="fbProvider" aria-label="Fallback provider">
+            ${fbOpt('', '(no fallback)', !fbRef)}
+            ${fbProviders.map((p) => fbOpt(p, p, p === fbProvider && !!fbRef)).join('')}
+          </select>
+          <select class="ctl-select as-sel" id="fbModel" aria-label="Fallback model">
+            ${fbOpt('', '(no fallback)', !fbRef)}
+            ${fbStale ? fbOpt(fbRef, fbRef + ' · not in the registry', true) : ''}
+            ${fbModels.map((m) => fbOpt(m.id, m.name || m.id, m.id === fbRef)).join('')}
+          </select>
+        </div>
       </div>`;
 
     // A restart that failed leaves no server standing to report it, so the watcher
@@ -299,6 +340,8 @@
           <span class="tgl-knob"></span>
         </button>
       </div>
+
+      ${fallbackHtml}
 
       <div class="ho-section">Interface</div>
       <div class="tool-row ${sndOn ? '' : 'off'}" data-perm="turn-sound">
@@ -459,6 +502,27 @@
       note(enable ? 'the delivery guarantee is on: the turn lands the file it names'
                   : 'the delivery guarantee is off: the turn ends when the agent ends it');
     });
+
+    // Two selects, one value: the provider picks its first model, exactly the way
+    // the delegation picker does, so the two behave alike.
+    const fbProv = panel.querySelector('#fbProvider');
+    const fbSel = panel.querySelector('#fbModel');
+    const saveFallback = async (ref) => {
+      const r = await post('/api/harness/fallback-model', { fallback_model: ref });
+      if (!r.ok) { note(r.error || 'could not save that', true); return; }
+      note(r.fallback_model
+           ? `fallback model: ${esc(r.fallback_model)}`
+           : 'no fallback: a session whose model is gone will say so and stop');
+      renderGeneral();
+    };
+    if (fbProv && fbSel) {
+      fbProv.addEventListener('change', async () => {
+        if (!fbProv.value) { await saveFallback(''); return; }
+        const first = fbList.find((m) => m.provider === fbProv.value);
+        await saveFallback(first ? first.id : '');
+      });
+      fbSel.addEventListener('change', async () => { await saveFallback(fbSel.value); });
+    }
 
     panel.querySelector('[data-act="toggle-sound"]').addEventListener('click', async e => {
       const btn = e.target.closest('[data-act="toggle-sound"]');

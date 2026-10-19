@@ -1366,6 +1366,11 @@ input, textarea {
   background: var(--ok);
 }
 .tok-meter.compacting .tok-fill { animation: tokPulse 1s ease-in-out infinite; width: 100%; }
+/* A hand compaction runs with no turn in flight, so the composer needs its own
+   quiet state rather than the busy one: the input is shut while the record is
+   folded, and the meter above it pulses instead of filling. */
+body.compacting #input,
+body.compacting #sendBtn { opacity: .55; cursor: progress; }
 @keyframes tokPulse { 50% {
   opacity: .3;
 } }

@@ -43,6 +43,11 @@ let ws = null;
 let sockets = new Map();   // sid -> WebSocket, one per session
 let streaming = null;   // {msg, el} current assistant message being streamed
 let busy = false;
+// True while this session's transcript is being folded. It is not `busy`: a hand
+// compaction runs with no turn in flight, and the composer has to shut for it
+// anyway, because a prompt started against a record mid-fold races the write that
+// is about to land.
+let compacting = false;
 let reconnectTimer = null;
 let wsDead = false;
 let sessionStarting = false;
@@ -812,6 +817,12 @@ function handle(m) {
         if (busy) resumeLiveStream();
       }
       break;
+    case 'compacting':
+      // A compaction started or finished in this session, from anywhere: the
+      // turn's own fold, the one a turn start runs, or the ⋮ menu. The meter
+      // pulses and the composer shuts while it is true.
+      if (!m.sid || m.sid === activeId) setCompacting(m.on);
+      break;
     case 'state_delta':
       {
         const s = cur();
@@ -922,7 +933,12 @@ function handle(m) {
         if (target) {
           target.usage = { tokens: m.tokens || {}, context: m.context || {},
                            compacting: !!m.compacting, speed: m.speed || 0 };
-          if (target.id === activeId) renderTokMeter();
+          if (target.id === activeId) {
+            renderTokMeter();
+            // A call just reported, so nothing is folding: the flag is cleared
+            // from the provider's own event rather than a second signal.
+            setCompacting(m.compacting);
+          }
         }
       }
       break;
@@ -997,6 +1013,12 @@ function handle(m) {
 const localEchoes = new Map();   // sid -> text
 
 function send(text) {
+  if (compacting) {
+    // Not a queue, not a steer: the fold is rewriting the transcript this prompt
+    // would be appended to. Wait for it, then send.
+    toast('Compacting this session\'s context. Try again in a moment', true);
+    return;
+  }
   text = (text || '').trim();
   if (!text && !attachments.length) return;
   if (busy && !planLive) {
@@ -1075,10 +1097,24 @@ function setBusy(b) {
 }
 
 function refreshPlaceholder() {
-  inputEl.placeholder = planModeOn
-    ? 'Describe what to plan (research → questions → plan)…'
-    : busy ? 'Steer the running turn… (■ stops it)'
-           : 'Message Tacit…';
+  inputEl.placeholder = compacting
+    ? 'Compacting this session\'s context…'
+    : planModeOn
+      ? 'Describe what to plan (research → questions → plan)…'
+      : busy ? 'Steer the running turn… (■ stops it)'
+             : 'Message Tacit…';
+}
+
+function setCompacting(on) {
+  const next = !!on;
+  if (next === compacting) return;
+  compacting = next;
+  // The composer goes shut, not merely quiet: the server claims the session for
+  // the fold too, so a second window cannot start a turn on top of it either.
+  inputEl.disabled = compacting;
+  document.body.classList.toggle('compacting', compacting);
+  renderTokMeter();
+  refreshPlaceholder();
 }
 
 function updateSteerHint() {
@@ -1333,7 +1369,7 @@ function paintSnapshotLinks() {
       b.className = 'msg-snap';
       b.dataset.snap = s.name;
       b.textContent = 'snapshot';
-      b.title = `${s.name} · ${s.file_count} file(s) · taken before this turn's first edit — opens compare`;
+      b.title = `${s.name} · ${s.file_count} file(s) · taken before this turn's first edit · opens compare`;
       role.insertBefore(b, at);
     }
   });
@@ -1898,7 +1934,7 @@ function editUserMessage(wrap) {
     // refuses a fragment too, via _adoptable in routers/chat.py — but refusing is
     // not editing, so the client must not offer it in the first place.)
     ensureFull(s);
-    toast('Loading the full history of this session — try the edit again in a moment', true);
+    toast('Loading the full history of this session: try the edit again in a moment', true);
     return;
   }
   const userTurnIndex = userTurnIndexOfBubble(wrap);
@@ -2932,7 +2968,13 @@ function handleRpcResponse(m) {
   } else if (m.command === 'steer' || m.command === 'follow_up') {
     if (!m.ok) toast('Steer failed: ' + (m.error || ''), true);
   } else if (m.command === 'compact') {
-    toast(m.ok ? 'Context compacted' : ('Compact failed: ' + (m.error || '')), !m.ok);
+    const d = m.data || {};
+    // Say what the fold did, and which model wrote the note: TACIT_COMPACT_MODEL
+    // can nominate another one and has no Settings surface, so this is the only
+    // place a person can see it.
+    toast(m.ok
+      ? `Context compacted: ${d.compacted} messages, ~${fmtTok(d.saved_tokens || 0)} tokens freed, note by ${d.model || 'the session model'}`
+      : ('Compact failed: ' + (m.error || '')), !m.ok);
   } else if (m.command === 'export_html') {
     if (m.ok && m.data && m.data.path) toast('Exported → ' + m.data.path);
     else toast('Export failed: ' + (m.error || ''), true);

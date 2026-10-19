@@ -97,10 +97,16 @@ GZIP_BASELINE = 115_372
 #
 # The previous numbers were 2% and 1.7% of headroom away from the page's real load —
 # spent, not warning, which is the failure this file's own notes keep naming.
-RAW_BUDGET = 480_000
-GZIP_BUDGET = 127_000
-SHIPPED_RAW_BUDGET = 505_000
-SHIPPED_GZIP_BUDGET = 132_500
+#
+# Raised again for the Settings fallback-model picker: `platform.js` grew by about
+# 2.1 KB of JS and the page by 1.7 KB, which put the page at 481,236 raw / 128,018
+# gzip and the shipped union at 505,555 / 133,488. Both were over the old lines, the
+# gzip one quietly so: the raw assert fired first and hid it. Budgets are the new
+# figures plus ~4%: 500,000 / 133,000 for the page, 526,000 / 139,000 shipped.
+RAW_BUDGET = 500_000
+GZIP_BUDGET = 133_000
+SHIPPED_RAW_BUDGET = 526_000
+SHIPPED_GZIP_BUDGET = 139_000
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
