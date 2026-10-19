@@ -124,7 +124,7 @@ rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:155-180`,
 `backend/config.py:50`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:170-174`, defined at `backend/config.py:203`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`:175`). The skip test
+(`backend/extras.py:170-174`, defined at `backend/config.py:206`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:175`). The skip test
 looks only at parts inside the project, because testing absolute parts would skip everything whenever
 the project itself sat in a folder named `build/` or `checkpoints/` (`backend/extras.py:170-172`).
 

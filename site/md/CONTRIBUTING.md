@@ -70,7 +70,7 @@ that is the honest note plus the opt-in container backend, not a fake
 
 **Blocking code does not run on the event loop.** A handler that shells out, walks a directory or calls a
 gateway is a plain `def`, so Starlette runs it on a threadpool; the registry route carries the reason in a
-comment (`backend/routers/api.py:675-677`). Slow work a turn start performs goes to the caller's executor
+comment (`backend/routers/api.py:677-679`). Slow work a turn start performs goes to the caller's executor
 for the same reason (`backend/session_runtime.py:28-31`).
 
 **A turn is a process, and stop is two-stage.** A thread cannot be killed in Python, so a turn runs in a
@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:596-600` both exist because a cached path made a redirected test write into the real
+`backend/config.py:615-619` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not

@@ -16,8 +16,8 @@ toolchain, and no database to install.
 Three properties decide what an agent costs you and what it can do to you. Tacit is built around all
 three.
 
-1. **The fixed cost per turn is the smallest in its class.** 975 characters of standing
-   instructions, about 768 tokens on Minimal and 1,889 on Default; DSH pays 8,390 and Hermes
+1. **The fixed cost per turn is the smallest in its class.** 974 characters of standing
+   instructions, about 768 tokens on Minimal and 1,914 on Default; DSH pays 8,390 and Hermes
    18,970 every turn. The full accounting is below.
 2. **Nothing optional is on, and nothing learns without you.** Memory, plugins, external tools,
    sandboxing and learning are all off until you turn them on. Even then, learning only proposes:
@@ -34,8 +34,8 @@ An agent earns the right to run on your machine two ways: by showing you what it
 refusing to act where you have not let it. Tacit is built around both, and the numbers are what
 they are because of it.
 
-**Paperwork per turn: the smallest in its class.** 975 characters of standing instructions plus
-your profile's tool descriptions: roughly 768 tokens on Minimal and 1,889 on Default, against
+**Paperwork per turn: the smallest in its class.** 974 characters of standing instructions plus
+your profile's tool descriptions: roughly 768 tokens on Minimal and 1,914 on Default, against
 8,390 for DSH and 18,970 for Hermes, tool descriptions included. At twenty-five turns a task that
 gap is tens of thousands of tokens paid before the model reasons about a single line of your
 code. Everything else is lazy: skills, knowledge, MCP tool descriptions and project instructions
@@ -80,9 +80,9 @@ token meter, so nothing is measured by a standard it does not already apply to i
 
 | System | System prompt | Tools | Tool schemas | Fixed cost per turn |
 |---|---|---|---|---|
-| **Tacit, Minimal** | **975 chars** | **7** | **2.0 KB** | **~768 tokens** |
+| **Tacit, Minimal** | **974 chars** | **7** | **2.0 KB** | **~768 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **975 chars** | **20** | **6.4 KB** | **~1,889** |
+| **Tacit, default profile** | **974 chars** | **20** | **6.5 KB** | **~1,914** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
@@ -99,7 +99,7 @@ list and glob, and nothing else.
 | Same seven capabilities | Tacit | Pi |
 |---|---|---|
 | Tool schemas | **2,001 chars** | 4,626 chars |
-| System prompt | **975 chars** | 1,352 chars |
+| System prompt | **974 chars** | 1,352 chars |
 | **Fixed cost per turn** | **~768 tokens** | **~1,600** |
 
 Same tools, less than half the cost. Two things account for it. Pi's descriptions are longer: its
@@ -112,7 +112,7 @@ so that one is not a fair fight, but the rest are.
 | Property | Tacit | DSH | Hermes Agent |
 |---|---|---|---|
 | Runtime dependency on another harness | **none** | plugin runtime | gateway ecosystem |
-| Fixed cost per turn | **~768 to ~2,308** | ~8,390 | ~18,970 |
+| Fixed cost per turn | **~768 to ~2,139** | ~8,390 | ~18,970 |
 | Memory in the prompt | **off by default, hard token budget** | not applicable | accumulated in the system prompt |
 | Learning that changes behaviour | **approval first, off by default** | not applicable | automatic |
 | Isolation on Windows | **not available: says so** | not verified here | not applicable |
@@ -137,14 +137,14 @@ machine, not from their marketing.
 
 | | Tacit | Claude Code | Hermes | little-coder | DSH |
 |---|---|---|---|---|---|
-| Standing prompt | **975 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
+| Standing prompt | **974 chars** | large + CLAUDE.md | 23,367 chars | 7,747 chars | 6,195 chars |
 | Tool schemas | **5.2 KB / 16** (6.6 KB / 20 once an MCP server is configured) | all sent every turn | 52.5 KB / 32 | 10.4 KB / ~29 | 26.7 KB / 25 |
 | External tools | **lazy, 4 helpers** | direct | direct | direct | direct |
 | Compaction trigger | **window − 33K reserve** | window − ~33K reserve | 50% (75% under 512K) | delegated | delegated |
 | Trigger at a 1M window | **967,000** | ~967,000 | 500,000 | none | none |
 | Tail kept | **token budget, 4-40 msgs** | none | token budget, floor 8 | none | none |
 | Cheap pre-pass before summarising | **yes** | none | yes | none | none |
-| Summariser model | **nominatable** | none | cheap auxiliary | none | none |
+| Summariser model | **the session's own**, or the fallback a person chose | none | cheap auxiliary | none | none |
 | Fallback if summarising fails | **deterministic digest** | none | digest + cooldown | none | none |
 | Compaction mid-turn | **yes** | none | yes | none | none |
 | Task pinned against elision | **yes** | none | head protected | none | none |
@@ -441,7 +441,7 @@ several things each time you change how you are working. Switching applies immed
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
 | **minimal** | 7 | none | off | off | ~768 tokens |
-| **default** | 20 | none | off | off | ~1,889 tokens |
+| **default** | 20 | none | off | off | ~1,914 tokens |
 | **safe** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
 | **power-isolation** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
 | **power-memory** | 22 | none | full, budgeted | off | `default` + the memory tools + budget |
@@ -976,7 +976,6 @@ and the interface says so.
 | `TACIT_COMPACT_TAIL_MIN` | `4` | fewest messages kept verbatim through a compaction |
 | `TACIT_COMPACT_TAIL_MAX` | `40` | most messages kept verbatim through a compaction |
 | `TACIT_COMPACT_PRUNE_KEEP` | `400` | head of an old tool result kept by the pre-pass |
-| `TACIT_COMPACT_MODEL` | none | a cheap model to write summaries with |
 | `TACIT_SUMMARY_INPUT_MAX` | `160000` | cap on what the summariser is sent |
 | `TACIT_CONTEXT_BUDGET` | `120000` | characters of transcript sent when the model's window is unknown |
 | `TACIT_CONTEXT_BUDGET_MIN` | `24000` | floor for the derived cap, so a small window is still usable |
@@ -1000,6 +999,7 @@ and the interface says so.
 | `TACIT_TEMPERATURE` | `0.2` | sampling temperature |
 | `TACIT_SUBAGENT_DEPTH` | `1` | how deep a sub-agent may delegate again |
 | `TACIT_DELEGATE_MODEL` | session model | a `provider/model` ref to run sub-agents and research on instead |
+| `TACIT_FALLBACK_MODEL` | none | a `provider/model` ref a session runs on when its own is gone; without it, the turn says so and stops |
 | `TACIT_FETCH_LIMIT` | `6000` | characters `fetch` returns |
 | `TACIT_BROWSER_TIMEOUT` | `90` | seconds a browser action may take |
 | `TACIT_BROWSER_TEXT_LIMIT` | `6000` | characters of page text `browser` returns |

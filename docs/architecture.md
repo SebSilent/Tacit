@@ -63,7 +63,7 @@ The lifecycle is three steps (`backend/turn_worker.py:9-22`):
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:23-25`, `backend/config.py:382`).
+(`backend/turn_worker.py:23-25`, `backend/config.py:401`).
 
 ## What the server does at startup
 
@@ -108,11 +108,19 @@ frontend with no build step (`backend/main.py:175`).
 `backend/agent.py` holds the registry, the dispatcher and the guards described in
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
-- **Compaction.** `should_compact` decides whether the transcript is over budget
-  (`backend/agent.py:1102`), `compact_history` writes the summary (`backend/agent.py:1315`), and
-  `compact_messages` is the deterministic floor that needs no model (`backend/agent.py:1366`). A
-  growing turn is re-measured in place rather than only between turns, which is what `TACIT_COMPACT_MID_TURN`
-  controls (`backend/config.py:137-140`).
+- **Compaction.** `should_compact` decides whether the transcript is over budget, answering
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1111`,
+  `stored_tokens` at `backend/agent.py:1102`): a mid-turn compaction shrinks the prompt on
+  purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
+  between turns (`backend/agent.py:1332`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1431`), which is what `TACIT_COMPACT_MID_TURN` controls
+  (`backend/config.py:140-143`). A turn runs in its own process while its parent writes the
+  transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1358`),
+  keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
+  accounting for both the turn start and the forced command
+  (`backend/session_runtime.py:501`), because a hand compaction that moves neither the meter
+  nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).
 - **Project context.** `AGENTS.md` and friends are indexed by name and fetched on demand, and
@@ -122,10 +130,10 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:751-754`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:793-796`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:745-750`).
+(`backend/config.py:787-792`).
 
 Next: [cost and profiles](cost-and-profiles.md).

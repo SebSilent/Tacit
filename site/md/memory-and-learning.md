@@ -123,7 +123,7 @@ Skills are markdown files with optional front matter, read from `~/.tacit/skills
 supplies a name and a description; without it the file's stem and its first non-empty line are used
 (`backend/skills.py:6-18`, `:33-34`).
 
-Only the index goes into the prompt, capped at 24 entries (`backend/config.py:200`), and the body is
+Only the index goes into the prompt, capped at 24 entries (`backend/config.py:203`), and the body is
 fetched by the `skill` tool when the model actually wants it (`backend/agent.py:685-686`, `:510`). That
 is the lazy-loading rule the cost figures depend on.
 

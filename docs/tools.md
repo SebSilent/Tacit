@@ -74,7 +74,7 @@ live only in the code.
 `run_shell` states the shell and the operating system it is running on, read from config at the
 moment the registry is built (`backend/agent.py:682-684`, `backend/agent.py:666`). `research` quotes
 its own budget, `RESEARCH_ASPECTS`, `RESEARCH_STEPS` and `RESEARCH_TIMEOUT`, taken from
-`backend/config.py:180`, `:190` and `:194` rather than written into the sentence, so the description
+`backend/config.py:183`, `:193` and `:197` rather than written into the sentence, so the description
 cannot drift away from the caps (`backend/agent.py:699-709`). `memory_add` says plainly that a
 proposal lands pending review and is injected nowhere until you approve it
 (`backend/agent.py:738-739`).

@@ -12,7 +12,7 @@ The standing prompt is assembled in one function (`backend/ai/prompts.py:148-176
 |---|---|---|
 | Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:49-56`) for a delegated run |
 | The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:153` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
-| Project scope | `backend/ai/prompts.py:27-31`, added at `:155-156` | when the session has a usable project (`backend/config.py:638`) |
+| Project scope | `backend/ai/prompts.py:27-31`, added at `:155-156` | when the session has a usable project (`backend/config.py:680`) |
 | Scratch-workspace notice | `backend/ai/prompts.py:33-38`, added at `:157-162` | when there is no usable project and a session id, so the model is told where it is working |
 | Read-only or chat notice | `backend/ai/prompts.py:40-44`, added at `:167-170` | per mode |
 | Skill index | added at `backend/ai/prompts.py:171-175` | only when skills exist; bodies are fetched on demand by the `skill` tool |
@@ -21,8 +21,10 @@ On top of that sits the tool schemas, then plugin tools, then memory, then any e
 schemas. `cost_of` returns those five numbers separately rather than one total, so a reader can see
 which part of the bill moved (`backend/profiles.py:199-203`).
 
-The published figures are in the README: 975 characters of standing instructions, about 768 tokens on
-Minimal and 1,889 on Default (`README.md:19-21`).
+The published figures are in the README: 974 characters of standing instructions, about 768 tokens on
+Minimal and 1,914 on Default (`README.md:19-21`). A test reads the table back out of the README and
+re-measures it against `cost_of`, because 1,889 stayed published for a while after the schemas grew
+past it and nothing noticed.
 
 ## How a token figure is produced
 
@@ -115,8 +117,8 @@ injected, and what was avoided by lazy loading, budgeting, compaction and delega
 schemas, then four savings counters, one per avoidance mechanism (`backend/metrics.py:22-25`).
 
 Two ceilings stop a turn from running away. `TACIT_TURN_TOKEN_BUDGET` is a hard token ceiling that
-defaults to no ceiling at all (`backend/config.py:149`), and `TACIT_COST_WARN` is the set of window
-fractions at which a turn tells you what it is costing (`:146`). Compaction is decided against a
+defaults to no ceiling at all (`backend/config.py:152`), and `TACIT_COST_WARN` is the set of window
+fractions at which a turn tells you what it is costing (`:149`). Compaction is decided against a
 reserve model rather than a flat fraction by default: `TACIT_CONTEXT_RESERVE` leaves 33,000 tokens free
 for the next turn's work (`:108`) and `TACIT_CONTEXT_FILL_FLOOR` refuses to compact below half the
 window, so a small model is not starved (`:114`). The machinery itself is in

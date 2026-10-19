@@ -4,7 +4,7 @@ Nine tabs, four of them visible until you ask for the rest. Every one of them wr
 
 | Tab | What it holds | What it writes |
 |---|---|---|
-| **General** | Profile selector, project roots, permissions, the Interface section with both sound switches, their audition button and transcript density, server, updater, Restart server | `prefs.json`, `.env`, and this browser's `localStorage` for density (`static/app.js:110-117`) |
+| **General** | Profile selector, project roots, permissions, the fallback model, the Interface section with both sound switches, their audition button and transcript density, server, updater, Restart server | `prefs.json`, `.env`, and this browser's `localStorage` for density (`static/app.js:115-122`) |
 | **Providers** | Endpoints, keys, per-model capabilities | `models.json`, `.env` |
 | **Skills & Tools** | Skills, knowledge, the tool list with a cost figure per tool | `~/.tacit/skills/`, `~/.tacit/knowledge/`, `prefs.json` |
 | **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones | this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`) |
@@ -22,7 +22,7 @@ Five of the optional systems default to off, and the code is the source of truth
 
 | System | Default off | In |
 |---|---|---|
-| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:477` |
+| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:496` |
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
 | Memory | `mode = "off"`, budget 120 | `backend/providers.py:26` |
@@ -43,6 +43,19 @@ field shows the default under the box; leaving a field empty puts the default ba
 environment already set (`TACIT_MAX_STEPS`, `TACIT_SUBAGENT_STEPS`, `TACIT_RESEARCH_STEPS`,
 `TACIT_TURN_TOKEN_BUDGET`) is greyed out and carries a note saying so, because a control that looks
 editable and then ignores you is worse than one that is missing.
+
+**Fallback model** is a provider and a model, or nothing at all, and nothing is the default
+(`static/platform.js:241-275`). It exists because `resolve_model` used to answer a ref this machine
+no longer has with the first model in the registry: a session pointed at a removed provider ran on
+something else, at that model's cost, quality and context window, and the transcript said nothing
+about it. That substitution is gone. Now a session whose model is missing runs on the model you
+chose here, and with no choice it stops and names what it could not find
+(`backend/ai/engine.py:42-57`). The value is saved as `fallbackModel` in `prefs.json`
+(`backend/routers/api.py:852-866`) and read by `backend/config.py:371-384`, where
+`TACIT_FALLBACK_MODEL` outranks it. A ref that is stored but no longer in the registry is still shown,
+labelled `not in the registry`, because a picker that reports only what would resolve keeps the broken
+value invisible (`static/platform.js:247-253`). The compaction summariser is not nominatable and has
+no hidden backup either: it writes the summary on the session's own model.
 
 Permissions lists what the agent may do without asking, including the version control switch. Server shows the host and port and holds the restart. The updater checks `VERSION` against the repository and, when you press it, replaces the checkout and runs `pip install -r requirements.txt` again. It never runs `npm install` and never pulls a browser build: those stay yours to decide.
 

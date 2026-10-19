@@ -21,7 +21,7 @@ from it, so tests that believed they were isolated wrote fixture sessions into t
 deliberately excluded, because tests must be able to read those (`:14-15`).
 
 Redirecting a path works because the store re-reads it on every call rather than caching it at import
-(`backend/store.py:9-17`, `backend/config.py:596-600`). A test that redirected `WORKSPACES_DIR` had to
+(`backend/store.py:9-17`, `backend/config.py:615-619`). A test that redirected `WORKSPACES_DIR` had to
 actually redirect it.
 
 ## What the suite holds down
@@ -91,7 +91,7 @@ at the same time, and that is what "connecting..." for ages actually is
 (`:13-14`).
 
 `scripts/measure_registry.py` counts bytes rather than messages for `/api/sessions/registry`
-(`scripts/measure_registry.py:3`, route at `backend/routers/api.py:674`). Counting messages is not enough
+(`scripts/measure_registry.py:3`, route at `backend/routers/api.py:676`). Counting messages is not enough
 to know whether the payload is small, because one message can carry a 48,000-character `read_file`
 result, and bytes are the unit the wire and the parser actually pay (`:5-7`). It is read-only and takes an
 optional home directory so a synthetic case can be measured
@@ -116,7 +116,7 @@ a citation names a missing file or a line outside it, so it doubles as a check.
 sandbox, the way a page loads it, and asserts the output contains the structures the source has
 (`scripts/check_site_render.js:4-9`). `scripts/build_site.py` already checks that every link resolves;
 this checks the renderer. It needs Node, so it is never run by `unittest`, which stays offline and
-installs nothing (`:13-15`).
+installs nothing (`scripts/check_site_render.js:13-15`).
 
 ## Where the published numbers come from
 
@@ -146,7 +146,7 @@ which results were helped by them.
 **The delivery guarantee** orders a missing file written, makes it run, and spends the last minutes of
 wall budget landing the artifact, so a failed cell is still a graded artifact
 (`README.md:58-63`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
-(`backend/config.py:422-426`). The salvage phase gets three rounds rather than one, because writing the
+(`backend/config.py:441-445`). The salvage phase gets three rounds rather than one, because writing the
 file is step one and the model then needs to run it and fix what the run shows; it is bounded, because an
 unbounded "one more chance" is how a turn becomes two turns (`backend/agent.py:772-776`).
 
@@ -157,6 +157,6 @@ spent 26 of its 29 shell calls on refused repeats and ended with nothing written
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch
-(`README.md:69-71` and `:44-47`, `backend/config.py:416-420`).
+(`README.md:69-71` and `:44-47`, `backend/config.py:435-439`).
 
 Next: [contributing](../CONTRIBUTING.md).
