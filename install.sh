@@ -51,7 +51,7 @@ ok()   { printf '%s v%s %s\n' "$C_GRN" "$C_OFF" "$1"; }
 warn() { printf '%s !%s %s\n' "$C_YEL" "$C_OFF" "$1" >&2; }
 die()  { printf '%s x%s %s\n' "$C_RED" "$C_OFF" "$1" >&2; exit 1; }
 
-printf '\n%s Tacit — the Silent Harness%s\n\n' "$C_BLD" "$C_OFF"
+printf '\n%s Tacit: the Silent Harness%s\n\n' "$C_BLD" "$C_OFF"
 
 case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux*|Darwin*) : ;;

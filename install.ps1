@@ -45,7 +45,7 @@ function Invoke-Native {
 }
 
 Write-Host ''
-Write-Host ' Tacit - the Silent Harness' -ForegroundColor White
+Write-Host ' Tacit: the Silent Harness' -ForegroundColor White
 Write-Host ''
 
 # Older Windows defaults to TLS 1.0, which makes the download fail with a

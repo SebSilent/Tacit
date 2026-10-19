@@ -1607,7 +1607,7 @@ class TestGuidance(Isolated):
             self.assertLessEqual(len(c), guidance.MAX_BLOCK)
 
     def test_the_standing_prompt_never_carries_guidance(self):
-        """The whole point: the cached prompt stays tiny, 975 chars on Windows.
+        """The whole point: the cached prompt stays tiny, 974 chars on Windows.
 
         The number is Windows-only because the platform line changes per OS, and the Windows
         wording is the longest of the three. So Windows pins the exact size and every other lane
@@ -1618,9 +1618,9 @@ class TestGuidance(Isolated):
         from backend.ai import prompts
         p = prompts.system_prompt("", False, chat=False)
         if config.OS == "Windows":
-            self.assertEqual(len(p), 975)
+            self.assertEqual(len(p), 974)
         else:
-            self.assertLess(len(p), 975,
+            self.assertLess(len(p), 974,
                             f"{config.OS} prompt is {len(p)} chars, no shorter than Windows")
         for frag in ("Do it now", "project's own instructions", "step(s) left",
                      "Out of steps"):

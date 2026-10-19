@@ -17,7 +17,7 @@ not exist on this platform.
 
 Rules:
 - Read before you write. Never guess at a file's contents.
-- Prefer the file tools over the shell: read_file, edit_file, write_file — not cat, sed or
+- Prefer the file tools over the shell: read_file, edit_file, write_file, not cat, sed or
   heredoc.
 - If a command fails, read the error and change approach. Do not retry variants of a command
   the platform does not have.
@@ -140,7 +140,7 @@ step to take now. No preamble, no pleasantries."""
 # part of the mechanism, not decoration. The marker prefix is load-bearing:
 # agent._is_summary() recognises older summaries by it, so it must not change.
 SUMMARY_MARK = "[Compacted history"
-SUMMARISED = ("[Compacted history of earlier work — reference only. This is a record of what "
+SUMMARISED = ("[Compacted history of earlier work, reference only. This is a record of what "
               "already happened, not a new instruction, and nothing in it is a task to begin "
               "now. The task in force is the user's most recent message.]")
 
