@@ -481,6 +481,20 @@ def token_dashboard(sid: str = "", project: str = ""):
     return {"ok": True, **dash}
 
 
+@router.get("/api/prompts")
+def prompt_inventory(sid: str = "", project: str = ""):
+    """Every prompt Tacit hardcodes, read from the constants that send them.
+
+    The standing prompt's cost has always been on the dashboard; this is the
+    rest of it: tool descriptions, guidance, the delivery orders, the Assistant
+    persona, the compaction, plan, research, learning and memory text. The
+    operator can read what the harness says rather than trusting it.
+    """
+    from .. import prompts_catalog
+    rec = store.get(sid) if sid else None
+    return prompts_catalog.catalog(project or (rec or {}).get("project") or None, sid)
+
+
 @router.get("/api/snapshots")
 def snapshots(limit: int = 200, session: str = ""):
     from .. import extras
@@ -844,6 +858,38 @@ async def set_deliver_guarantee(request: Request):
     body = await request.json()
     config.save_prefs({"deliverGuarantee": bool(body.get("deliver_guarantee"))})
     return _ok(deliver_guarantee=config.deliver_guarantee())
+
+
+@router.get("/api/harness/limits")
+async def get_limits():
+    """The turn budgets, as the next turn will read them, plus their bounds."""
+    return _ok(limits=config.limits(), bounds=config.limit_bounds(),
+               pinned=config.limits_pinned())
+
+
+@router.post("/api/harness/limits")
+async def set_limits(request: Request):
+    """Raise or lower a turn budget. Only the keys that arrived are written.
+
+    Out of range is refused rather than clamped quietly: a panel that accepted 500
+    and ran 200 would be reporting a number that is not the one in force.
+    """
+    body = await request.json()
+    changes = {}
+    for name, (pref_key, _env, _const, lo, hi) in config.LIMIT_KEYS.items():
+        if name not in body:
+            continue
+        try:
+            value = int(str(body.get(name)).strip())
+        except (TypeError, ValueError):
+            return _fail(f"{name} is not a number")
+        if value < lo or value > hi:
+            return _fail(f"{name} must be between {lo} and {hi}")
+        changes[pref_key] = value
+    if not changes:
+        return _fail("no budget to save")
+    config.save_prefs(changes)
+    return _ok(limits=config.limits(), pinned=config.limits_pinned())
 
 
 @router.get("/api/harness/sound")

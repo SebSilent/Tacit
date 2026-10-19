@@ -49,8 +49,10 @@ DEFAULT_THEME = "graphite"
 # the swatch-literal guard in test_color_tokens has to know it too: a swatch is two
 # stops, so ten themes is twenty literals and not one more. The count moved 8 -> 10
 # when amethyst and celadon were added -- the purple and the cyan the palette had
-# been steering around, composed rather than avoided.
-THEME_COUNT = 20
+# been steering around, composed rather than avoided -- and 20 -> 22 when kinpaku and
+# kinpaku-dark were added, the gold-leaf pair: paper ground with the metal dark enough
+# to read as text, lacquer ground with the metal bright enough to need black on it.
+THEME_COUNT = 22
 
 
 def themes():
@@ -98,9 +100,9 @@ def rgb_triplet(value):
 # a light accent it was white on near-white — `contrast` sat at 1.41:1 on *the
 # accessibility theme*, and the debt was carried with no number attached.
 #
-# Every palette re-measures this pair rather than inheriting an answer. Twelve of
-# the twenty declare `--on-accent: #000` in their own block, because their accents
-# are light enough that white on them falls under AA; the other eight keep the white
+# Every palette re-measures this pair rather than inheriting an answer. Thirteen of
+# the twenty-two declare `--on-accent: #000` in their own block, because their accents
+# are light enough that white on them falls under AA; the other nine keep the white
 # from bare `:root`, their accents being dark enough to carry it.
 #
 # Which side a theme falls on is a property of its accent's luminance and not of its
@@ -438,7 +440,7 @@ class TestOnAccentContrast(unittest.TestCase):
 
 
 class TestThemeGrouping(unittest.TestCase):
-    """The Appearance panel groups its twenty cards by tone. That only works while
+    """The Appearance panel groups its twenty-two cards by tone. That only works while
     `tone` is a fact about the theme rather than an opinion about it, so it is read
     back out of the theme block's own `color-scheme` -- the property the browser uses
     to pick form-control and scrollbar colours. A hand-written label that drifts from

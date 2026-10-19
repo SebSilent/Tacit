@@ -75,6 +75,7 @@ const THEMES = [
   { id: 'iris', name: 'Iris', tone: 'dark', hint: 'cool neutral, deep violet-blue' },
   { id: 'slate', name: 'Slate', tone: 'dark', hint: 'mid-tone grey, amber indicator' },
   { id: 'oxide', name: 'Oxide', tone: 'dark', hint: 'iron ground, chalk accent' },
+  { id: 'kinpaku-dark', name: 'Kinpaku dark', tone: 'dark', hint: 'black lacquer, gold leaf' },
   { id: 'contrast', name: 'Contrast', tone: 'dark', hint: 'AAA, white on black' },
   { id: 'vellum', name: 'Vellum', tone: 'light', hint: 'warm paper, ultramarine' },
   { id: 'signal', name: 'Signal', tone: 'light', hint: 'cool white, chart-series colour' },
@@ -83,6 +84,7 @@ const THEMES = [
   { id: 'monotype', name: 'Monotype', tone: 'light', hint: 'neutral light; the accent is ink' },
   { id: 'foxglove', name: 'Foxglove', tone: 'light', hint: 'warm light, muted plum' },
   { id: 'sorrel', name: 'Sorrel', tone: 'light', hint: 'pale clay ground, indigo ink' },
+  { id: 'kinpaku', name: 'Kinpaku', tone: 'light', hint: 'gold-leaf paper, patina teal' },
   { id: 'contrast-light', name: 'Contrast light', tone: 'light', hint: 'AAA, black on white' },
 ];
 const DEFAULT_THEME = 'graphite';

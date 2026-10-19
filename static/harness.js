@@ -65,10 +65,17 @@ function loadPanel(tab) {
   // Switching tabs replaces the appearance panel's markup wholesale, which kills
   // the hovered card without a `pointerleave`. Same reason as in the renderer.
   stopThemePreview();
-  if (tab === 'general') return window.TacitPlatform && window.TacitPlatform.render('general');
   if (tab === 'providers') return renderProviders();
   if (tab === 'tools') return renderSkillsAndTools();
   if (tab === 'appearance') return renderAppearancePanel();
+  // Everything else belongs to platform.js: the general tab and every advanced
+  // one. Reopening the overlay used to refresh only the four tabs above, so the
+  // panel you were looking at kept whatever it rendered last time. Harmless for a
+  // static list, wrong for Prompts, whose live half is rebuilt from the current
+  // session's project: pick another folder, reopen Settings, and it still named
+  // the old one. `render()` ignores a tab it does not own, so this is a refresh
+  // and not a second owner of the same panel.
+  if (window.TacitPlatform) return window.TacitPlatform.render(tab);
 }
 
 // ═══════════════════════ SKILLS & TOOLS (one tab) ═══════════════════════

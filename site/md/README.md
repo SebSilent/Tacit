@@ -246,8 +246,10 @@ Most tools do not show you this number. Tacit does, and then gives you the switc
   pinned: the agent is never left holding instructions it can no longer see the question for.
 - **Cost is reported while the turn is running.** Crossing 25%, 50% or 75% of the model's window
   raises a warning in the interface, so a runaway turn is visible before it finishes rather than in
-  a dashboard afterwards. `TACIT_TURN_TOKEN_BUDGET` sets a hard ceiling that stops the turn and asks
-  for a report instead; it is off by default, like every other constraint here.
+  a dashboard afterwards. A hard ceiling can stop the turn and ask for a report instead; it is off by
+  default, like every other constraint here. How far a turn may go is yours to set, not the code's
+  decision: **Settings > General** holds the steps per turn, per sub-agent and per research aspect,
+  and the token ceiling, each taking effect on the next turn.
 - **Off by default.** Memory, plugins, external tool servers and sandboxing are disabled until you
   enable them, and can be disabled again at any time.
 
@@ -964,8 +966,8 @@ and the interface says so.
 | `TACIT_HOST` | `0.0.0.0` | bind address |
 | `TACIT_PROJECTS_ROOTS` | none | folders offered by the workspace picker; Tacit does not guess |
 | `TACIT_PLAYWRIGHT_PATH` | auto-detected | an existing playwright installation |
-| `TACIT_MAX_STEPS` | `24` | tool steps per turn |
-| `TACIT_SUBAGENT_STEPS` | `12` | steps per sub-agent |
+| `TACIT_MAX_STEPS` | `24` | tool steps per turn; **Settings > General** also sets it, and the environment outranks the saved value |
+| `TACIT_SUBAGENT_STEPS` | `12` | steps per sub-agent; also a field in **Settings > General** |
 | `TACIT_COMPACT_AT` | `0` (reserve model) | set a flat fraction of the window instead |
 | `TACIT_CONTEXT_RESERVE` | `33000` | tokens left free for the next turn's work |
 | `TACIT_CONTEXT_FILL_FLOOR` | `0.5` | never compact below this fraction, for small windows |
@@ -989,7 +991,7 @@ and the interface says so.
 | `TACIT_COMPACT_PRUNE_MIN` | `1200` | a tool result shorter than this is never pruned |
 | `TACIT_TURN_WORKER` | `process` | `thread` restores the old in-process turn worker |
 | `TACIT_DELIVER_GUARANTEE` | `1` | `0` lets a turn stop when the model stops, with no forced final round |
-| `TACIT_TURN_TOKEN_BUDGET` | `0` | hard token ceiling per turn; `0` means no ceiling |
+| `TACIT_TURN_TOKEN_BUDGET` | `0` | hard token ceiling per turn; `0` means no ceiling. Also a field in **Settings > General** |
 | `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | characters kept from a shell or search result |
 | `TACIT_READ_OUTPUT_LIMIT` | `48000` | characters kept from `read_file` |
 | `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | characters of a sub-agent report kept in the parent's window |
@@ -1003,7 +1005,7 @@ and the interface says so.
 | `TACIT_BROWSER_TEXT_LIMIT` | `6000` | characters of page text `browser` returns |
 | `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | seconds a search-and-open round may take |
 | `TACIT_RESEARCH_ASPECTS` | `3` | sub-agents one `research` question may spend |
-| `TACIT_RESEARCH_STEPS` | `6` | tool steps per `research` sub-agent |
+| `TACIT_RESEARCH_STEPS` | `6` | tool steps per `research` sub-agent; also a field in **Settings > General** |
 | `TACIT_RESEARCH_TIMEOUT` | `240` | wall-clock seconds a `research` call may take |
 | `TACIT_SKILL_INDEX_LIMIT` | `24` | skills listed in the system prompt |
 | `TACIT_SNAPSHOT_MAX_FILE` | `2097152` | bytes; a larger file is skipped by a snapshot |

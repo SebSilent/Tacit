@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="nocturne">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tacit · Documentation</title>
 <meta name="description" content="Documentation for Tacit, a coding agent you run yourself: architecture, configuration, tools, isolation, memory and cost.">
-<link rel="stylesheet" href="assets/kinpaku-tokens.css">
+<meta name="theme-color" content="#14171d">
+<link rel="stylesheet" href="assets/nocturne-tokens.css">
 <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
@@ -36,13 +37,48 @@
   <main class="page">
     <section class="hero">
       <p class="eyebrow">A coding agent you run yourself</p>
-      <h1>Documentation</h1>
+      <h1>The coding agent where nothing is hidden</h1>
       <p>How Tacit works, where each setting lives, and which line of code decides it. Every citation is a file and a line you can open.</p>
       <div class="hero-rule"></div>
       <p>One Python program serving plain web pages. No build step, no frontend toolchain, no
       database to install. The fixed cost per turn is the smallest in its class, nothing optional
       is on until you turn it on, and the sandbox reports what it actually enforces.</p>
-      <div class="card-grid">
+    </section>
+
+    <section class="demo" id="demo" aria-label="Tacit at work">
+      <div class="demo-bar">
+        <span class="demo-title">Tacit</span>
+        <span class="demo-chip">glm-5.2 · fp8</span>
+        <span class="demo-chip">default profile · 20 tools</span>
+        <span class="demo-status" id="demo-status">idle</span>
+        <span class="demo-meter" id="demo-meter" aria-hidden="true"><i></i></span>
+        <span class="demo-tokens" id="demo-tokens">0 / 128,000</span>
+        <button class="demo-play" id="demo-play" type="button">Run the turn</button>
+      </div>
+      <div class="demo-grid">
+        <aside class="demo-sessions">
+          <p class="demo-rail-label">Sessions</p>
+          <div class="d-sess"><span class="d-dot"></span>audit ledger rotation</div>
+          <div class="d-sess on"><span class="d-dot working"></span>shell timeout leaves orphans</div>
+          <div class="d-sess"><span class="d-dot"></span>compaction tail budget</div>
+          <div class="d-sess"><span class="d-dot"></span>mcp lazy activation</div>
+        </aside>
+        <div class="demo-main">
+          <div class="demo-transcript" id="demo-transcript"></div>
+          <div class="demo-strip" id="demo-strip"></div>
+          <div class="demo-composer">message Tacit</div>
+        </div>
+        <aside class="demo-assistant" id="demo-assistant"></aside>
+      </div>
+    </section>
+    <p class="demo-caption">A turn drawn with the interface's own parts, and no server behind
+    it. The tool cards open, the thinking block collapses, the task strip sits outside the
+    transcript where a compaction cannot summarise it away, and the panel on the right is the
+    Assistant: a second conversation the agent is never told exists. The counter in the bar is
+    the context window filling as the turn spends it.</p>
+
+    <p class="eyebrow">Start here</p>
+    <div class="card-grid">
 <a class="card" href="install.html"><span class="card-key">install.md</span><h2>Install</h2><p>getting it running, and what the installers do</p></a>
 <a class="card" href="interface.html"><span class="card-key">interface.md</span><h2>Interface</h2><p>the three regions, snapshots, restart, sounds</p></a>
 <a class="card" href="settings.html"><span class="card-key">settings.md</span><h2>Settings</h2><p>which tab owns which switch and which file it writes</p></a>
@@ -55,8 +91,7 @@
 <a class="card" href="mcp-and-plugins.html"><span class="card-key">mcp-and-plugins.md</span><h2>MCP and plugins</h2><p>external tools without the prompt cost</p></a>
 <a class="card" href="data-and-privacy.html"><span class="card-key">data-and-privacy.md</span><h2>Data and privacy</h2><p>every file Tacit writes and what is in it</p></a>
 <a class="card" href="testing-and-benchmarks.html"><span class="card-key">testing-and-benchmarks.md</span><h2>Testing and benchmarks</h2><p>how to run the suite and what the published figures came from</p></a>
-      </div>
-    </section>
+    </div>
 
     <article class="prose" id="page" data-md="md/index.md"></article>
   </main>
@@ -72,5 +107,6 @@
 
 <script src="assets/markdown.js"></script>
 <script src="assets/site.js"></script>
+<script src="assets/demo.js"></script>
 </body>
 </html>

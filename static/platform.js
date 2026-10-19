@@ -54,6 +54,7 @@
     { id: 'mcp', label: 'MCP', advanced: true },
     { id: 'memory', label: 'Memory', advanced: true },
     { id: 'plugins', label: 'Plugins', advanced: true },
+    { id: 'prompts', label: 'Prompts', advanced: true },
   ];
 
   // Tabs index.html owns the button for, whose panel this file still fills.
@@ -145,6 +146,39 @@
     else if (tab === 'mcp') renderMcp();
     else if (tab === 'memory') renderMemory();
     else if (tab === 'plugins') renderPlugins();
+    else if (tab === 'prompts') renderPrompts();
+  }
+
+  // ── Prompts ──────────────────────────────────────────────────────────
+  // Title and text, nothing else. The inventory comes from /api/prompts, which
+  // reads the constants that send them, so this file holds no copy of any prompt
+  // and cannot drift from one. `<details>` needs no click handler.
+  async function renderPrompts() {
+    const panel = $('#panel-prompts');
+    panel.innerHTML = '<div class="ho-loading">Loading…</div>';
+    // The standing prefix is rebuilt from the session's folder, so ask about it.
+    const T = window.Tacit || {};
+    const q = '?sid=' + encodeURIComponent(T.getSid ? T.getSid() : '')
+      + '&project=' + encodeURIComponent(T.getWorkdir ? T.getWorkdir() : '');
+    const res = await api('/api/prompts' + q);
+    if (!res || !res.ok || !res.groups) {
+      panel.innerHTML = `<p class="hint err">${esc((res || {}).error
+        || 'could not read the prompt inventory')}</p>`;
+      return;
+    }
+    const item = (name, text) => `<div class="pc-item"><div class="pc-name">${esc(name)}</div>`
+      + `<pre class="pc-text">${esc(text)}</pre></div>`;
+    const live = res.live || {};
+    const mode = { agent: 'Agent mode', subagent: 'Sub-agent mode',
+                   readonly: 'Read-only mode', chat: 'Chat mode' };
+    const now = ['agent', 'subagent', 'readonly', 'chat']
+      .filter((k) => live[k]).map((k) => item(mode[k], live[k])).join('');
+    const extra = (live.blocks || []).map((b) => item(b.name, b.text)).join('');
+    panel.innerHTML = (now || extra
+      ? `<details class="pc-group" open><summary>Current prompt</summary>${now}${extra}</details>`
+      : '')
+      + (res.groups || []).map((g) => `<details class="pc-group"><summary>${esc(g.label)}</summary>`
+        + g.items.map((i) => item(i.name, i.text)).join('') + `</details>`).join('');
   }
 
   // ── General ────────────────────────────────────────────────────────────
@@ -160,7 +194,7 @@
     // Tools are managed on the Skills & Tools tab only (one home per setting);
     // General fetches the server status, which now also reports the MCP
     // helper gate so the automatic on/off is visible where it is configured.
-    const [pf, vcs, dg, snd, au, srv, procs] = await Promise.all([
+    const [pf, vcs, dg, snd, au, srv, procs, lim] = await Promise.all([
       api('/api/profiles'),
       api('/api/harness/version-control'),
       api('/api/harness/deliver-guarantee'),
@@ -168,7 +202,36 @@
       api('/api/autoupdater/status'),
       api('/api/server/status').catch(() => null),
       api('/api/processes').catch(() => ({ processes: [] })),
+      api('/api/harness/limits').catch(() => null),
     ]);
+
+    // The caps one turn pays, with the bounds the server clamps to, so the form
+    // cannot offer a number the route would refuse.
+    const L = (lim && lim.ok ? lim.limits : null) || {};
+    const B = (lim && lim.ok ? lim.bounds : null) || {};
+    const budgetField = (key, label, hint) => {
+      const b = B[key] || { min: 0, max: 9999 };
+      return `<label class="ho-sub sm" title="${esc(hint)}">${label}`
+        + `<input class="mcp-in sm" id="lim-${key}" type="number" `
+        + `min="${b.min}" max="${b.max}" value="${L[key] != null ? L[key] : ''}"></label>`;
+    };
+    const budgetHtml = !(lim && lim.ok) ? '' : `
+      <div class="ho-section">Turn budget</div>
+      ${lim.pinned && lim.pinned.length
+        ? `<p class="hint sm err">Pinned by the environment: <code>${esc(lim.pinned.join(', '))}</code>. `
+          + 'Those variables outrank what is saved here, so these are the numbers the next turn pays.</p>'
+        : ''}
+      <div class="mcp-add">
+        ${budgetField('max_steps', 'Steps per turn',
+          'Tool calls one turn may take before it is asked to wrap up.')}
+        ${budgetField('subagent_steps', 'Steps per sub-agent',
+          'The same cap, applied to one delegated task.')}
+        ${budgetField('research_steps', 'Steps per research aspect',
+          'The same cap, applied to one aspect of a research sweep.')}
+        ${budgetField('turn_token_budget', 'Token cap per turn',
+          'Tokens one turn may bill before it stops and reports. 0 means no cap.')}
+        <button class="ho-btn small" id="limSave">Save</button>
+      </div>`;
 
     // A restart that failed leaves no server standing to report it, so the watcher
     // writes the outcome to disk and whichever server comes back, including one a
@@ -298,6 +361,7 @@
           : 'hidden - no MCP server configured. The four helper schemas (mcp_list_servers, mcp_search_tools, mcp_activate_tools, mcp_call) cost nothing and appear automatically the moment a server is added in the MCP tab.'}</span>
         <span class="badge ${(srv || {}).mcp_servers ? 'on' : ''}">${(srv || {}).mcp_servers ? 'on' : 'off'}</span>
       </div>
+      ${budgetHtml}
       <div class="ho-section">Tacit processes <span class="ho-count">${(procs.processes || []).length}</span></div>
       ${(procs.processes || []).length ? `<div class="tok-table">${(procs.processes || []).map((p) =>
         `<div class="tok-row"><span class="tok-label">${esc(p.role)}${p.session ? ' · ' + esc(p.session) : ''}</span>` +
@@ -355,6 +419,21 @@
       const r = await post('/api/profiles', { name });
       note(r.ok ? `saved profile "${r.name}"` : (r.error || 'failed'), !r.ok);
       if (r.ok) renderGeneral();
+    });
+
+    const limSave = panel.querySelector('#limSave');
+    if (limSave) limSave.addEventListener('click', async () => {
+      const body = {};
+      for (const key of ['max_steps', 'subagent_steps', 'research_steps', 'turn_token_budget']) {
+        const el = panel.querySelector('#lim-' + key);
+        if (el) body[key] = el.value;
+      }
+      limSave.disabled = true;
+      const r = await post('/api/harness/limits', body);
+      limSave.disabled = false;
+      if (!r.ok) { note(r.error || 'could not save the budgets', true); return; }
+      note('turn budgets saved: the next turn pays them');
+      renderGeneral();
     });
 
     panel.querySelector('[data-act="toggle-vcs"]').addEventListener('click', async e => {

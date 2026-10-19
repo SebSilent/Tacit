@@ -105,9 +105,12 @@ class TestPreviewAlwaysEnds(unittest.TestCase):
         self.assertIn("localStorage", fn(persisting, "previewTheme"),
                       "a persisting preview went unnoticed")
 
-        # loadPanel losing its stop — the exact bug the guard exists for
-        lost = HARNESS.replace("  stopThemePreview();\n  if (tab === 'general')",
-                               "  if (tab === 'general')", 1)
+        # loadPanel losing its stop, the exact bug the guard exists for. The anchor
+        # is the call plus the first branch after it, and the branch order changed
+        # when every tab platform.js owns began refreshing on reopen. What is
+        # planted is the same: a loadPanel that returns without dropping the preview.
+        lost = HARNESS.replace("  stopThemePreview();\n  if (tab === 'providers')",
+                               "  if (tab === 'providers')", 1)
         self.assertNotEqual(lost, HARNESS, "the loadPanel anchor moved")
         self.assertIn("stopThemePreview()", fn(HARNESS, "loadPanel"))
         self.assertNotIn("stopThemePreview()", fn(lost, "loadPanel"),

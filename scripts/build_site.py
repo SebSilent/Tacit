@@ -25,13 +25,14 @@ ASSETS = SITE / "assets"
 REPO_PAGES = (("README.md", "readme"), ("CONTRIBUTING.md", "contributing"))
 
 TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="nocturne">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{description}">
-<link rel="stylesheet" href="assets/kinpaku-tokens.css">
+<meta name="theme-color" content="#14171d">
+<link rel="stylesheet" href="assets/nocturne-tokens.css">
 <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
@@ -68,6 +69,7 @@ TEMPLATE = """<!DOCTYPE html>
 
 <script src="assets/markdown.js"></script>
 <script src="assets/site.js"></script>
+<script src="assets/demo.js"></script>
 </body>
 </html>
 """
@@ -78,6 +80,44 @@ NAV_GROUP = '<div class="nav-group">\n      <p class="nav-label">{label}</p>\n  
 CARD = ('<a class="card" href="{href}"><span class="card-key">{key}</span>'
         '<h2>{title}</h2><p>{description}</p></a>')
 
+# The interface mock. `assets/demo.js` fills the three empty containers and bails out
+# on every page that has no #demo, so this markup is the only thing that decides where
+# the demo appears. It is a shell: no sentence of it is a claim about a product, and
+# the text inside it is a turn about a defect this harness really had.
+DEMO = """    <section class="demo" id="demo" aria-label="Tacit at work">
+      <div class="demo-bar">
+        <span class="demo-title">Tacit</span>
+        <span class="demo-chip">glm-5.2 · fp8</span>
+        <span class="demo-chip">default profile · 20 tools</span>
+        <span class="demo-status" id="demo-status">idle</span>
+        <span class="demo-meter" id="demo-meter" aria-hidden="true"><i></i></span>
+        <span class="demo-tokens" id="demo-tokens">0 / 128,000</span>
+        <button class="demo-play" id="demo-play" type="button">Run the turn</button>
+      </div>
+      <div class="demo-grid">
+        <aside class="demo-sessions">
+          <p class="demo-rail-label">Sessions</p>
+          <div class="d-sess"><span class="d-dot"></span>audit ledger rotation</div>
+          <div class="d-sess on"><span class="d-dot working"></span>shell timeout leaves orphans</div>
+          <div class="d-sess"><span class="d-dot"></span>compaction tail budget</div>
+          <div class="d-sess"><span class="d-dot"></span>mcp lazy activation</div>
+        </aside>
+        <div class="demo-main">
+          <div class="demo-transcript" id="demo-transcript"></div>
+          <div class="demo-strip" id="demo-strip"></div>
+          <div class="demo-composer">message Tacit</div>
+        </div>
+        <aside class="demo-assistant" id="demo-assistant"></aside>
+      </div>
+    </section>
+    <p class="demo-caption">A turn drawn with the interface's own parts, and no server behind
+    it. The tool cards open, the thinking block collapses, the task strip sits outside the
+    transcript where a compaction cannot summarise it away, and the panel on the right is the
+    Assistant: a second conversation the agent is never told exists. The counter in the bar is
+    the context window filling as the turn spends it.</p>
+
+"""
+
 HERO = """    <section class="hero">
       <p class="eyebrow">A coding agent you run yourself</p>
       <h1>{headline}</h1>
@@ -86,10 +126,12 @@ HERO = """    <section class="hero">
       <p>One Python program serving plain web pages. No build step, no frontend toolchain, no
       database to install. The fixed cost per turn is the smallest in its class, nothing optional
       is on until you turn it on, and the sandbox reports what it actually enforces.</p>
-      <div class="card-grid">
-{cards}
-      </div>
     </section>
+
+{demo}    <p class="eyebrow">Start here</p>
+    <div class="card-grid">
+{cards}
+    </div>
 
 """
 
@@ -192,10 +234,14 @@ def main() -> None:
                                    description=esc_attr(desc))
                       for title, href, desc in nav_items)
     docs_html, repo_html = nav_html("index.html")
-    hero = HERO.format(headline=esc_attr(title_of(ROOT / "docs" / "index.md", "Documentation")),
+    # The hero's headline is the tagline the masthead already carries, not a second
+    # sentence written for the site: the build's rule is that it holds no prose the
+    # repository does not. The page's own H1 comes from docs/index.md below.
+    hero = HERO.format(headline=esc_attr(tagline),
                        lead=esc_attr("How Tacit works, where each setting lives, and which line of "
                                      "code decides it. Every citation is a file and a line you can "
                                      "open."),
+                       demo=DEMO,
                        cards=cards)
     (SITE / "index.html").write_text(TEMPLATE.format(
         title="Tacit · Documentation",

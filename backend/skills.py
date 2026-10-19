@@ -40,6 +40,13 @@ def load() -> list[dict]:
     return rows
 
 
+# The line above the list. It was inline in `index()`, which meant the prompt
+# inventory in Settings > Prompts could only show it when a skill existed, and a
+# named constant is the honest way to show the same text without copying it.
+INDEX_PREAMBLE = ("Skills available on demand. When one looks relevant to the task, call "
+                  "skill(name) to read it before acting, do not guess at what a skill says.")
+
+
 def index(limit: int | None = None) -> str:
     rows = load()
     if not rows:
@@ -47,9 +54,11 @@ def index(limit: int | None = None) -> str:
     limit = limit or config.SKILL_INDEX_LIMIT
     lines = [f"- {s['name']}: {s['description']}" for s in rows[:limit]]
     if len(rows) > limit:
-        lines.append(f"- ({len(rows), limit} more not listed)")
-    return ("Skills available on demand. When one looks relevant to the task, call skill(name) to "
-            "read it before acting, do not guess at what a skill says.\n" + "\n".join(lines))
+        # How many are missing, not the pair that produced the number: this used to
+        # interpolate `(len(rows), limit)` and reach the model as `- ((12, 8) more
+        # not listed)`, a tuple repr where a count belongs.
+        lines.append(f"- ({len(rows) - limit} more not listed)")
+    return INDEX_PREAMBLE + "\n" + "\n".join(lines)
 
 
 def read(name: str) -> str:

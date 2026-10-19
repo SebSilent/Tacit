@@ -481,6 +481,39 @@
   --dim: rgba(21, 13, 9, .62);
 }
 
+/* ── theme: kinpaku-dark (dark), black lacquer ground, gold leaf, patina teal ── */
+[data-theme="kinpaku-dark"] {
+  color-scheme: dark;
+  --bg: #100e0a;
+  --bg-2: #17140f;
+  --bg-3: #1f1b14;
+  --bg-hover: #292319;
+  --line: rgba(255, 255, 255, .10);
+  --line-2: rgba(255, 255, 255, .19);
+  --text: #f0ead8;
+  --muted: #a89d81;
+  --fadetext: #7c7360;
+  --accent: #d9b45c;
+  --accent-rgb: 217, 180, 92;
+  --on-accent: #000;
+  --accent-2: #6fb3ad;
+  --accent2-rgb: 111, 179, 173;
+  --user-bubble: #221d14;
+  --user-bubble-text: #cfc6ae;
+  --err: #d0453a;
+  --err-rgb: 208, 69, 58;
+  --warn: #d47a25;
+  --warn-rgb: 212, 122, 37;
+  --ok: #6fae6a;
+  --code-bg: #0a0907;
+  --code-text: #ded6c2;
+  --scroll: #38311f;
+  --scroll-hover: #4c4330;
+  --select-arrow: rgba(168, 157, 129, .9);
+  --shade: #080705;
+  --dim: rgba(8, 7, 5, .62);
+}
+
 /* ── theme: lagoon (dark), deep teal-slate ground, water cyan ── */
 [data-theme="contrast"] {
   color-scheme: dark;
@@ -743,6 +776,39 @@
   --select-arrow: rgba(95, 91, 75, .9);
   --shade: #191710;
   --dim: rgba(25, 23, 16, .38);
+}
+
+/* ── theme: kinpaku (light), gold-leaf paper ground, patina teal ── */
+[data-theme="kinpaku"] {
+  color-scheme: light;
+  --bg: #f6f2e7;
+  --bg-2: #fdfbf4;
+  --bg-3: #ede7d7;
+  --bg-hover: #e2dac4;
+  --line: rgba(33, 26, 8, .11);
+  --line-2: rgba(33, 26, 8, .20);
+  --text: #1f1a10;
+  --muted: #5c5341;
+  --fadetext: #837a63;
+  --accent: #7a5c12;
+  --accent-rgb: 122, 92, 18;
+  --on-accent: #fff;
+  --accent-2: #14676b;
+  --accent2-rgb: 20, 103, 107;
+  --user-bubble: #e8e0cc;
+  --user-bubble-text: #3a3220;
+  --err: #b22624;
+  --err-rgb: 178, 38, 36;
+  --warn: #9c4a00;
+  --warn-rgb: 156, 74, 0;
+  --ok: #3f6a3a;
+  --code-bg: #ece5d3;
+  --code-text: #241d0e;
+  --scroll: #cfc6ad;
+  --scroll-hover: #b3a883;
+  --select-arrow: rgba(92, 83, 65, .9);
+  --shade: #211a08;
+  --dim: rgba(33, 26, 8, .38);
 }
 
 /* ── theme: sorrel (light), pale clay ground, deep olive-bronze ── */
@@ -2893,6 +2959,8 @@ input, textarea {
 .sw-monotype { background: linear-gradient(135deg, #202020 50%, #505050 50%); }
 .sw-foxglove { background: linear-gradient(135deg, #6c4d87 50%, #006770 50%); }
 .sw-sorrel { background: linear-gradient(135deg, #3d5c95 50%, #00686d 50%); }
+.sw-kinpaku-dark { background: linear-gradient(135deg, #d9b45c 50%, #6fb3ad 50%); }
+.sw-kinpaku { background: linear-gradient(135deg, #7a5c12 50%, #14676b 50%); }
 
 .theme-card {
   display: flex;
@@ -5008,6 +5076,59 @@ input, textarea {
 }
 .adv-switch input {
   margin-right: var(--sp-3);
+}
+
+/* ── the prompt inventory (Settings > Prompts) ──────────────────────── */
+.pc-group {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--sp-5);
+}
+.pc-group > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-5);
+  padding: var(--sp-6) var(--sp-7);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-uirow);
+  color: var(--text);
+  transition: color var(--dur-2) var(--ease-out);
+}
+.pc-group > summary::-webkit-details-marker { display: none; }
+.pc-group > summary::before {
+  content: "▸";
+  color: var(--fadetext);
+  font-size: var(--fs-2);
+}
+.pc-group[open] > summary::before { content: "▾"; }
+.pc-group > summary:hover { color: var(--accent); }
+.pc-item {
+  border-top: 1px solid var(--line);
+  padding: var(--sp-6) var(--sp-7);
+}
+.pc-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-5);
+  font-size: var(--fs-3);
+  color: var(--text);
+}
+.pc-text {
+  margin: var(--sp-5) 0 0;
+  padding: var(--sp-6) var(--sp-7);
+  background: var(--code-bg);
+  color: var(--code-text);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 22em;
+  overflow-y: auto;
 }
 
 /* ── snapshot timeline ─────────────────────────────────────────────── */

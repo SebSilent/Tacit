@@ -14,7 +14,7 @@ looking at:
   was bypassed with the syntax of a token.
 
 Allowed to be literal: the bare `:root`, every `[data-theme]` block (that is what a
-theme *is*), and the twenty `.sw-<theme>` swatch rules — a swatch must show its own
+theme *is*), and the twenty-two `.sw-<theme>` swatch rules — a swatch must show its own
 palette no matter which theme is active, so `var()` there would be wrong.
 """
 
@@ -42,7 +42,7 @@ BARE_ROOT_COLORS = {"--on-accent", "--shade"}
 
 # Kept in step with test_style_themes.THEME_COUNT: a swatch is two stops, so the
 # literal allowance below is this times two and moves with the theme count only.
-THEME_COUNT = 20
+THEME_COUNT = 22
 
 
 def blank_comments(text):
