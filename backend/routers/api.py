@@ -282,7 +282,9 @@ async def set_default(request: Request):
     body = await request.json()
     ref = (body.get("model") or "").strip()
     reg = config.registry()
-    if not ref or not config.resolve_model(ref):
+    # `known_model`, not `resolve_model`: the fallback must never answer for a
+    # name the caller typed and make it look valid.
+    if not ref or not config.known_model(ref):
         return _fail("unknown model")
     pid, _, mid = ref.partition("/")
     entry = next((m for m in ((reg.get("providers") or {}).get(pid) or {}).get("models") or []
@@ -793,7 +795,7 @@ async def detect_thinking(request: Request):
 
     body = await request.json()
     ref = (body.get("ref") or "").strip()
-    if not ref or not config.resolve_model(ref):
+    if not ref or not config.known_model(ref):
         return _fail("unknown model")
     found = thinking.detect(ref, deep=bool(body.get("deep")))
     if not found.get("ok"):
@@ -841,10 +843,27 @@ async def get_delegate_model():
 async def set_delegate_model(request: Request):
     body = await request.json()
     ref = str(body.get("delegate_model") or "").strip()
-    if ref and not config.resolve_model(ref):
+    if ref and not config.known_model(ref):
         return _fail("unknown model")
     config.save_prefs({"delegateModel": ref})
     return _ok(delegate_model=config.delegate_model())
+
+
+@router.get("/api/harness/fallback-model")
+async def get_fallback_model():
+    """The model a session runs on when its own is gone. Empty = fail instead."""
+    return _ok(fallback_model=config.fallback_model(),
+               models=config.model_list())
+
+
+@router.post("/api/harness/fallback-model")
+async def set_fallback_model(request: Request):
+    body = await request.json()
+    ref = str(body.get("fallback_model") or "").strip()
+    if ref and not config.known_model(ref):
+        return _fail("unknown model")
+    config.save_prefs({"fallbackModel": ref})
+    return _ok(fallback_model=config.fallback_model())
 
 
 @router.get("/api/harness/deliver-guarantee")

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend import (agent, assistant, audit, autoupdater, config, deps, extras,  # noqa: E402
                      guidance, mcp_registry, metrics, model_settings,
                      plugin_manager, proctools, project_context, session_runtime,
-                     tokens, turn_worker)
+                     store, tokens, turn_worker)
 from backend.ai import engine  # noqa: E402
 from backend.plugins import task_list  # noqa: E402
 from backend import plan_runtime  # noqa: E402
@@ -1137,17 +1137,20 @@ class TestCompactionMechanics(Isolated):
         sent = seen[0][1]["content"]
         self.assertLessEqual(len(sent), config.SUMMARY_INPUT_MAX_CHARS)
 
-    def test_a_nominated_cheap_model_does_the_summarising(self):
+    def test_the_summariser_is_the_model_in_use_and_no_override_is_read(self):
+        # `TACIT_COMPACT_MODEL` let a model nobody had chosen from any panel write
+        # the handover note. It is gone, and the constant with it: the session's
+        # own model does the job, the only nominated backup is the Settings
+        # fallback, and every notice names whichever one answered.
+        self.assertFalse(hasattr(config, "COMPACT_MODEL"),
+                         "an override with no Settings surface is a hidden model")
         seen = []
         orig = agent.engine.chat
         agent.engine.chat = lambda m, **kw: (seen.append(kw.get("ref")),
                                              {"content": "s"})[1]
         self.addCleanup(setattr, agent.engine, "chat", orig)
-        orig_model = config.COMPACT_MODEL
-        config.COMPACT_MODEL = "cheap/summariser"
-        self.addCleanup(setattr, config, "COMPACT_MODEL", orig_model)
         agent._summarise("digest", ref="expensive/working-model")
-        self.assertEqual(seen[0], "cheap/summariser")
+        self.assertEqual(seen[0], "expensive/working-model")
 
     def test_the_working_model_is_used_when_none_is_nominated(self):
         seen = []
@@ -1157,6 +1160,474 @@ class TestCompactionMechanics(Isolated):
         self.addCleanup(setattr, agent.engine, "chat", orig)
         agent._summarise("digest", ref="p/m")
         self.assertEqual(seen[0], "p/m")
+
+
+# ── the reclamation has to cross the process boundary ────────────────────
+class TestCompactionReachesTheStore(Isolated):
+    """A turn runs in a subprocess, and its parent writes the transcript.
+
+    The two disagreed by design and nobody reconciled them: the worker compacted
+    its own wire list to stay under the window, the parent rebuilt the record from
+    the turn's trace, every step verbatim. So `saved_compaction` climbed into the
+    millions while not one session on the machine held a summary row, and
+    `should_compact` — reading the last billed prompt, which that very compaction
+    had shrunk — stayed asleep at 11% over a 640,000-token transcript.
+    """
+
+    def _rec(self, turns=100, window=262_144, meter=29_393, bulk=12000):
+        msgs = [{"role": "user", "content": "the task: fix calc.py"}]
+        for i in range(turns):
+            msgs.append({"role": "assistant", "content": f"step {i}",
+                         "tools": [{"id": f"c{i}", "name": "read_file",
+                                    "args": {"path": "calc.py"},
+                                    "result": "x" * bulk, "is_error": False}]})
+        return {"id": "x", "model": "p/m", "messages": msgs,
+                "usage": {"context": {"tokens": meter, "window": window}}}
+
+    def test_a_full_record_compacts_even_when_the_meter_reads_low(self):
+        # The shape that never fired: a session carrying 1.2M characters of
+        # transcript while the last billed prompt read 11% of the window.
+        rec = self._rec()
+        self.assertLess(rec["usage"]["context"]["tokens"],
+                        config.context_fill_target(262_144),
+                        "the meter is deliberately the small number in this test")
+        self.assertTrue(agent.should_compact(rec),
+                        "the stored transcript is what gets re-sent next turn")
+
+    def test_the_meter_still_wins_when_it_is_the_larger_number(self):
+        # Tool schemas and the standing prompt are in the billed figure and not in
+        # the transcript, so passing the mark on the provider's number still fires.
+        rec = self._rec(turns=6, meter=300_000)
+        self.assertTrue(agent.should_compact(rec))
+
+    def test_a_short_record_is_left_alone_however_the_meter_reads(self):
+        rec = self._rec(turns=3, meter=300_000)
+        self.assertFalse(agent.should_compact(rec),
+                         "four rows is not enough transcript to fold and keep a tail")
+
+    def test_a_mid_turn_compaction_lands_in_the_stored_record(self):
+        rec = self._rec()
+        before = len(rec["messages"])
+        saved = agent.apply_stored_summary(rec, "NOTE: read calc.py 100 times",
+                                           kept_tokens=8000)
+        self.assertGreater(saved, 0)
+        self.assertLess(len(rec["messages"]), before)
+        notes = [m for m in rec["messages"] if m.get("role") == "summary"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("read calc.py", notes[0]["content"])
+        # The task is pinned: a session that forgets its own question restarts it.
+        self.assertEqual(rec["messages"][0]["content"], "the task: fix calc.py")
+
+    def test_work_added_after_the_note_is_kept_verbatim(self):
+        # The note describes what the worker had folded; everything it did after
+        # that is in nobody's summary, so the fold must never reach it.
+        rec = self._rec()
+        last_two = [m["content"] for m in rec["messages"][-2:]]
+        agent.apply_stored_summary(rec, "NOTE", kept_tokens=0, newer_rows=2)
+        self.assertEqual([m["content"] for m in rec["messages"]][-2:], last_two)
+        self.assertEqual(len(rec["messages"]), 4)   # task, note, the two kept steps
+
+    def test_a_second_fold_refines_the_note_instead_of_stacking_two(self):
+        rec = self._rec()
+        agent.apply_stored_summary(rec, "FIRST NOTE", kept_tokens=1000)
+        for i in range(30):
+            rec["messages"].append(
+                {"role": "assistant", "content": f"later {i}",
+                 "tools": [{"id": f"l{i}", "name": "grep_files", "args": {},
+                            "result": "y" * 9000, "is_error": False}]})
+        agent.apply_stored_summary(rec, "SECOND NOTE", kept_tokens=1000)
+        notes = [m for m in rec["messages"] if m.get("role") == "summary"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("SECOND NOTE", notes[0]["content"])
+        self.assertNotIn("FIRST NOTE", json.dumps(rec["messages"]))
+
+    def test_a_fold_that_would_not_shrink_the_record_does_nothing(self):
+        rec = {"id": "x", "messages": [{"role": "user", "content": "t"},
+                                       {"role": "assistant", "content": "a"}]}
+        self.assertEqual(agent.apply_stored_summary(rec, "NOTE", kept_tokens=100000), 0)
+        self.assertEqual(len(rec["messages"]), 2)
+
+    def test_an_empty_note_is_not_written_into_the_transcript(self):
+        rec = self._rec()
+        before = len(rec["messages"])
+        self.assertEqual(agent.apply_stored_summary(rec, "   ", kept_tokens=1000), 0)
+        self.assertEqual(len(rec["messages"]), before)
+
+    def test_the_compaction_event_carries_the_note_and_the_tail_it_replaced(self):
+        # The contract across the boundary: without these two fields the parent
+        # cannot know what the summary stands for, or how wide to keep the tail.
+        msgs = ([{"role": "system", "content": "standing prompt"},
+                 {"role": "user", "content": "THE TASK"}]
+                + [{"role": "assistant", "content": f"step {i} " + "w" * 4000}
+                   for i in range(30)])
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: {"content": "THE NOTE"}
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        info = agent.compact_messages(msgs, ref="p/m", budget_chars=40_000)
+        self.assertEqual(info["summary"], "THE NOTE")
+        self.assertGreater(info["kept_tokens"], 0)
+        self.assertGreater(info["kept"], 0)
+
+    def test_the_drivers_epilogue_writes_the_workers_note_to_disk(self):
+        # The seam the whole bug lived in: the turn runs in a subprocess, its
+        # parent rebuilds the transcript from `trace`, and the note has to be in
+        # what the parent saves, or nothing was reclaimed at all.
+        # The record has to exist on disk first: `store.save` refuses one whose
+        # file and index row are both gone, which is the anti-resurrection guard
+        # and not a failure of the fold.
+        store.create(title="fold", model="p/m", sid="x")
+        rec = self._rec()
+        store.save(rec)
+        self.assertEqual(len(store.get("x")["messages"]), 101)
+        trace = []
+
+        def fake_run_turn(messages, **kw):
+            trace.append({"text": "step a", "tools": []})
+            yield {"type": "compaction", "compacted": 20, "kept": 3,
+                   "chars_before": 900000, "chars_after": 40000, "saved": 215000,
+                   "summary": "NOTE FROM THE WORKER", "kept_tokens": 6000}
+            trace.append({"text": "step b", "tools": []})
+            yield {"type": "done"}
+
+        orig_run, orig_bus, orig_state = (session_runtime.agent.run_turn,
+                                          session_runtime.turn_bus,
+                                          session_runtime.session_state)
+        published = []
+        session_runtime.agent.run_turn = fake_run_turn
+        session_runtime.turn_bus = types.SimpleNamespace(
+            publish=lambda ev: published.append(ev), finish=lambda *a, **kw: None,
+            start=lambda *a, **kw: None)
+        session_runtime.session_state = types.SimpleNamespace(
+            running=lambda sid: None, end=lambda sid: None,
+            begin=lambda *a, **kw: None, busy=lambda sid: False)
+        self.addCleanup(setattr, session_runtime.agent, "run_turn", orig_run)
+        self.addCleanup(setattr, session_runtime, "turn_bus", orig_bus)
+        self.addCleanup(setattr, session_runtime, "session_state", orig_state)
+
+        run = {"stop": threading.Event(), "steer": [], "worker": None,
+               "thread": None, "loop": None}
+        session_runtime._drive_turn(
+            "x", rec, [], project=None, ref="p/m", chat=True, has_instructions=False,
+            reasoning=None, trace=trace, run=run,
+            bus=types.SimpleNamespace(publish=lambda ev: published.append(ev)))
+
+        saved = session_runtime.store.get("x") or {}
+        notes = [m for m in (saved.get("messages") or []) if m.get("role") == "summary"]
+        self.assertEqual(len(notes), 1, "the note has to reach the store")
+        self.assertIn("NOTE FROM THE WORKER", notes[0]["content"])
+        # Step b ran after the note was written, so no summary describes it.
+        self.assertIn("step b", json.dumps(saved.get("messages") or []))
+        self.assertLess(len(saved["messages"]), 103,
+                        "the record came down: 101 rows in, a folded note out")
+
+    def test_a_hand_compaction_moves_the_meter_and_the_ledger(self):
+        # The interface's "Compact context" command. It used to fold the record and
+        # tell nobody: the bar kept reading the old fill over a transcript that had
+        # just been compacted, and the dashboard's saved-by-compaction row stayed
+        # at zero for a saving nobody had ever recorded.
+        rec = self._rec()
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: {"content": "NOTE FROM THE SUMMARISER"}
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        info = session_runtime.compact_now(rec, force=True)
+        self.assertTrue(info["compacted"])
+        self.assertGreater(info["saved_tokens"], 0)
+        self.assertEqual(info["model"], "p/m",
+                         "which model wrote the note is a fact the person can see")
+        self.assertLess(rec["usage"]["context"]["tokens"], 29_393,
+                        "the meter came down with the record")
+        self.assertFalse(rec["usage"]["compacting"], "the pulse ends with the call")
+        self.assertGreater((rec.get("metrics") or {}).get("saved_compaction"), 0)
+
+    def test_compact_now_respects_the_trigger_unless_forced(self):
+        rec = self._rec(turns=6, meter=100)
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: {"content": "NOTE"}
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        self.assertIsNone(session_runtime.compact_now(rec),
+                          "an auto pass over a record under budget pays no model call")
+        self.assertTrue(session_runtime.compact_now(rec, force=True)["compacted"])
+
+    def test_the_meter_never_reads_below_the_record_that_survives(self):
+        # The saving is measured on the stored record and the meter holds a billed
+        # prompt, so subtracting alone drove the 99% session to 0% right after a
+        # compaction that had just kept 40,000 characters of work verbatim.
+        rec = self._rec(turns=1)
+        rec["usage"] = {"context": {"tokens": 259_730, "window": 262_144,
+                                    "percent": 99.1}}
+        session_runtime._lower_context(rec, 350_000)
+        ctx = rec["usage"]["context"]
+        self.assertGreaterEqual(ctx["tokens"], agent.stored_tokens(rec["messages"]),
+                                "the bar cannot claim an empty context it just filled")
+        self.assertGreater(ctx["percent"], 0)
+
+    def test_lowering_the_context_actually_lowers_it(self):
+        # It used to read `max(current, saved)`, which can only hold the line up:
+        # a compaction that reclaimed 300,000 tokens left the bar at 99%.
+        rec = {"usage": {"context": {"tokens": 259_730, "window": 262_144,
+                                     "percent": 99.1}}}
+        session_runtime._lower_context(rec, 200_000)
+        ctx = rec["usage"]["context"]
+        self.assertEqual(ctx["tokens"], 59_730)
+        self.assertEqual(ctx["percent"], 22.8)
+
+
+# ── a model nobody chose must never answer ─────────────────────────────
+class TestModelResolution(Isolated):
+    """`resolve_model` used to end with the first model in the registry.
+
+    A session naming `zai_cn/glm-4.5` after that provider was deleted silently ran
+    on whatever `model_list()` returned first, at another model's cost, quality and
+    context window, with no trace in the transcript. The honest shape: the ref,
+    else the default when no ref was given, else the fallback a person nominated in
+    Settings, else nothing, and an error that names what failed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.write_json(config.MODELS_FILE, {
+            "default": "alpha/one",
+            "providers": {
+                "alpha": {"baseUrl": "https://a.invalid/v1", "apiKey": "k",
+                          "models": [{"id": "one", "contextWindow": 200_000}]},
+                "beta": {"baseUrl": "https://b.invalid/v1", "apiKey": "k",
+                         "models": [{"id": "two", "contextWindow": 32_000}]}}})
+
+    def test_an_unknown_provider_is_not_answered_with_the_first_model(self):
+        self.assertIsNone(config.resolve_model("zeta/gone"))
+
+    def test_the_nominated_fallback_may_take_a_model_that_is_gone(self):
+        config.save_prefs({"fallbackModel": "beta/two"})
+        self.assertEqual(config.resolve_model("zeta/gone")["ref"], "beta/two")
+
+    def test_a_session_with_no_model_at_all_falls_back_too(self):
+        config.write_json(config.MODELS_FILE, {"default": "", "providers": {
+            "beta": {"baseUrl": "https://b.invalid/v1", "apiKey": "k",
+                     "models": [{"id": "two"}]}}})
+        config.save_prefs({"fallbackModel": "beta/two"})
+        self.assertEqual(config.resolve_model(None)["ref"], "beta/two")
+
+    def test_with_no_fallback_there_is_no_model_and_the_error_says_so(self):
+        with self.assertRaises(engine.EngineError) as got:
+            engine._target("zeta/gone")
+        msg = str(got.exception)
+        self.assertIn("zeta/gone", msg, "name the ref that failed, not a generic fault")
+        self.assertIn("fallback", msg, "and say what the person can do about it")
+
+    def test_the_environment_can_nominate_the_fallback_without_a_panel_write(self):
+        orig = os.environ.pop("TACIT_FALLBACK_MODEL", None)
+        os.environ["TACIT_FALLBACK_MODEL"] = "alpha/one"
+        self.addCleanup(os.environ.pop, "TACIT_FALLBACK_MODEL", None)
+        if orig is not None:      # a pinned deploy keeps whatever it pinned
+            self.addCleanup(os.environ.__setitem__, "TACIT_FALLBACK_MODEL", orig)
+        self.assertEqual(config.fallback_model(), "alpha/one")
+
+    def test_validation_is_never_answered_by_the_fallback(self):
+        # A settings POST asks "is this name real", and the fallback answering for
+        # a name the caller typed would store a model that does not exist.
+        config.save_prefs({"fallbackModel": "beta/two"})
+        self.assertFalse(config.known_model("zeta/gone"))
+        self.assertTrue(config.known_model("beta/two"))
+        self.assertTrue(config.known_model("alpha/one"))
+
+    def test_the_fallback_is_reported_as_the_model_that_wrote_the_note(self):
+        config.save_prefs({"fallbackModel": "beta/two"})
+        self.assertEqual(session_runtime.summariser_name("zeta/gone"), "beta/two")
+        self.assertEqual(session_runtime.summariser_name("alpha/one"), "alpha/one")
+
+
+# ── the backup a person can see and choose, not one the code picks for them ──
+class TestFallbackIsAChoice(Isolated):
+    """A fallback you cannot set is the same bug as one you never knew about.
+
+    The substitution that used to live in `resolve_model` answered a missing model
+    with the registry's first row. Removing it without giving the person a way to
+    nominate a backup would just move the silence, so the route and the Settings
+    control are pinned here: the endpoint stores what it is told and refuses what it
+    does not recognise, and the General tab is wired to it rather than to a dead id.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.write_json(config.MODELS_FILE, {
+            "default": "alpha/one",
+            "providers": {
+                "alpha": {"baseUrl": "https://a.invalid/v1", "apiKey": "k",
+                          "models": [{"id": "one", "contextWindow": 200_000}]},
+                "beta": {"baseUrl": "https://b.invalid/v1", "apiKey": "k",
+                         "models": [{"id": "two", "contextWindow": 32_000}]}}})
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        return TestClient(app)
+
+    def test_the_route_stores_a_ref_and_reads_it_back(self):
+        http = self._client()
+        got = http.get("/api/harness/fallback-model").json()
+        self.assertEqual(got["fallback_model"], "", "nothing is nominated by default")
+        self.assertTrue(got["models"], "the picker needs the registry to fill itself")
+        put = http.post("/api/harness/fallback-model",
+                        json={"fallback_model": "beta/two"}).json()
+        self.assertTrue(put["ok"], put)
+        self.assertEqual(put["fallback_model"], "beta/two")
+        self.assertEqual(config.fallback_model(), "beta/two")
+
+    def test_the_route_refuses_a_ref_that_is_not_real(self):
+        # Storing a name the registry does not have would put the silence back: the
+        # next turn would ask for a model that cannot exist.
+        http = self._client()
+        http.post("/api/harness/fallback-model", json={"fallback_model": "beta/two"})
+        bad = http.post("/api/harness/fallback-model",
+                        json={"fallback_model": "zeta/gone"}).json()
+        self.assertFalse(bad["ok"], bad)
+        self.assertEqual(config.fallback_model(), "beta/two",
+                         "a refused write must not move the stored value")
+
+    def test_clearing_the_fallback_is_a_valid_write(self):
+        # Empty is the honest default: no backup, so a missing model fails loudly.
+        http = self._client()
+        http.post("/api/harness/fallback-model", json={"fallback_model": "beta/two"})
+        put = http.post("/api/harness/fallback-model", json={"fallback_model": ""}).json()
+        self.assertTrue(put["ok"], put)
+        self.assertEqual(config.fallback_model(), "")
+        self.assertIsNone(config.resolve_model("zeta/gone"))
+
+    def test_the_general_tab_is_wired_to_the_route(self):
+        """The picker exists, is reachable, and says what clearing it means.
+
+        A control rendered against a route that 404s is a dead button, and the tab
+        already hides the row when the fetch fails, so both halves get checked.
+        """
+        src = Path("static/platform.js").read_text(encoding="utf-8")
+        self.assertIn("api('/api/harness/fallback-model')", src,
+                      "the General tab never asks the route what is stored")
+        self.assertIn("post('/api/harness/fallback-model'", src,
+                      "the picker has no way to save")
+        self.assertIn('id="fbProvider"', src)
+        self.assertIn('id="fbModel"', src)
+        self.assertIn("(no fallback)", src,
+                      "the empty choice has to be selectable, not just absent")
+        self.assertIn("not in the registry", src,
+                      "a stored ref the registry lost must still be shown")
+
+    def test_no_hidden_model_writes_the_summary(self):
+        """The summariser runs on the session's model, with no env-only override.
+
+        `TACIT_COMPACT_MODEL` was a second model nobody could see in Settings, and a
+        fold written by it was reported as the session's own work.
+        """
+        cfg = Path(config.__file__).read_text(encoding="utf-8")
+        # A comment may name the thing it says was removed; a read of it may not.
+        self.assertNotIn('os.environ.get("TACIT_COMPACT_MODEL"', cfg)
+        self.assertNotIn('COMPACT_MODEL =', cfg)
+        self.assertNotIn("TACIT_COMPACT_MODEL",
+                         Path("backend/agent.py").read_text(encoding="utf-8"))
+        src = Path("backend/agent.py").read_text(encoding="utf-8")
+        start = src.index("def _summarise")
+        body = src[start:start + 1400]
+        self.assertIn("ref=ref", body,
+                      "the fold has to be written by the session's own model")
+        self.assertNotIn("model_list()", body,
+                         "a summariser that reads the registry picks a model itself")
+
+
+# ── the fold is visible while it runs, and the composer shuts for it ───
+class TestCompactionIsVisible(ProjectFixture):
+    """A compaction rewrites the transcript every window is looking at.
+
+    It has to say so while it is in flight, not in a notice after it is done, and
+    it has to stop a second turn starting against the record mid-fold.
+    """
+
+    def test_the_fold_is_announced_before_the_summariser_is_called(self):
+        orig_budget, orig_chat = agent.context_budget, agent.engine.chat
+        agent.context_budget = lambda ref=None, rec=None: 1500
+        agent.engine.chat = lambda m, **kw: {"content": "SUMMARY"}
+        self.addCleanup(setattr, agent, "context_budget", orig_budget)
+        self.addCleanup(setattr, agent.engine, "chat", orig_chat)
+        steps = [[{"type": "tool_calls", "calls": [
+            {"id": f"c{i}", "name": "read_file",
+             "arguments": json.dumps({"path": "long.txt", "offset": i * 40})}]},
+            {"type": "usage", "usage": {"input": 800, "output": 10, "total": 810}},
+            {"type": "done", "model": {"ref": "p/m"}}] for i in range(6)]
+        steps.append(_text_step("done"))
+        orig_stream = agent.engine.stream_chat
+        agent.engine.stream_chat = ScriptedEngine(steps)
+        self.addCleanup(setattr, agent.engine, "stream_chat", orig_stream)
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "read it"}]
+        kinds = [e["type"] for e in agent.run_turn(msgs, project=self.proj(), ref="p/m",
+                                                   session="S")]
+        self.assertIn("compaction_start", kinds)
+        self.assertLess(kinds.index("compaction_start"), kinds.index("compaction"),
+                        "announced while it is still true, not after")
+
+    def test_the_driver_shuts_the_composer_for_the_fold_and_reopens_it(self):
+        rec = {"id": "v", "messages": [{"role": "user", "content": "t"}]}
+
+        def fake_run_turn(messages, **kw):
+            yield {"type": "compaction_start"}
+            yield {"type": "compaction", "compacted": 4, "kept": 2,
+                   "chars_before": 90000, "chars_after": 4000, "saved": 21000,
+                   "summary": "NOTE", "kept_tokens": 500}
+            yield {"type": "done"}
+
+        orig_run, orig_bus, orig_state = (session_runtime.agent.run_turn,
+                                          session_runtime.turn_bus,
+                                          session_runtime.session_state)
+        published = []
+        session_runtime.agent.run_turn = fake_run_turn
+        session_runtime.turn_bus = types.SimpleNamespace(
+            publish=lambda ev: published.append(ev), finish=lambda *a, **kw: None)
+        session_runtime.session_state = types.SimpleNamespace(
+            running=lambda sid: None, end=lambda sid: None)
+        self.addCleanup(setattr, session_runtime.agent, "run_turn", orig_run)
+        self.addCleanup(setattr, session_runtime, "turn_bus", orig_bus)
+        self.addCleanup(setattr, session_runtime, "session_state", orig_state)
+        run = {"stop": threading.Event(), "steer": [], "worker": None,
+               "thread": None, "loop": None}
+        session_runtime._drive_turn(
+            "v", rec, [], project=None, ref="p/m", chat=True, has_instructions=False,
+            reasoning=None, trace=[], run=run,
+            bus=types.SimpleNamespace(publish=lambda ev: published.append(ev)))
+        marks = [(e.get("type"), e.get("on")) for e in published if e.get("type") == "compacting"]
+        self.assertEqual(marks, [("compacting", True), ("compacting", False)],
+                         "on while the summariser runs, off when the fold is reported")
+
+    def test_compact_now_notifies_around_the_summariser_call(self):
+        seen = []
+        rec = {"id": "v", "model": "p/m", "usage": {},
+               "messages": [{"role": "user", "content": "t"}]
+               + [{"role": "assistant", "content": "x " * 400} for _ in range(9)]}
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: {"content": "NOTE"}
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        session_runtime.compact_now(rec, force=True, notice=seen.append)
+        self.assertEqual(seen, [True, False])
+        self.assertFalse(rec["usage"]["compacting"], "the flag ends with the call")
+
+    def test_a_fold_that_is_not_attempted_never_announces_itself(self):
+        # Under budget means no summariser call, so no flicker over the composer.
+        seen = []
+        rec = {"id": "v", "model": "p/m", "usage": {},
+               "messages": [{"role": "user", "content": "t"}]
+               + [{"role": "assistant", "content": "short"} for _ in range(9)]}
+        self.assertIsNone(session_runtime.compact_now(rec, notice=seen.append))
+        self.assertEqual(seen, [])
+
+    def test_a_hand_compaction_claims_the_session(self):
+        # The busy mark is what makes "wait for it" true rather than merely polite:
+        # a turn started from another window against a record mid-fold would write
+        # back over it.
+        from backend import session_state
+        orig = session_runtime.session_state
+        self.addCleanup(setattr, session_runtime, "session_state", orig)
+        session_state.reset()
+        session_state.begin("h", "compact")
+        self.assertTrue(session_state.busy("h"))
+        self.assertEqual(session_state.get("h")["kind"], "compact")
+        session_state.end("h")
+        self.assertFalse(session_state.busy("h"))
 
 
 class TestSummaryFraming(unittest.TestCase):

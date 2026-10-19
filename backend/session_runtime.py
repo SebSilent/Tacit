@@ -452,10 +452,92 @@ def _lower_context(rec: dict, saved: int) -> None:
     saved = int(saved or 0)
     if not ctx or not saved:
         return
-    tokens = max(1, int(ctx.get("tokens") or 0), saved)
+    # Subtracted, exactly as this function's name and docstring say. It used to
+    # read `max(current, saved)`, which can only ever hold the line up or push it
+    # past the real figure: a compaction that reclaimed 300,000 tokens left the
+    # bar at 99% and the trigger judging against a number that had just been
+    # written off, so the interface disagreed with the record it described.
+    # The saving is measured on the stored record and the meter holds the last
+    # billed prompt, which are not the same base: subtracting can land below the
+    # transcript that actually exists, and a bar reading 0% right after a
+    # compaction that kept 40,000 characters of work is its own kind of lie. The
+    # record's own size is the floor; the provider corrects upward on the next
+    # call, because it alone counts the tool schemas.
+    floor = agent.stored_tokens(rec.get("messages") or [])
+    tokens = max(1, int(ctx.get("tokens") or 0) - saved, floor)
     ctx["tokens"] = tokens
     window = ctx.get("window") or 0
     ctx["percent"] = round(tokens / window * 100, 1) if window else None
+
+
+def summariser_name(ref: str | None) -> str:
+    """Which model actually wrote a compaction note.
+
+    Named in every notice that reports one, because a summary written by a model
+    nobody picked is precisely the thing this program does not get to hide. The
+    resolution may land on the Settings fallback when the session's own model is
+    gone, and then the notice says so.
+    """
+    return (config.resolve_model(ref) or {}).get("ref") or ref or "the session model"
+
+
+def compacting_notice(bus, sid: str):
+    """A callable that tells every viewer of one session whether it is compacting.
+
+    Sent on the bus rather than only to the socket that asked, because a hand
+    compaction rewrites the transcript every window is looking at, and a turn
+    started from a second device against a record mid-fold is the race the busy
+    mark exists to stop.
+    """
+    def notice(on: bool) -> None:
+        try:
+            if bus is not None:
+                bus.publish({"type": "compacting", "sid": sid, "on": bool(on)})
+        except Exception:  # noqa: BLE001
+            pass    # a viewer that cannot be told is not a reason to lose the fold
+    return notice
+
+
+def compact_now(rec: dict, *, force: bool = False, notice=None) -> dict | None:
+    """Compact the stored record and account for it, in one place.
+
+    Two callers need exactly this: the turn start, and the interface's forced
+    "Compact context" command. The accounting used to live only in the turn start,
+    so a hand-compaction rewrote the transcript and told nobody: the meter kept
+    reading 99% over a record that had just been folded, and the dashboard's
+    saved-by-compaction row stayed at zero. One owner for both, so the second
+    caller cannot be forgotten again.
+
+    The ``compacting`` flag goes up around the summariser because it is a model
+    call and the caller waits on it. Nothing ever set that flag before, so the
+    interface's "compacting…" pulse could not fire and a turn that paused for
+    seconds to write a handover note read as a turn that had hung.
+    """
+    if not force and not agent.should_compact(rec):
+        return None
+    ref = rec.get("model") or None
+    u = rec.setdefault("usage", {})
+    u["compacting"] = True
+    if notice:
+        notice(True)
+    try:
+        info = agent.compact_history(rec, ref=ref, force=force)
+    finally:
+        u["compacting"] = False
+        if notice:
+            notice(False)
+    if not info or not info.get("compacted"):
+        return info
+    saved = max(0, token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0))
+                - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0)))
+    metrics.bump(rec, saved_compaction=saved)
+    _lower_context(rec, saved)
+    # Named in the notice, because which model wrote the handover note is a fact
+    # about the session and not an implementation detail: the transcript is the
+    # only place a person can see that the Settings fallback wrote it.
+    info["saved_tokens"] = saved
+    info["model"] = summariser_name(ref)
+    return info
 
 
 def _account_context(rec: dict) -> None:
@@ -540,6 +622,10 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     worker = run.get("worker")
     started = time.time()
     terminal = None
+    # A compaction that ran inside the worker, held for the epilogue: the stored
+    # transcript is written there, and it is the only place the reclamation can
+    # still be seen by the next turn.
+    pending: dict | None = None
     try:
         stream = (worker.events() if worker is not None else
                   agent.run_turn(messages, project=project, ref=ref, chat=chat,
@@ -565,18 +651,38 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                                   "own context; "
                                   f"{token_mod.label(ev.get('saved') or 0)} kept out of "
                                   "this one")}
+            elif kind == "compaction_start":
+                # The summariser call is in flight inside the worker. The bar
+                # pulses and the composer shuts for this session while it does, so
+                # a person cannot start a second turn against a transcript that is
+                # being rewritten, and cannot mistake the pause for a hung turn.
+                rec.setdefault("usage", {})["compacting"] = True
+                ev = {"type": "compacting", "on": True}
             elif kind == "compaction":
                 # Mid-turn compaction is a real saving and has to reach the
                 # ledger, or the dashboard's row stays at zero while the
                 # turn it describes actually reclaimed the tokens.
                 saved = int(ev.get("saved") or 0)
                 metrics.bump(rec, saved_compaction=saved)
-                _lower_context(rec, saved)
+                # The meter is not moved here. The next call reports its own,
+                # smaller prompt and the provider's number wins; if the turn ends
+                # before another call, the epilogue's fold moves it once. Lowering
+                # it here as well would subtract the same reclamation twice.
                 rec.setdefault("usage", {})["compacting"] = False
+                bus.publish({"type": "compacting", "on": False, "sid": sid})
+                # Hold the note for the epilogue. The worker's transcript dies
+                # with it, and `trace` is what rebuilds the record, so folding
+                # here would fold away steps that have not been written yet: the
+                # length of `trace` at this moment is the boundary the epilogue
+                # needs to tell the kept tail from the work that came after it.
+                if (ev.get("summary") or "").strip():
+                    pending = {"summary": ev["summary"],
+                               "kept_tokens": int(ev.get("kept_tokens") or 0),
+                               "at": len(trace)}
                 ev = {"type": "notify", "level": "info",
                       "message": (f"compacted {ev.get('compacted')} earlier steps "
                                   f"({ev.get('chars_before')} → {ev.get('chars_after')} "
-                                  "chars)")}
+                                  f"chars), written by {summariser_name(ref)}")}
             elif kind == "tool_start":
                 rec["tool_calls"] = int(rec.get("tool_calls") or 0) + 1
             if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
@@ -616,6 +722,19 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
             if not (step.get("text") or "").strip() and not extra:
                 continue
             store.append(rec, "assistant", step.get("text") or "", extra or None)
+        # A compaction inside the turn only becomes real here. The worker folded
+        # its own wire list to stay under the window, the parent writes the record
+        # from `trace` — every step verbatim — and unless the note crosses that
+        # boundary the session keeps the whole transcript while the meter, and
+        # `should_compact` reading it, describe the shrunken request. That is the
+        # pair of facts that let a session sit at 99% for sixteen turns with
+        # millions of tokens reported as saved and nothing ever reclaimed.
+        if pending is not None:
+            reclaimed = agent.apply_stored_summary(
+                rec, pending["summary"], pending["kept_tokens"],
+                max(0, len(trace) - pending["at"]))
+            if reclaimed:
+                _lower_context(rec, reclaimed)
         store.save(rec)
         # Only now may the transcript be called complete.
         if terminal is not None:
@@ -742,20 +861,16 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         if not rec.get("model"):
             rec["model"] = config.registry().get("default") or ""
             ref = rec["model"] or None
-        if agent.should_compact(rec):
-            info = agent.compact_history(rec, ref=rec.get("model") or None)
-            if info and info.get("compacted"):
-                store.save(rec)
-                saved = token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0)) \
-                    - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0))
-                metrics.bump(rec, saved_compaction=max(0, saved))
-                # Before the record is written, so a session that is reloaded
-                # mid-compaction does not come back showing the old fill.
-                _lower_context(rec, max(0, saved))
-                bus.publish({"type": "notify", "level": "info", "sid": sid,
-                             "message": (f"compacted {info['compacted']} earlier messages "
-                                         f"({info['chars_before']} \u2192 "
-                                         f"{info['chars_after']} chars)")})
+        info = compact_now(rec, notice=compacting_notice(bus, sid))
+        if info and info.get("compacted"):
+            # Before the record is written, so a session that is reloaded
+            # mid-compaction does not come back showing the old fill.
+            store.save(rec)
+            bus.publish({"type": "notify", "level": "info", "sid": sid,
+                         "message": (f"compacted {info['compacted']} earlier messages "
+                                     f"({info['chars_before']} \u2192 "
+                                     f"{info['chars_after']} chars), written by "
+                                     f"{info['model']}")})
 
         # Stored only when it is not the person, so an ordinary row stays
         # exactly the row it always was. It cannot reach the model: the wire

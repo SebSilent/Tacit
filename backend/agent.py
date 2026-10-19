@@ -1099,20 +1099,32 @@ def _chars(msgs: list[dict]) -> int:
     return total
 
 
+def stored_tokens(msgs: list[dict]) -> int:
+    """What the stored transcript itself would cost on the next request.
+
+    Measured in the wire shape, because that is the shape that gets sent: a
+    stored row replays its tool results and its reasoning alongside its text.
+    """
+    return token_mod.estimate_messages_tokens(transcript_messages(msgs, reasoning=False))
+
+
 def should_compact(rec: dict) -> bool:
     msgs = rec.get("messages") or []
     if len(msgs) <= config.COMPACT_TAIL_MIN_MESSAGES + 1:
         return False
     ctx = (rec.get("usage") or {}).get("context") or {}
-    window, tokens = ctx.get("window") or 0, ctx.get("tokens") or 0
-    if window and not tokens:
-        # The provider reported a window but no usage for the last call. Measure
-        # the transcript locally rather than falling through to the character
-        # heuristic, which knows nothing about this model.
-        tokens = token_mod.estimate_messages_tokens(
-            transcript_messages(msgs, reasoning=False))
-    if window and tokens:
-        return tokens > config.context_fill_target(window)
+    window, billed = ctx.get("window") or 0, ctx.get("tokens") or 0
+    if window:
+        # Two measures, and the trigger has to answer to the larger. `billed` is
+        # the prompt of the last call the provider actually made: it knows about
+        # the tool schemas and the standing prompt, which the transcript alone
+        # does not. `stored` is what this record would cost if it were sent as it
+        # stands: it is the only number that knows about work a *mid-turn*
+        # compaction folded away, because that compaction shrinks the request on
+        # purpose and leaves the stored record untouched. Reading only the billed
+        # figure is how a session carrying 640,000 tokens of transcript sat at 11%
+        # on the meter with this check asleep for sixteen turns.
+        return max(billed, stored_tokens(msgs)) > config.context_fill_target(window)
     # No window known: compact once the transcript exceeds what we are willing to
     # send, which is exactly the point where elision would otherwise start
     # throwing information away instead of summarising it.
@@ -1249,17 +1261,22 @@ def _fallback_summary(digest: str, error: str = "") -> str:
 def _summarise(transcript: str, ref: str | None = None) -> tuple[str, str]:
     """Ask a model for the handover note. Returns (summary, error).
 
-    A nominated cheap model does this job when one is configured: summarising is
-    mechanical, and spending the working model — often the expensive one — on it
-    is waste. The transcript is capped so the summariser call cannot itself
-    overflow the window it is trying to relieve.
+    The model is the session's own, whatever it is: a fold that reads back as the
+    session's work has to be the work of the session's model. There is no separate
+    summariser any more, and there used to be an environment-only override with no
+    Settings surface, which is how a handover note got written by something nobody
+    had chosen. The transcript is capped so this call cannot itself overflow the
+    window it is trying to relieve.
     """
     capped = transcript[:config.SUMMARY_INPUT_MAX_CHARS]
     try:
         res = engine.chat([
             {"role": "system", "content": prompts.COMPACT},
             {"role": "user", "content": capped},
-        ], ref=config.COMPACT_MODEL or ref)
+        # The session's own model, and nothing else. There is no separate
+        # nominatable summariser any more: an override with no Settings surface
+        # meant a handover note could be written by a model nobody had chosen.
+        ], ref=ref)
     except engine.EngineError as e:
         return _fallback_summary(capped, str(e)), str(e)
     except Exception as e:  # noqa: BLE001
@@ -1338,6 +1355,54 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
             "error": err}
 
 
+def apply_stored_summary(rec: dict, summary: str, kept_tokens: int = 0,
+                         newer_rows: int = 0) -> int:
+    """Write a mid-turn compaction into the stored record. Returns tokens saved.
+
+    A turn runs in a subprocess (:mod:`backend.turn_worker`) and the transcript is
+    written by its parent, which rebuilds it from the turn's trace: every step,
+    verbatim. So a compaction that happened *during* a turn reclaimed the wire
+    request for the rest of that turn and was thrown away at the process boundary
+    on the way to disk. Measured on the machine: three sessions, 8.5M and 33M
+    tokens reported as "saved by compaction", and not one `summary` row in any of
+    them, while their transcripts grew past 600,000 tokens.
+
+    The summary arrives with the width of the tail it stands in for. The stored
+    tail is then kept at least that wide *plus* everything the turn appended after
+    the compaction, because both are suffixes of the same sequence: a narrower
+    stored tail would fold away rows the summary never described. Wider costs a
+    little context and loses nothing.
+
+    A summary written by an earlier compaction sits in the region being folded, so
+    this refines one handover note rather than stacking a second on top of it.
+    """
+    msgs = rec.get("messages") or []
+    if not (summary or "").strip() or not msgs:
+        return 0
+    pin = _stored_pin(msgs)
+    rest = msgs[pin:]
+    if not rest:
+        return 0
+    # Rows this turn added after the compaction fired: the summary does not know
+    # about them, so they are kept whatever their size.
+    newer = max(0, min(int(newer_rows or 0), len(rest)))
+    i = len(rest) - newer
+    total = sum(_msg_tokens(m) for m in rest[i:])
+    want = max(1, int(kept_tokens or 0))
+    while i > 0 and total < want:
+        i -= 1
+        total += _msg_tokens(rest[i])
+    if i <= 0:
+        return 0                      # the tail already covers the whole record
+    before = _chars(msgs)
+    folded = list(msgs[:pin]) + [{"role": "summary", "content": summary}] + rest[i:]
+    after = _chars(folded)
+    if after >= before:
+        return 0                      # nothing reclaimed: leave the record alone
+    rec["messages"] = folded
+    return max(0, (before - after) // token_mod.CHARS_PER_TOKEN)
+
+
 def _digest_wire(m: dict) -> str:
     """One wire message as the summariser should see it.
 
@@ -1391,6 +1456,13 @@ def compact_messages(messages: list[dict], ref: str | None = None,
                    + tail)
     return {"compacted": len(old), "kept": len(tail), "chars_before": before,
             "chars_after": wire_chars(messages), "pruned_chars": reclaimed,
+            # The summary and the width of the tail it stands in for. The turn
+            # runs in a subprocess and the transcript is written by its parent,
+            # so without these two the reclamation dies with the worker: the
+            # session kept every byte and `should_compact` went on reading a
+            # prompt that this very compaction had shrunk. The parent keeps a
+            # stored tail at least as wide as `kept_tokens`, never narrower.
+            "summary": summary, "kept_tokens": sum(_msg_tokens(m) for m in tail),
             "error": err}
 
 
@@ -2427,6 +2499,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # a long investigation from growing until the backstop is all that is left.
         if (not chat and config.COMPACT_MID_TURN and compactions < 3
                 and wire_chars(messages) > budget):
+            # Announced before the summariser is called, not after. A mid-turn
+            # compaction is a model call that can take seconds, and "compacting"
+            # is only worth showing while it is still true.
+            yield {"type": "compaction_start"}
             info = compact_messages(messages, ref=ref, budget_chars=budget)
             if info and info.get("compacted"):
                 # Only a real attempt counts against the cap. Early in a turn
@@ -2436,7 +2512,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 saved = max(0, token_mod.estimate_tokens("x" * info["chars_before"])
                             - token_mod.estimate_tokens("x" * info["chars_after"]))
                 yield {"type": "compaction", "saved": saved, **{
-                    k: info[k] for k in ("compacted", "kept", "chars_before", "chars_after")}}
+                    k: info[k] for k in ("compacted", "kept", "chars_before", "chars_after",
+                                         "summary", "kept_tokens")}}
                 yield {"type": "notify", "level": "info",
                        "message": (f"compacted {info['compacted']} earlier steps mid-turn "
                                    f"({info['chars_before']} → {info['chars_after']} chars)")}

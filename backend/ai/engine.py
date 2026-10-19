@@ -42,6 +42,15 @@ class EngineError(RuntimeError):
 def _target(ref: str | None):
     m = config.resolve_model(ref)
     if not m:
+        # Say which name failed and what to do about it. Tacit will not pick a
+        # model you did not: a wrong answer from a substitute is worse than no
+        # answer, and a missing model is a five-second fix in Settings.
+        asked = str(ref or "").strip()
+        if asked:
+            raise EngineError(
+                f"'{asked}' is not a model you have configured, and no fallback is set "
+                "for it. Pick a model for this session, or choose a fallback under "
+                "Settings > General.", 0, "")
         raise EngineError("no model configured, add a provider in Settings", 0, "")
     if not m["baseUrl"]:
         raise EngineError(f"no endpoint for {m['ref']}", 0, "")

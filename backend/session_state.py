@@ -27,7 +27,10 @@ import time
 _LOCK = threading.Lock()
 _ROWS: dict[str, dict] = {}
 
-KINDS = ("turn", "plan", "assistant")
+# "compact" is a hand-compaction from the interface: it rewrites the transcript and
+# calls the summariser, so a turn must not start on top of it. It is not a turn, and
+# the state says which it is.
+KINDS = ("turn", "plan", "assistant", "compact")
 
 
 def _blank(sid: str) -> dict:

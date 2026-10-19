@@ -128,9 +128,12 @@ COMPACT_TAIL_SHARE = float(os.environ.get("TACIT_COMPACT_TAIL_SHARE", "0.4"))
 # alone brings the transcript back under budget and the summary call is skipped.
 COMPACT_PRUNE_KEEP_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_KEEP", "400"))
 COMPACT_PRUNE_MIN_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_MIN", "1200"))
-# Summarising with the working model is expensive and can fail. A cheap model can
-# be nominated for the job alone, and a deterministic digest is the floor.
-COMPACT_MODEL = os.environ.get("TACIT_COMPACT_MODEL", "")
+# Summarising runs on the session's own model, and a deterministic digest is the
+# floor when that call fails. There used to be a `TACIT_COMPACT_MODEL` override
+# here with no Settings surface: a summary could be written by a model nobody had
+# chosen from any panel, which is the same fault as the silent model substitution
+# removed from `resolve_model`. The one nominated backup is `fallbackModel`, in
+# Settings > General, and it is named in every notice that reports a summary.
 # The summariser call must not itself overflow the window it is relieving.
 SUMMARY_INPUT_MAX_CHARS = int(os.environ.get("TACIT_SUMMARY_INPUT_MAX", "160000"))
 COMPACT_KEEP_TAIL = int(os.environ.get("TACIT_COMPACT_KEEP", "6"))
@@ -363,6 +366,22 @@ def delegate_model() -> str:
     if v:
         return v
     return str(os.environ.get("TACIT_DELEGATE_MODEL") or "").strip()
+
+
+def fallback_model() -> str:
+    """The one model a session may be run on when its own is gone. '' for none.
+
+    This exists because the alternative was already in the code and it was worse.
+    `resolve_model` used to answer an unknown ref with the first model in the
+    registry: a session pointed at a provider that had been removed silently ran
+    on something else, and nothing in the transcript said so. A backup that is
+    chosen in Settings is honest, and the absence of one is a failure the person
+    can read and fix.
+    """
+    v = str(prefs().get("fallbackModel") or "").strip()
+    if v:
+        return v
+    return str(os.environ.get("TACIT_FALLBACK_MODEL") or "").strip()
 
 
 def turn_worker_mode() -> str:
@@ -604,14 +623,37 @@ def model_list() -> list[dict]:
     return out
 
 
+def known_model(ref: str | None) -> bool:
+    """Is this exact ref a model on this machine? For validation, not for running.
+
+    `resolve_model` may answer with the nominated fallback, which must never be
+    what a settings POST accepts as "valid" on behalf of a name the caller typed.
+    """
+    pid = str(ref or "").strip().partition("/")[0]
+    return bool(pid) and pid in (registry().get("providers") or {})
+
+
 def resolve_model(ref: str | None = None) -> dict | None:
+    """The model a call runs on: the ref asked for, else the default, else the
+    nominated fallback, else nothing. Never a model nobody chose.
+
+    The last clause is the change. This used to end with `available[0]["id"]`, so
+    a session naming `zai_cn/glm-4.5` after that provider was deleted quietly ran
+    on the first row of the registry instead, at another model's cost, quality and
+    context window, with no trace in the transcript. An unresolvable model is now
+    an error the person sees and can act on, because a wrong answer from a model
+    you never picked is not a failure worth hiding.
+    """
     reg = registry()
     providers = reg.get("providers") or {}
-    available = model_list()
-    chosen = (ref or reg.get("default") or "").strip()
-    if chosen.partition("/")[0] not in providers and available:
-        chosen = available[0]["id"]
+    chosen = str(ref or "").strip()
     if not chosen:
+        chosen = str(reg.get("default") or "").strip() or fallback_model()
+    elif chosen.partition("/")[0] not in providers:
+        # The session names a model this machine no longer has. The fallback may
+        # take it because a person set it; the registry's first row may not.
+        chosen = fallback_model()
+    if not chosen or chosen.partition("/")[0] not in providers:
         return None
     pid, _, mid = chosen.partition("/")
     spec = providers.get(pid)

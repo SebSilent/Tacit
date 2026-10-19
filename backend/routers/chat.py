@@ -633,13 +633,45 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind == "compact":
                 # A forced compaction may call the summariser model; it runs
-                # in the executor like every other blocking command.
-                info = await loop.run_in_executor(
-                    None, agent.compact_history, rec, rec.get("model") or None, True)
-                store.save(rec)
-                await ws.send_text(_json({
-                    "type": "rpc_response", "command": "compact",
-                    "ok": bool(info and info.get("compacted")), "data": info, "sid": rec["id"]}))
+                # in the executor like every other blocking command. The
+                # accounting is the runtime's, not this handler's: the command
+                # used to fold the record and tell nobody, so the bar went on
+                # reading 99% over a transcript that had just been compacted and
+                # the dashboard's saved-by-compaction row stayed at zero.
+                #
+                # It also claims the session. A hand compaction rewrites the
+                # transcript and can take seconds; a turn started in another
+                # window in that window would race the fold and write back over
+                # it, so the busy mark is what makes "wait for it" true rather
+                # than merely polite.
+                if session_state.busy(rec["id"]):
+                    await ws.send_text(_json({
+                        "type": "notify", "level": "warn", "sid": rec["id"],
+                        "message": "this session is busy, nothing to compact while it runs"}))
+                    continue
+                session_state.begin(rec["id"], "compact")
+
+                def _tell(on: bool) -> None:
+                    ev = {"type": "compacting", "on": on, "sid": rec["id"]}
+                    turn_bus.publish(rec["id"], ev)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            ws.send_text(_json(ev)), loop)
+                    except Exception:
+                        pass
+
+                try:
+                    info = await loop.run_in_executor(
+                        None, lambda: session_runtime.compact_now(
+                            rec, force=True,
+                            notice=lambda on: _tell(bool(on))))
+                    store.save(rec)
+                    await ws.send_text(_json({
+                        "type": "rpc_response", "command": "compact",
+                        "ok": bool(info and info.get("compacted")), "data": info, "sid": rec["id"]}))
+                finally:
+                    _tell(False)
+                    session_state.end(rec["id"])
 
             else:
                 await ws.send_text(_json({
