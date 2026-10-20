@@ -22,7 +22,7 @@ VERSION_QUERY = re.compile(r"\?v=\d+")
 HEAD = """\
 <meta name="theme-color" id="meta-theme" content="#14171d">
 <meta name="robots" content="noindex">
-<title>Tacit interface (mock)</title>
+<title>Tacit interface</title>
 <link rel="stylesheet" href="assets/app.css">
 <link rel="stylesheet" href="assets/demo.css">
 """
