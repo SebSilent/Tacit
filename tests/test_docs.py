@@ -69,14 +69,49 @@ ENV_RE = re.compile(r"TACIT_[A-Z0-9_]+")
 CITE_RE = re.compile(
     r"(?<![\w./-])((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
     r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
-    r"(?::(\d+)(?:-(\d+))?)?")
+    r"(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?")
+# `:93`, the shorthand that repeats the path it follows. The lookbehind is what keeps
+# this off prose: a digit or a word character before the colon means it is a ratio, a
+# time or a URL scheme, not a line number.
+BARE_RE = re.compile(r"(?<![:\w/]):(\d+)(?:\s*[-\u2013]\s*(\d+))?")
 LINK_RE = re.compile(r"\]\((?!https?:)([^)#]+)(?:#[\w-]*)?\)")
 
 
 def _cites(text: str) -> list[tuple[str, str | None, str | None]]:
-    """Every (path, first line, last line) a doc cites, a range kept as its two ends."""
-    return [(m.group(1), m.group(2), m.group(3) or m.group(2))
-            for m in CITE_RE.finditer(text)]
+    """Every (path, first line, last line) a doc cites, with shorthand resolved.
+
+    Three shapes are in use here: `path:477`, a range `path:881-887`, and the shorthand
+    `:93`, which names no file at all and inherits the path before it. A checker that
+    only matches paths reads the first two and walks straight past the third, so half a
+    citation goes unverified while looking verified. Resolution runs per block of prose,
+    not per physical line, because these paragraphs are wrapped at a hundred characters
+    and the shorthand usually lands on the continuation line. A bare range counts only
+    inside a code span, since a sentence colon followed by a number is not a citation.
+    """
+    out: list[tuple[str, str | None, str | None]] = []
+    carry = None
+    for raw in text.splitlines():
+        line, stripped = raw, raw.strip()
+        # A markdown table row is its own unit: `:751` in one row belongs to the path in
+        # that row, never to the path in the row above it. Prose is the opposite, since
+        # these paragraphs wrap and the shorthand lands on the continuation line.
+        table = stripped.startswith("|")
+        last_path = None if table else carry
+        carry = None
+        consumed = []
+        for m in CITE_RE.finditer(line):
+            rel, a, b = m.group(1), m.group(2), m.group(3)
+            last_path = rel
+            carry = rel
+            out.append((rel, a, b or a))
+            if a:
+                consumed.append((m.start(2), m.end(2)))
+        for m in BARE_RE.finditer(line):
+            if any(s <= m.start(1) < e for s, e in consumed):
+                continue
+            if last_path and line[:m.start()].count("`") % 2:
+                out.append((last_path, m.group(1), m.group(2) or m.group(1)))
+    return out
 
 
 def _read(p: pathlib.Path) -> str:
@@ -168,6 +203,36 @@ class TestEnvNamesExist(unittest.TestCase):
 
 
 class TestCitationsResolve(unittest.TestCase):
+    def test_a_shorthand_range_inherits_the_path_before_it(self):
+        """The resolution itself, pinned, because binding it wrongly is the bug.
+
+        A shorthand `:93` names no file, so it has to borrow one, and this project
+        writes citations in two shapes that borrow differently. Prose wraps at a hundred
+        characters and lands the shorthand on the continuation line, so it inherits from
+        above. A markdown table row is a sentence of its own, and `:751` in one row
+        belongs to the path in that row and to nothing else. Bind a table's shorthand to
+        the row above and the checker opens a real file at a line nobody meant, which is
+        a worse failure than not checking at all: it reports a broken citation in prose
+        that is correct.
+        """
+        prose = ("Tuning lives in `scripts/check_prose.py:29-60`, `:70-74`. Patterns\n"
+                 "that need judgment are warnings (`:16-18`, the tuple is `:76-78`).")
+        self.assertEqual(_cites(prose), [
+            ("scripts/check_prose.py", "29", "60"),
+            ("scripts/check_prose.py", "70", "74"),
+            ("scripts/check_prose.py", "16", "18"),
+            ("scripts/check_prose.py", "76", "78"),
+        ])
+        table = ("| `model` | `backend/routers/api.py:734` | the default |\n"
+                 "| `thinking` | `backend/routers/api.py:68`, `:751` | reasoning |\n")
+        self.assertEqual(_cites(table), [
+            ("backend/routers/api.py", "734", "734"),
+            ("backend/routers/api.py", "68", "68"),
+            ("backend/routers/api.py", "751", "751"),
+        ])
+        # A ratio, a time and a port are not line numbers.
+        self.assertEqual(_cites("the 2:1 split at 10:45 on https://host:8443/api"), [])
+
     def test_cited_files_exist(self):
         missing = []
         for doc in _doc_files():

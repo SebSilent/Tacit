@@ -12,7 +12,7 @@ python -m unittest discover -s tests -t .
 ```
 
 The suite runs offline. It needs no network, no real model, no container daemon and no benchmark
-runner, and Tacit installs neither (`README.md:379-380`).
+runner, and Tacit installs neither (`README.md:382-383`).
 
 ## Layout
 
@@ -38,7 +38,7 @@ optional and only needed for browser automation (`package.json:6-10`). `scripts/
 **The documentation is a specification.** `tests/test_docs.py` checks that every `TACIT_*` name in a doc
 is actually read from the environment, that every `path:line` citation points at a real file and a real
 non-blank line inside it, that relative links resolve, and that every page in `docs/` is reachable from
-`docs/index.md` (`tests/test_docs.py:123-300`). If you add a setting, add the line that reads it. If you
+`docs/index.md` (`tests/test_docs.py:159-365`). If you add a setting, add the line that reads it. If you
 cannot point at the line, you do not know the answer, and you do not write the sentence
 (`tests/test_docs.py:39-40`).
 
@@ -112,15 +112,15 @@ Node, so it is run by hand and never from `unittest`, which stays offline and in
 
 The benchmark table wants more arms on the same cells: any first-party or fp8 route for kimi and qwen,
 DeepSeek and Qwen as the model, an Apple silicon lane, and a rerun on whatever hardware you have
-(`README.md:281-283`). Tuning is welcome and is part of the point, since the profiles and prefs are the
-tuning surface (`README.md:284-285`).
+(`README.md:284-286`). Tuning is welcome and is part of the point, since the profiles and prefs are the
+tuning surface (`README.md:287-288`).
 
 One concrete port is named in the README: schemelike is graded on Linux only because its checker reads
-`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:247-248`), and a Windows port of that
-checker is on the list of cells the table wants next (`README.md:283-284`).
+`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:250-251`), and a Windows port of that
+checker is on the list of cells the table wants next (`README.md:286-287`).
 
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
-(`README.md:285-286`). Every row must carry the checker's output verbatim, the byte counts and sha256
+(`README.md:288-289`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
 somebody else can re-run (`docs/testing-and-benchmarks.md:152-154`).
 
