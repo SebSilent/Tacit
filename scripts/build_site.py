@@ -283,7 +283,15 @@ def main() -> None:
     for path, out_rel, _href, _title in sources:
         if not path.is_file():
             raise SystemExit(f"{path} is missing; the site build needs it")
-        shutil.copyfile(path, SITE / out_rel)
+        if path.parent == ROOT:
+            # A repository page is read in two places. On GitHub an asset is spelled from
+            # the checkout root, `site/assets/demo.gif`; on Pages the same file is served
+            # at `/assets/demo.gif`, because the site folder *is* the root there. The copy
+            # the browser fetches gets the second spelling, so one README works on both.
+            text = path.read_text(encoding="utf-8").replace("](site/", "](")
+            (SITE / out_rel).write_text(text, encoding="utf-8")
+        else:
+            shutil.copyfile(path, SITE / out_rel)
 
     def nav_html(active_href: str) -> tuple[str, str]:
         docs = "".join(NAV_ITEM.format(href=href, label=title,

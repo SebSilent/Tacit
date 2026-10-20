@@ -152,12 +152,34 @@
     });
   }
 
+  // Scroll the frame's own containers until `node` is visible in it, and nothing else.
+  // Each adjustment moves the node, so the rect is re-read per ancestor.
+  function revealInFrame(node) {
+    let el = node.parentElement;
+    while (el && el !== document.body) {
+      const cs = getComputedStyle(el);
+      const scrolls = /(auto|scroll)/.test(cs.overflowY + ' ' + cs.overflowX);
+      if (scrolls && (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)) {
+        const r = node.getBoundingClientRect();
+        const b = el.getBoundingClientRect();
+        if (r.bottom > b.bottom - 8) el.scrollTop += r.bottom - b.bottom + 8;
+        else if (r.top < b.top + 8) el.scrollTop -= b.top - r.top + 8;
+        const r2 = node.getBoundingClientRect();
+        if (r2.right > b.right - 8) el.scrollLeft += r2.right - b.right + 8;
+        else if (r2.left < b.left + 8) el.scrollLeft -= b.left - r2.left + 8;
+      }
+      el = el.parentElement;
+    }
+  }
+
   async function curTo(node, opt) {
     if (!node) return;
     const o = opt || {};
     // Bring it into view inside its own scroller, then measure: a node that is off-screen
-    // has no viewport point worth aiming at.
-    if (node.scrollIntoView) node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    // has no viewport point worth aiming at. This is deliberately not `scrollIntoView`:
+    // that walks every ancestor scroller, and an iframe is part of its parent's scrollable
+    // area, so a mock aiming at a button drags the reader's page along with it.
+    revealInFrame(node);
     await wait(70);
     const r = node.getBoundingClientRect();
     if (r.width < 2 && r.height < 2) return;
@@ -181,7 +203,14 @@
   // A cursor held still looks broken, so it breathes: a few pixels now and then in the
   // direction it last went, never while a move is in flight.
   setInterval(() => {
-    if (S.paused || curAnim || !cur.classList.contains('on')) return;
+    if (S.paused || curAnim) return;
+    // A reader who moved their own mouse was left alone on purpose. When that window
+    // closes the cursor comes back by itself: waiting for the next scripted move meant it
+    // could stay invisible indefinitely once the scene had finished.
+    if (!cur.classList.contains('on')) {
+      curShow();
+      if (!cur.classList.contains('on')) return;
+    }
     curMove(curPos.x + (Math.random() * 16 - 8), curPos.y + (Math.random() * 12 - 6), 1300);
   }, 5200);
 
@@ -1134,7 +1163,9 @@
   // the field: the button does that, the same way it does for a reader's own typing.
   async function typeIntoEl(el, text) {
     el.value = '';
-    if (el.focus) el.focus();
+    // Focus without the scroll side effect, and not at all inside an embed: a frame that
+    // takes the keyboard is a frame that has taken the reader's page.
+    if (el.focus && !FRAGMENT) el.focus({ preventScroll: true });
     for (const ch of text) {
       el.value += ch;
       if (el === composerEl) autoGrow();
@@ -1224,7 +1255,7 @@
     if (!chip) return;
     composerEl.value = chip.dataset.s;
     autoGrow();
-    composerEl.focus();
+    composerEl.focus({ preventScroll: true });
   });
 
   // A tool card opens, a thinking block reopens: the app's own handlers.
@@ -1768,7 +1799,7 @@
         termPrint('Tacit terminal. Commands run in the workspace', 'term-note');
         termPrint('This one is a mock: what you type is answered from a table.', 'term-note');
       }
-      termIn.focus();
+      termIn.focus({ preventScroll: true });
     }
   });
   $('#termClose').addEventListener('click', () => { termOverlay.hidden = true; });

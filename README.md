@@ -14,6 +14,13 @@ One turn costs a fixed amount before your question is read: 974 characters of st
 every tool description the session is offered. The pair to remember is
 768 tokens on Minimal and 1,914 on Default, and a test re-derives both from the code on every run.
 
+![The Tacit interface: a pointer moves to a session, a question is typed into the Assistant panel, and a turn begins streaming in the transcript](site/assets/demo.gif)
+
+That is the interface mock, captured. It is the app's own markup and CSS with a driver that moves a
+pointer, types the ask and plays back a scripted turn: no backend, no model, nothing on your machine
+touched, and no evidence of anything except what using Tacit looks like. The live page is
+[demo.html](https://sebsilent.github.io/Tacit/demo.html).
+
 ---
 
 ## Quick start
@@ -83,11 +90,9 @@ told an Assistant exists, and the Assistant's goal never becomes the agent's tas
 of switches with the token price shown before anything is sent, and its counter sits above its thread, so a
 second conversation is never a hidden second bill.
 
-There are no screenshots in this repository. What there is: the interface running as a scripted mock at
-[sebsilent.github.io/Tacit/demo.html](https://sebsilent.github.io/Tacit/demo.html), the app's real markup
-and CSS with a driver that moves a pointer, types an ask and plays back a turn. No backend, no model,
-nothing on your machine touched. Look at it before you install anything, and do not treat it as evidence of
-anything. [docs/interface.md](docs/interface.md) covers the regions, snapshots and restart;
+The capture at the top of this page is that mock, and the live page runs it in your browser: look at it
+before you install anything, and do not treat it as evidence of anything.
+[docs/interface.md](docs/interface.md) covers the regions, snapshots and restart;
 [docs/settings.md](docs/settings.md) says which tab owns which switch and which file it writes.
 
 ---
