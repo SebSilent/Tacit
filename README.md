@@ -16,13 +16,13 @@ every tool description the session is offered. The pair to remember is
 
 ![The Tacit interface: a turn streams into the transcript with its tool cards while the context meter in the top bar climbs from 56% to 70%](site/assets/demo.gif)
 
-That is the interface mock, captured mid-turn. The tool cards arriving and the context meter in the top
-bar climbing from 56% to 70% are playback, not a model: the transcript is scripted and the numbers are
-seeded. The page is the app's own markup and CSS with a driver that moves a pointer, types the ask and
-plays the turn, with no backend, no provider and nothing on your machine touched, so it is evidence of
-what using Tacit looks like and of nothing else. The live page runs the whole loop, the pointer and the
-typing included, and every control in it answers a click:
-[demo.html](https://sebsilent.github.io/Tacit/demo.html).
+Twelve seconds of the interface mock, captured mid-turn: the ask lands, the tool cards arrive, the
+delegation panel opens, and the context meter climbs from 56% to 70%. All of it is playback, not a
+model: the transcript is scripted and the numbers are seeded. When the second panel opens the top bar
+gives up its model line and its running total so the controls stay on screen. The page is the app's own
+markup and CSS with a driver that moves a pointer and types the ask, no backend and no provider, so it
+is evidence of what using Tacit looks like and of nothing else. The live page runs the whole loop and
+every control answers a click: [demo.html](https://sebsilent.github.io/Tacit/demo.html).
 
 ---
 

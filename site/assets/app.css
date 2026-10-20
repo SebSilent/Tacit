@@ -1251,8 +1251,17 @@ input, textarea {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  /* Measured floor for the top bar: eight 32px controls, the gaps between them, the
+     workspace glyph and the context bar, with the model line and the running total
+     already shed. A 400px floor was the first guess and it was 90px short, which is the
+     difference between the controls sitting inside the bar and landing on the panel
+     beside it. Below this width the panels are what gives, not the controls. */
+  min-width: 540px;
   position: relative;
+  /* A query container, so the top bar can shed content by the width it actually has.
+     See the @container rules after the top bar rules below. */
+  container-type: inline-size;
+  container-name: main;
 }
 
 .topbar {
@@ -1264,6 +1273,11 @@ input, textarea {
   background: var(--bg-2);
 }
 .top-title {
+  /* The slack in the top bar belongs here. The session name is the one line with an
+     ellipsis already, so when the meta line grows, or the Assistant panel opens and
+     takes 330px, this shrinks and the controls to the right never move. */
+  flex: 1 1 auto;
+  min-width: 0;
   text-wrap: balance;
   font-size: var(--fs-4);
   font-weight: 600;
@@ -1272,13 +1286,52 @@ input, textarea {
   white-space: nowrap;
 }
 .top-meta {
-  margin-left: auto;
+  /* This line changes text whenever the session changes model, endpoint or
+     quantization. It used to sit at the right end of the free space with
+     `margin-left: auto`, so every time its text grew, the workspace chip, the token
+     meter and the six icon buttons slid right behind it: 60px in one step, measured.
+     It takes its own width and no slack, and the session title beside it is what gives
+     instead, because that one already has an ellipsis. Making the META the flexible one
+     was the first attempt and it is wrong: with the Assistant panel open at 1280 the row
+     is full, so the meta collapsed to zero and the model line disappeared. `0 1 auto` is
+     the other order: it keeps its own width whenever there is room and truncates with an
+     ellipsis when there is not, which is what the row needs, because the alternative is
+     the eight controls on its right spilling over the panel beside them. Measured at
+     1920x1080 with both panels open, refusing to shrink put the last icon 42px outside
+     the bar. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: var(--fs-2);
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
+/* The top bar sheds content by viewport width further down this file, which is the
+   wrong measure twice over. The main column narrows when the Assistant panel and the
+   delegation panel open beside it, and no viewport query knows: at 1280 with both open
+   the column was 216px while the bar needs about 690 to show everything it holds, so
+   the eight controls on its right spilled over the panel next to them. These key off
+   the column, in the order a reader would give up: the model line, then the running
+   token total, then the workspace name, then the context bar itself. The controls are
+   last, and they are the point. */
+@container main (max-width: 760px) {
+  .top-meta {
+    display: none;
+  }
+}
+@container main (max-width: 660px) {
+  .tok-meter .tok-count {
+    display: none;
+  }
+}
+@container main (max-width: 640px) {
+  #wdLabel {
+    display: none;
+  }
+}
 .icon-btn {
   width: 32px;
   height: 32px;
@@ -1335,6 +1388,13 @@ input, textarea {
 .tok-count {
   color: var(--text);
   font-weight: 600;
+  /* "71k tok" is 46px and "90.2k tok" is 59px, and the meter is what the icon buttons
+     are measured from, so an unreserved count made the whole right cluster pulse 13px
+     every time the total crossed a round number. 10ch is the widest string `fmtTok`
+     can produce ("999.9k tok"), the figures are tabular already, and right-aligning
+     keeps the growing number against the bar instead of drifting in its own box. */
+  min-width: 10ch;
+  text-align: right;
 }
 .tok-ctx {
   display: flex;
@@ -4716,6 +4776,14 @@ body.compacting #sendBtn { opacity: .55; cursor: progress; }
 }
 .as-panel.open {
   width: min(400px, 40vw);
+  /* Shrinkable. The main column has a 540px floor because that is what the top bar
+     needs, and with the Assistant panel and the delegation panel both open on a 1280
+     window they demand 800px of a 1016px row. Someone has to give, and it is not the
+     controls: measured, the bar's right-hand cluster was landing 42px outside the bar
+     and painting over the panel beside it. Both panels take 238px each at that width,
+     and 318 at 1440, which is the whole cost of keeping the controls on screen. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .as-head {
   display: flex;

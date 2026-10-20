@@ -25,7 +25,7 @@ runner, and Tacit installs neither (`README.md:382-383`).
 | `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:27`, `backend/main.py:175`) |
 | `tests/` | the suite, plus `tests/helpers.py` and `tests/fake_mcp_server.py` |
 | `docs/` | the documentation set, indexed at `docs/index.md` |
-| `scripts/` | `check_prose.py`, `bump_version.py`, `build_site.py`, `demo_shell.py` (the mock's shell, patched out of `static/index.html`), the two measurement scripts, and the two doc checkers |
+| `scripts/` | `check_prose.py`, `bump_version.py`, `build_site.py`, `demo_shell.py` (the mock's shell, patched out of `static/index.html`), `make_demo_gif.js` (the README's GIF), the two measurement scripts, and the two doc checkers |
 | `install.sh`, `install.ps1`, `run.sh`, `run.bat`, `restart.ps1` | installers and launchers |
 | `VERSION` | the release identity; `package.json` mirrors it (`package.json:4`) |
 
