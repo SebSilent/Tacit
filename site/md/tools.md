@@ -82,7 +82,7 @@ proposal lands pending review and is injected nowhere until you approve it
 ## Results have to say where they stopped
 
 Two reporting rules exist because a session showed what happens without them
-(`README.md:930-942`).
+(`backend/agent.py:168-173`, `:241-244`).
 
 `read_file` ends with the range it actually delivered and the offset to continue from, so a partial
 read never reads as a whole file. `grep_files` searches exactly what it is pointed at: a file path

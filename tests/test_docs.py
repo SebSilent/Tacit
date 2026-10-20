@@ -1,7 +1,7 @@
 """The documentation is a specification, so it gets checked like one.
 
-Two bugs this catches, both of which actually happened while these docs were being
-written.
+Three bugs this catches. The first two happened while these docs were being written; the
+third was found by a rewrite that shrank a file every doc cites.
 
 **Names that do not exist.** The README's configuration table once listed fourteen
 ``TACIT_*`` variables the code never reads: ``TACIT_ALLOW_VCS``,
@@ -16,6 +16,16 @@ compared the two. A code scan is the only way to know, so this does the scan.
 The scan found one more species of the same bug: a name written as shorthand,
 ``TACIT_COMPACT_TAIL_MIN`` / ``_MAX``, where ``_MAX`` is not a variable anybody can
 set. So a name counts only when it is spelled in full and read from the environment.
+
+**A check narrower than the promise it makes.** Fourteen of the twenty citations that
+named the README by line number pointed past the end of the file after one rewrite took
+it from 1,254 lines to 423, and the six that were still in bounds pointed at the wrong
+paragraph in all but one case. None of them failed anything, because the pattern that
+found citations matched only paths with a directory in front of them, so a bare
+``README.md:1113-1116`` was invisible to it, and ``CONTRIBUTING.md``, which is where half
+of them live, was not in the list of files to read either. A checker is only as wide as
+the text it matches. The two root-level pages are named in the pattern now, a range is
+captured instead of its first number alone, and both ends are checked.
 
 **Citations that point nowhere.** Prose that says ``(``backend/memory.py:59``)`` is
 a promise the reader can spend five seconds checking. When the file is not there
@@ -46,13 +56,27 @@ CODE_GLOBS = ("backend/**/*.py", "backend/**/*.mjs", "static/**/*.js",
               "scripts/**/*.py", "tests/**/*.py")
 CODE_FILES = ("install.sh", "install.ps1", "run.sh", "run.bat")
 
-DOC_GLOBS = ("README.md", "docs/*.md", "docs/**/*.md")
+# CONTRIBUTING.md is in the set because it cites the README by line number, and the
+# last README rewrite moved every one of those numbers and nothing noticed.
+DOC_GLOBS = ("README.md", "CONTRIBUTING.md", "docs/*.md", "docs/**/*.md")
 
 ENV_RE = re.compile(r"TACIT_[A-Z0-9_]+")
-# `backend/config.py:477`, `static/app.js:1181`, `install.ps1:16` - a path that
-# exists in this repo followed by a line number. Quoted or bare, both count.
-CITE_RE = re.compile(r"(?<![\w./-])((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)|[\w-]+\.(?:sh|ps1|bat))(?::(\d+))?")
+# `backend/config.py:477`, `static/app.js:1181`, `install.ps1:16`, `README.md:13-15` -
+# a path in this repo followed by a line number, or by a range of them. Quoted or bare,
+# both count. The two root-level pages are named rather than wildcarded: a `*.md`
+# catch-all would make every page of prose a citation target and then demand a line
+# check against files nobody means to cite by line.
+CITE_RE = re.compile(
+    r"(?<![\w./-])((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
+    r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
+    r"(?::(\d+)(?:-(\d+))?)?")
 LINK_RE = re.compile(r"\]\((?!https?:)([^)#]+)(?:#[\w-]*)?\)")
+
+
+def _cites(text: str) -> list[tuple[str, str | None, str | None]]:
+    """Every (path, first line, last line) a doc cites, a range kept as its two ends."""
+    return [(m.group(1), m.group(2), m.group(3) or m.group(2))
+            for m in CITE_RE.finditer(text)]
 
 
 def _read(p: pathlib.Path) -> str:
@@ -147,7 +171,7 @@ class TestCitationsResolve(unittest.TestCase):
     def test_cited_files_exist(self):
         missing = []
         for doc in _doc_files():
-            for path, line in CITE_RE.findall(_read(doc)):
+            for path, _a, _b in _cites(_read(doc)):
                 if (doc.name, path) in CITE_EXCEPTIONS:
                     continue
                 if not (ROOT / path).is_file():
@@ -164,7 +188,7 @@ class TestCitationsResolve(unittest.TestCase):
         """
         stale = []
         for doc in _doc_files():
-            cited = {p for p, _ in CITE_RE.findall(_read(doc))}
+            cited = {p for p, _a, _b in _cites(_read(doc))}
             for (name, path) in CITE_EXCEPTIONS:
                 if name == doc.name and path not in cited:
                     stale.append(f"{name}: {path}")
@@ -176,17 +200,25 @@ class TestCitationsResolve(unittest.TestCase):
                          + "\n  ".join(sorted(set(stale))))
 
     def test_cited_lines_are_inside_the_file(self):
+        """Both ends of a range, not just the number the old regex captured.
+
+        ``README.md:1113-1116`` survived a rewrite that took the file to 423 lines
+        because nothing matched a bare ``README.md`` at all. The fix has to be as wide
+        as the mistake: ranges are captured, and either end landing past the end of the
+        file fails.
+        """
         over = []
         for doc in _doc_files():
-            for path, line in CITE_RE.findall(_read(doc)):
-                if not line:
+            for path, a, b in _cites(_read(doc)):
+                if not a:
                     continue
                 p = ROOT / path
                 if not p.is_file():
                     continue  # the test above reports it
                 n = len(_read(p).splitlines())
-                if int(line) > n:
-                    over.append(f"{doc.name}: {path}:{line} (file has {n} lines)")
+                if int(b) > n or int(a) > n:
+                    span = f"{path}:{a}" if a == b else f"{path}:{a}-{b}"
+                    over.append(f"{doc.name}: {span} (file has {n} lines)")
         self.assertEqual(over, [],
                          "docs cite a line past the end of the file:\n  "
                          + "\n  ".join(sorted(set(over))))
@@ -196,20 +228,22 @@ class TestCitationsResolve(unittest.TestCase):
 
         Off-by-a-few is tolerated: a citation may point one line off the code it
         describes if the reader lands in the same function. A blank line two
-        streets away means the number was guessed.
+        streets away means the number was guessed. Both ends of a range are
+        checked, since the end is the line a reader stops on.
         """
         blank = []
         for doc in _doc_files():
-            for path, line in CITE_RE.findall(_read(doc)):
-                if not line:
+            for path, a, b in _cites(_read(doc)):
+                if not a:
                     continue
                 p = ROOT / path
                 if not p.is_file():
                     continue
                 lines = _read(p).splitlines()
-                i = int(line) - 1
-                if 0 <= i < len(lines) and not lines[i].strip():
-                    blank.append(f"{doc.name}: {path}:{line} is a blank line")
+                for n in sorted({int(a), int(b)}):
+                    i = n - 1
+                    if 0 <= i < len(lines) and not lines[i].strip():
+                        blank.append(f"{doc.name}: {path}:{n} is a blank line")
         self.assertEqual(blank, [],
                          "docs cite blank lines, which means nobody opened the "
                          "file:\n  " + "\n  ".join(sorted(set(blank))))

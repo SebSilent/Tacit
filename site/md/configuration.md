@@ -82,7 +82,7 @@ point.
 | `TACIT_SKILL_INDEX_LIMIT` | `24` | `backend/config.py:203` |
 
 `read_file` has its own, much larger ceiling because a file is the one result the agent may have to
-reproduce whole (`README.md:944-948`).
+reproduce whole (`backend/config.py:84`, `:93`).
 
 ### Research
 

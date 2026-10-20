@@ -22,10 +22,14 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+# The two root-level pages are named rather than wildcarded. `README.md:13-15` is the
+# commonest citation in this set and it carries no directory, so a pattern that matched
+# only prefixed paths skipped every one of them silently, which is how a README that
+# lost 800 lines went on being cited by line numbers that no longer existed.
 CITE = re.compile(
     r"(?<![\w./-])"
     r"((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
-    r"|[\w-]+\.(?:sh|ps1|bat))"
+    r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
     r"(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?"
 )
 BARE = re.compile(r"(?<![:\w/]):(\d+)(?:\s*[-\u2013]\s*(\d+))?")

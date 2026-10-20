@@ -1,14 +1,14 @@
 # Testing and benchmarks
 
 The suite runs offline: no network, no real model, no container daemon and no benchmark runner, and
-Tacit installs neither (`README.md:1207-1209`).
+Tacit installs neither (`README.md:379-380`).
 
 ```sh
 python -m unittest discover -s tests -t .
 ```
 
 The test count is whatever the suite says it is. It is not maintained by hand
-(`README.md:1208-1209`), so this page does not quote one.
+(`README.md:380`), so this page does not quote one.
 
 ## How the tests stay off your data
 
@@ -26,8 +26,9 @@ actually redirect it.
 
 ## What the suite holds down
 
-The README names ten of them with what each pins (`README.md:1215-1226`). The ones that guard the
-architecture rather than a feature:
+The README names seven of them (`README.md:381-383`). The list here is this page's own and does not match
+the README's row for row: it carries `test_platform.py` where the README carries `test_engine.py`. The
+ones that guard the architecture rather than a feature:
 
 | File | What it pins |
 |---|---|
@@ -44,22 +45,24 @@ itself proves nothing about a protocol.
 
 ## The documentation is a specification
 
-`tests/test_docs.py` checks prose the way it checks code, and it exists because two bugs actually
-happened while the docs were being written (`tests/test_docs.py:1-31`).
+`tests/test_docs.py` checks prose the way it checks code, and it exists because three bugs are
+recorded in its opening lines, the third of them found by a rewrite that shrank a file
+(`tests/test_docs.py:1-41`).
 
 - **Names that do not exist.** Every `TACIT_*` name in a doc must appear on a line that actually reads
   it out of the environment, in Python, PowerShell or sh, or is passed to a child process through a dict
-  (`tests/test_docs.py:100-145`). A name that appears only in a comment is the same bug as a name that
+  (`tests/test_docs.py:123-167`). A name that appears only in a comment is the same bug as a name that
   appears nowhere: it reads like a knob and does nothing.
 - **Citations that point nowhere.** Every `path:line` is opened, the file must exist, the line must be
-  inside it, and it must not be blank (`tests/test_docs.py:146-216`). Off-by-a-few is tolerated, because
-  a citation may land one line off the code it describes; a blank line means the number was guessed.
+  inside it, and it must not be blank, at both ends of a range (`tests/test_docs.py:170-249`).
+  Off-by-a-few is tolerated, because a citation may land one line off the code it describes; a blank
+  line means the number was guessed.
 - **Links and reachability.** Relative links must resolve to files
-  (`tests/test_docs.py:218-235`), every page in `docs/` must be linked from `docs/index.md`, and the
-  README must point at `docs/` at all (`tests/test_docs.py:237-266`).
+  (`tests/test_docs.py:252-265`), every page in `docs/` must be linked from `docs/index.md`, and the
+  README must point at `docs/` at all (`tests/test_docs.py:271-300`).
 
 The rule these enforce is the one stated in the module's last line: if you cannot point at the line, you
-do not know the answer, and you do not write the sentence (`tests/test_docs.py:29-30`).
+do not know the answer, and you do not write the sentence (`tests/test_docs.py:39-40`).
 
 ## The prose rules are executable too
 
@@ -108,8 +111,8 @@ Two more scripts run by hand, for the docs rather than the product.
 `scripts/dump_citations.py` prints every cited source line next to the doc line that cites it.
 `tests/test_docs.py` can prove a citation points at a real file, a line inside it and a non-blank line;
 it cannot prove the line says what the sentence claims, and that gap is closed by reading
-(`scripts/dump_citations.py:5-9`). It handles the three shapes a citation takes here, including the bare
-`:N-M` that repeats the path before it (`:13-15`, `scripts/dump_citations.py:25-31`), and it exits 1 when
+(`scripts/dump_citations.py:3-8`). It handles the three shapes a citation takes here, including the bare
+`:N-M` that repeats the path before it (`:13-15`, `scripts/dump_citations.py:29-35`), and it exits 1 when
 a citation names a missing file or a line outside it, so it doubles as a check.
 
 `scripts/check_site_render.js` renders a sample of the docs through `site/assets/markdown.js` in a VM
@@ -123,9 +126,9 @@ installs nothing (`scripts/check_site_render.js:13-15`).
 The benchmark section of the README is the evidence for the architecture, not the argument itself: one
 model for every row, GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its checker files
 untouched, three tasks, three trials each, one build, both operating systems
-(`README.md:1091-1094`).
+(`README.md:229-231`).
 
-How it holds up (`README.md:1155-1163`):
+How it holds up, which this page owns rather than the README:
 
 - the runner and the checkers are the benchmark's own, byte for byte, and the agent never edits them;
 - every row carries the checker's output verbatim, a byte count and a sha256 for every file it graded,
@@ -157,7 +160,7 @@ which results were helped by them.
 
 **The delivery guarantee** orders a missing file written, makes it run, and spends the last minutes of
 wall budget landing the artifact, so a failed cell is still a graded artifact
-(`README.md:58-63`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
+(`README.md:271-275`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
 (`backend/config.py:441-445`). The salvage phase gets three rounds rather than one, because writing the
 file is step one and the model then needs to run it and fix what the run shows; it is bounded, because an
 unbounded "one more chance" is how a turn becomes two turns (`backend/agent.py:772-776`).
@@ -169,6 +172,6 @@ spent 26 of its 29 shell calls on refused repeats and ended with nothing written
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch
-(`README.md:69-71` and `:44-47`, `backend/config.py:435-439`).
+(`README.md:278-279`, `backend/config.py:435-439`).
 
 Next: [contributing](../CONTRIBUTING.md).

@@ -50,7 +50,7 @@ any circumstance (`backend/turn_worker.py:3-7`). A turn blocked in a model read,
 command or a runaway regex holds nothing of the server hostage, because it is not running in the
 server.
 
-The lifecycle is three steps (`backend/turn_worker.py:9-22`):
+The lifecycle is three steps (`backend/turn_worker.py:9-21`):
 
 1. The session's handler spawns `python -m backend.turn_worker` with the turn's parameters on argv,
    and nothing secret anywhere in the environment it did not already have.

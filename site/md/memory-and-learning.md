@@ -25,7 +25,8 @@ end with a schema attached, so it is not offered (`backend/memory_modes.py:26-28
 
 Memory is not a plugin and has not been for some time. It used to be, and the plugin's switch decided
 what the agent could call while the memory mode decided what was injected, so the two could disagree
-and the dashboard could report a cost for a setting nobody had changed (`README.md:729-732`). Now one
+and the dashboard could report a cost for a setting nobody had changed
+(`backend/plugin_manager.py:41-47`, the id is retired there). Now one
 switch in **Settings > Memory** decides both.
 
 ## The store
