@@ -62,7 +62,7 @@ change it (`:83`).
 `CORE_TOOLS` is `read_file`, `write_file`, `edit_file`, `run_shell`, `grep_files`, `list_files` and
 `glob_files` (`backend/profiles.py:18-19`). `tools: None` means the whole registry
 (`:37`, `:129-130`). No profile turns learning on, because a profile sets cost and containment and does
-not decide what Tacit is allowed to remember on its own (`README.md:205-206`).
+not decide what Tacit is allowed to remember on its own (`README.md:199-200`).
 
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
