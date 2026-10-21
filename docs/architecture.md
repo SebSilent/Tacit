@@ -130,7 +130,7 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:793-796`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:876-879`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
