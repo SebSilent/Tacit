@@ -67,7 +67,7 @@ not decide what Tacit is allowed to remember on its own (`README.md:199-200`).
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
 (`backend/profiles.py:128-136`, `:196-200`). At request time a fresh install with no MCP server is
-offered 16, because the four MCP helpers are also removed (`backend/agent.py:889-892`). The first
+offered 16, because the four MCP helpers are also removed (`backend/agent.py:849-852`). The first
 figure is what the profile owns; the second is what the model sees.
 
 Memory is priced from the mode, not from a plugin, because one switch decides both what is injected and
@@ -158,24 +158,24 @@ None of this was invented here.
 ### What the mechanics do, and why each is there
 
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
-  size actually is (`backend/agent.py:1102`).
+  size actually is (`backend/agent.py:1062`).
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1200-1228`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1190-1218`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
 - **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
   note falls into the region being summarised rather than being pinned
-  (`backend/agent.py:1316-1329`).
+  (`backend/agent.py:1276-1289`).
 - **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
-  failed and the most recent activity (`backend/agent.py:1234-1241`).
+  failed and the most recent activity (`backend/agent.py:1194-1201`).
 - **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
   acted on, which is how a compacted session restarts work it already finished.
-- **Compaction runs during a turn, not only between them** (`backend/agent.py:1431-1466`). Checking the
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1391-1426`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
-- **The standing prompt and the task are pinned against elision** (`backend/agent.py:936-956`). Pinning
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:896-916`). Pinning
   only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
   question.
 

@@ -119,7 +119,7 @@ def catalog(project: str | None = None, sid: str = "") -> dict:
         rows += [
             _row("Discover", guidance._DISCOVER, "guidance.py:_DISCOVER"),
             _row("Repeat", guidance._REPEAT, "guidance.py:_REPEAT"),
-            _row("Missing deliverable", guidance._MISSING, "guidance.py:_MISSING"),
+            _row("Nothing written yet", guidance._ADVISORY, "guidance.py:_ADVISORY"),
             _row("Step budget", guidance._BUDGET, "guidance.py:_BUDGET"),
             _row("Failure", guidance._FAILED, "guidance.py:_FAILED"),
             _row("Timeout", guidance._TIMEOUT, "guidance.py:_TIMEOUT"),
@@ -127,9 +127,10 @@ def catalog(project: str | None = None, sid: str = "") -> dict:
             _row("Closing", guidance._CLOSING, "guidance.py:_CLOSING"),
             _row("Salvage, one file", guidance._SALVAGE_ONE, "guidance.py:_SALVAGE_ONE"),
             _row("Salvage, many files", guidance._SALVAGE_MANY, "guidance.py:_SALVAGE_MANY"),
+            _row("Salvage, no name", guidance._SALVAGE_ANY, "guidance.py:_SALVAGE_ANY"),
             _row("Verify", guidance._VERIFY, "guidance.py:_VERIFY"),
-            _row("Demand", guidance._DEMAND, "guidance.py:_DEMAND"),
-            _row("Demand, late", guidance._DEMAND_LATE, "guidance.py:_DEMAND_LATE"),
+            _row("Advice", guidance._ADVICE, "guidance.py:_ADVICE"),
+            _row("Advice, late", guidance._ADVICE_LATE, "guidance.py:_ADVICE_LATE"),
             _row("Wall clock", guidance._TIME, "guidance.py:_TIME"),
             _row("Shell overlap",
                  "\n".join(f"{verb} → {tool}: {why}"
@@ -145,7 +146,8 @@ def catalog(project: str | None = None, sid: str = "") -> dict:
         from . import agent
         groups.append(_group("delivery", "Delivery", [
             _row("Repeat refused", agent._REPEAT_REPLY, "agent.py:_REPEAT_REPLY"),
-            _row("Missing in reply", agent._MISSING_IN_REPLY, "agent.py:_MISSING_IN_REPLY"),
+            _row("Nothing written, in reply", agent._NOTHING_WRITTEN_REPLY,
+                 "agent.py:_NOTHING_WRITTEN_REPLY"),
             _row("Severed call", agent.SEVERED, "agent.py:SEVERED"),
             _row("Pruned output", agent._PRUNED, "agent.py:_PRUNED"),
         ]))

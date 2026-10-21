@@ -35,7 +35,7 @@ the README.
 |---|---|---|
 | `TACIT_HOME` | `~/.tacit` | `backend/config.py:30` |
 | `TACIT_USER_HOME` | your home directory | `backend/config.py:29` |
-| `TACIT_PROJECTS_ROOTS` | none | `backend/config.py:591` |
+| `TACIT_PROJECTS_ROOTS` | none | `backend/config.py:697` |
 
 `TACIT_USER_HOME` moves where `~/.tacit` is looked for without moving the state directory itself,
 which is what the tests use to keep a run off your real data.
@@ -130,17 +130,17 @@ model deliberately.
 | `TACIT_VCS_TIMEOUT` | `120` | `backend/vcs.py:26` |
 | `TACIT_VCS_NAME` | none | `backend/vcs.py:176` |
 | `TACIT_VCS_EMAIL` | none | `backend/vcs.py:177` |
-| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:804` |
-| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:806` |
-| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:807` |
-| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:808` |
+| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:887` |
+| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:889` |
+| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:890` |
+| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:891` |
 
 The two git identity variables work only as a pair (`backend/vcs.py:175-180`), and they are read
 before the values stored in **Settings**, not after.
 
 `TACIT_PROMPT_CACHE=auto` marks cache breakpoints only on endpoints known to understand them,
 because an OpenAI-compatible server that has never seen `cache_control` may reject the request
-outright (`backend/config.py:798-803`).
+outright (`backend/config.py:881-887`).
 
 ### Test and portability hooks
 
@@ -164,8 +164,8 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `turnSound` | `backend/config.py:413` | on by default |
 | `alertSound` | `backend/config.py:426` | off by default |
 | `allowVersionControl` | `backend/config.py:496` | absent means the agent may not run git |
-| `disabledTools` | `backend/agent.py:876`, `backend/profiles.py:236` | tool names removed from the registry |
-| `projectRoots` | `backend/config.py:595` | folders the workspace picker offers |
+| `disabledTools` | `backend/agent.py:866`, `backend/profiles.py:236` | tool names removed from the registry |
+| `projectRoots` | `backend/config.py:701` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:798`, `:804` | stop reading `AGENTS.md` and friends |
 | `memoryBudget` | `backend/memory_store.py:142` | startup memory ceiling in tokens |
 | `memoryBudgetOverride` | `backend/memory_store.py:147` | lifts the 500 ceiling to 100,000 |

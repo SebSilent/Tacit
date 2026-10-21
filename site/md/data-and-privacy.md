@@ -14,6 +14,7 @@ directory itself (`backend/config.py:29-30`). The defaults are your home and `~/
 |---|---|---|
 | `sessions/index.json` | `backend/config.py:36` | one row per session: id, title, model, mode, thinking, project, created, updated |
 | `sessions/<id>.json` | `backend/store.py:20` | the full transcript of that session |
+| `sessions/deleted.json` | `backend/store.py:342` | the ids you have deleted, newest last, capped at 400 (`backend/store.py:335`). A delete has to outlive the copies of the list that are still holding it: a browser's `localStorage`, and any process that reopens the store. `create()` refuses an id on this list (`backend/store.py:53`) and the registry hands it to the page (`backend/store.py:317-322`) so a stale copy is dropped rather than created back |
 | `prefs.json` | `backend/config.py:34` | interface and behaviour preferences, listed in [configuration](configuration.md) |
 | `models.json` | `backend/config.py:32` | providers, base URLs, model list, the default ref |
 | `.env` | `backend/config.py:33` | API keys |

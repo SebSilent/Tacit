@@ -52,10 +52,18 @@ _DISCOVER = ("Before changing files, read the project's own instructions if it h
 _REPEAT = ("{names} with those arguments already ran this turn and its result is above. Do the next "
            "thing instead of re-exploring the same ground.")
 # The failure this exists for: a cell that spent 59 shell calls deriving the same fact and never
-# wrote the file the instruction named, so the checker read an empty directory and scored 0.
-# Advice to "answer now" is worthless if the deliverable does not exist yet.
-_MISSING = ("{names} is named in the task and does not exist yet. Write it now with write_file "
-            "before you run out of steps: a report that only describes the file scores nothing.")
+# wrote anything, so the checker read an empty directory and scored 0. Advice to "answer now" is
+# worthless if the file is not on disk yet.
+#
+# It deliberately names no file. The harness used to read filenames out of the task text and nag
+# about the ones that were missing, and that guess is not recoverable: a filename mentioned in a
+# prompt can be a session title, an input, a question, or an example, and the sentence does not
+# say which. So this reports one observable fact (nothing has been written) and leaves the judgement
+# of whether a file is owed to the agent, with an explicit licence to ignore it.
+_ADVISORY = ("Nothing has been written or edited yet, and this turn is running low on steps. If the "
+             "task asks you to produce or change a file, do it now with write_file or edit_file from "
+             "what you already know: a report that only describes a file scores nothing. If this task "
+             "needed no files, ignore this message and answer as usual.")
 _BUDGET = ("{n} step(s) left in this turn. Stop gathering and answer now: the finding first, then "
            "what you changed if anything, then what is still unresolved.")
 _FAILED = ("The last step's tool call failed{detail}. Fix the cause before repeating it: wrong path, "
@@ -83,12 +91,25 @@ _SALVAGE_MANY = ("Out of steps, and none of these are written: {names}. Write ev
                  "its own fenced code block - they will be written for you.")
 
 
+_SALVAGE_ANY = ("Out of steps, and this turn has written nothing. If the task owes a file, write it "
+                "now with write_file from what you have already established: an approximation you "
+                "can defend scores, a plan you never wrote scores nothing. If the task needed no "
+                "file, answer with the finding instead.")
+
+
 def salvage(names) -> str:
-    """The instruction for the final round that may still write the deliverable."""
+    """The instruction for the final round that may still write the deliverable.
+
+    `names` are paths the agent itself aimed a write at and missed, never names the harness
+    inferred from the task text: a round that orders a file into existence has to be ordering a
+    file somebody already asked for.
+    """
     wanted = [str(n) for n in (names or [])][:3]
     if len(wanted) > 1:
         return _clip(_SALVAGE_MANY.format(names=", ".join(wanted)))
-    return _clip(_SALVAGE_ONE.format(names=wanted[0] if wanted else "the file"))
+    if len(wanted) == 1:
+        return _clip(_SALVAGE_ONE.format(names=wanted[0]))
+    return _clip(_SALVAGE_ANY)
 
 
 # The salvage rounds above are satisfied as soon as the file exists. Two hard-set cells failed
@@ -108,22 +129,32 @@ def verify(names) -> str:
     return _clip(_VERIFY.format(names=", ".join(wanted) or "The file"))
 
 
-# Ordered in the middle of a turn, not offered at the end of one. Every zero-artifact cell in the
+# Sent in the middle of a turn, not offered at the end of one. Every zero-artifact cell in the
 # hard set, feal t2 at 16 turns, schemelike t3 at 34, ran out of turn while still investigating,
 # and a phase that only fires when the model chooses to stop never reaches them.
-_DEMAND = ("{used} of this turn is spent and the file the task names is still not on disk: "
-           "{names}. Nothing else in this turn is graded. Put it on disk now with write_file "
-           "from what you already know - a partial file that runs beats a plan that never lands.")
-_DEMAND_LATE = ("{names} is STILL not on disk and this turn is almost over. Stop investigating. "
-                "One write_file call now with your best current answer, then run it.")
+_ADVICE = ("{used} of this turn is spent and nothing is on disk yet{extra}. If the task owes a "
+           "file, put it on disk now with write_file from what you already know: a partial file "
+           "that runs beats a plan that never lands. If it needed no file, ignore this and keep "
+           "working.")
+_ADVICE_LATE = ("This turn is almost over and nothing is on disk yet{extra}. If a file is owed, "
+                "stop investigating: one write_file call now with your best current answer, then "
+                "run it. If none is owed, ignore this and answer with the finding.")
 
 
-def demand(names, used="", nth=1) -> str:
-    """The mid-turn order to produce the artifact, escalating once."""
-    wanted = ", ".join(str(n) for n in (names or [])[:3]) or "the file"
+def advisory(names=(), used="", nth=1) -> str:
+    """The mid-turn nudge to deliver, escalating once.
+
+    The names, when there are any, are paths the agent's own write call failed on. The harness
+    does not decide which file the task wanted and then order that file into existence: it reports
+    what it can see (nothing landed) and leaves the judgement to the agent, with an explicit
+    licence to ignore the message.
+    """
+    wanted = [str(n) for n in (names or [])][:3]
+    extra = (", and the write you attempted at " + " and ".join(wanted) + " did not land"
+             if wanted else "")
     if nth > 1:
-        return _clip(_DEMAND_LATE.format(names=wanted))
-    return _clip(_DEMAND.format(names=wanted, used=used or "Half"))
+        return _clip(_ADVICE_LATE.format(extra=extra))
+    return _clip(_ADVICE.format(used=used or "Half", extra=extra))
 
 
 # When the clock becomes information. The measured hard-set cells run 900-1,010s inside a 1,175s
@@ -201,7 +232,8 @@ def _clip(s: str) -> str:
     return s[:MAX_BLOCK].rstrip()
 
 
-def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(), missing=(),
+def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(),
+             nothing_written: bool = False,
              first: bool = False, project: bool = False,
              previous: str = "") -> str:
     """Return the block for this step, or "" for none.
@@ -228,10 +260,10 @@ def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(), missing=(
                 detail=" (" + ", ".join(dict.fromkeys(names)) + ")")
         else:
             text = _FAILED.format(detail=" (" + ", ".join(dict.fromkeys(names)) + ")") + detail
-    elif missing:
+    elif nothing_written:
         # Ahead of the repeat nudge: breaking the loop only helps if the run ends with
-        # the artifact on disk, which is what is actually graded.
-        text = _MISSING.format(names=", ".join(dict.fromkeys(missing)))
+        # something on disk, which is what is actually graded.
+        text = _ADVISORY
     elif repeated:
         text = _REPEAT.format(names=", ".join(dict.fromkeys(repeated)))
     elif steps and steps - step <= 2:

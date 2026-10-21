@@ -5,7 +5,7 @@ description the model reads, and a JSON schema. The handler that runs is looked 
 (`backend/agent.py:598-620`).
 
 Nothing else in the product adds a tool to that list silently. Plugin tools and activated MCP schemas
-are appended at the end of the same function (`backend/agent.py:919`, `:923`), and both are off until
+are appended at the end of the same function (`backend/agent.py:879`, `:923`), and both are off until
 you turn them on.
 
 ## The 22
@@ -39,13 +39,13 @@ Two different numbers describe how many tools you are paying for, and the differ
 above. The profile table publishes 20 for a default install, which is the registry minus the two
 memory schemas (`backend/profiles.py:128-136`, `:196-200`). A fresh install with no MCP server
 configured actually sees 16, because the four helpers are also removed at request time
-(`backend/agent.py:889-892`). The published figure counts what the profile owns; the runtime figure
+(`backend/agent.py:849-852`). The published figure counts what the profile owns; the runtime figure
 counts what the model is offered.
 
 ## Four rules decide whether a tool is offered
 
 **1. A disabled tool is gone.** `disabledTools` in `~/.tacit/prefs.json` removes entries by name
-(`backend/agent.py:906-908`). The same list is what **Skills & Tools** edits.
+(`backend/agent.py:866-868`). The same list is what **Skills & Tools** edits.
 
 **2. A read-only caller loses the tools that can change things.** `READONLY_BLOCKED` holds
 `write_file`, `edit_file`, `run_shell`, `bg_start` and `bg_stop` (`backend/agent.py:622`), and adds
@@ -58,13 +58,13 @@ again at dispatch time by `readonly_guard` (`backend/agent.py:638-641`).
 
 **3. The MCP helpers appear only when a server is configured.** With nothing in `mcp.json` the four
 helpers are four dead ends that cost tokens and invite calls that can only fail
-(`backend/agent.py:884-892`). Presence is the gate, not connectivity: a configured but stopped server
+(`backend/agent.py:844-852`). Presence is the gate, not connectivity: a configured but stopped server
 still gets them, because listing and searching are how the model learns what it could start.
 
 **4. Memory tools follow the memory mode.** Both are removed when the mode is off
-(`backend/agent.py:926-938`). `memory_recall` is removed again in `explicit` mode, because that mode
+(`backend/agent.py:886-898`). `memory_recall` is removed again in `explicit` mode, because that mode
 injects what you approved and retrieves nothing, so the tool could only ever answer "not enabled"
-(`backend/agent.py:931-940`, `backend/memory_modes.py:26-29`).
+(`backend/agent.py:891-900`, `backend/memory_modes.py:26-29`).
 
 ## What the tools are told about themselves
 
@@ -93,7 +93,7 @@ rather than a fallback to somewhere else.
 
 `MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:748-752`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:897-901`). `run_shell` is in that set because a command can rewrite the tree, and
+(`backend/agent.py:857-861`). `run_shell` is in that set because a command can rewrite the tree, and
 the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to
@@ -102,13 +102,13 @@ the person using Tacit (`backend/agent.py:624-629`).
 ## The repeat guard
 
 The same call with the same arguments runs three times in a turn, and after that it is answered from
-cache instead (`backend/agent.py:762-765`). Four blocked repeats in a row ends the turn early and
+cache instead (`backend/agent.py:767-770`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:767-771`).
+(`backend/agent.py:772-776`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the
-project (`backend/agent.py:754-760`). `run_shell` is deliberately not exempt: the guard exists because
+project (`backend/agent.py:759-765`). `run_shell` is deliberately not exempt: the guard exists because
 one benchmark cell spent 26 of its 29 shell calls on refused repeats.
 
 ## Tools that exist but are not in the registry

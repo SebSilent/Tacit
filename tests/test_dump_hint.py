@@ -120,13 +120,22 @@ class TestSeveredToolCall(Isolated):
         """Our own output ceiling severing the deliverable write is not the model's failure."""
         orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
         caps, ran = [], []
+        calls = {"n": 0}
 
         def fake_stream(msgs, **k):
             caps.append(k.get("max_tokens"))
             ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
                       .get("content") or "")
             if "Out of steps" not in ask:
-                # The main round: a normal probe, nothing to escalate.
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    # The turn reaches for the file and the write is refused. That attempt is what
+                    # earns the salvage round below: nothing here escalates because the instruction
+                    # happens to contain the word attack.py.
+                    return iter([{"type": "tool_calls", "calls": [
+                        {"id": "w0", "name": "write_file",
+                         "arguments": '{"path": "attack.py", "content": ""}'}]},
+                        {"type": "done", "finish": "stop", "model": None}])
                 return iter([{"type": "tool_calls", "calls": [
                     {"id": "p", "name": "run_shell", "arguments": '{"command": "ls"}'}]},
                     {"type": "done", "finish": "stop", "model": None}])
@@ -142,6 +151,13 @@ class TestSeveredToolCall(Isolated):
                 {"type": "done", "finish": "stop", "model": None}])
 
         def fake_tool(n, a, ctx, out, call=None):
+            if n == "run_shell":
+                out["result"] = "ok"
+                return iter([])
+            if not (a.get("content") or ""):
+                # The refused attempt: intent, not delivery.
+                out["result"] = "ERROR: refused by the sandbox"
+                return iter([])
             ran.append(a.get("path"))
             out["result"] = f"wrote {a.get('path')}"
             return iter([])

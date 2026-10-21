@@ -2034,8 +2034,17 @@ class TestSalvageWordingNamesEveryFile(unittest.TestCase):
         self.assertIn("every one of them", out)
         self.assertNotIn("Write it now", out, "the singular phrasing implies one file")
 
-    def test_no_names_still_produces_an_instruction(self):
-        self.assertIn("the file", guidance.salvage([]))
+    def test_no_names_produces_an_instruction_that_invents_no_file(self):
+        """The round with no target must not conjure one.
+
+        `salvage([])` used to fall back to the literal placeholder "the file", which a model can
+        read as a filename and write. With no path the round describes the situation and lets the
+        turn decline it, because the harness has no idea whether a file was ever owed.
+        """
+        out = guidance.salvage([])
+        self.assertIn("written nothing", out)
+        self.assertNotIn("the file", out, "no placeholder that can be mistaken for a path")
+        self.assertIn("needed no file", out)
 
 
 class TestServerRestart(Isolated):

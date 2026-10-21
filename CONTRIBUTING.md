@@ -60,7 +60,7 @@ additionally gated on the learning mode, so with learning off its thread never s
 block, no worker.
 The memory tools are removed from the registry when the mode is off, and `memory_recall` is removed
 again when the mode cannot retrieve, because a tool that can only answer "not enabled" is a dead end with
-a schema attached (`backend/agent.py:926-940`).
+a schema attached (`backend/agent.py:886-900`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced

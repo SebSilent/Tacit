@@ -21,7 +21,7 @@ four: an item that is injected can be pointed at, explained, and measured (`:15-
 `RETRIEVAL_MODES` is `jit` and `full` (`backend/memory_modes.py:29`). That set is why the tool list
 moves: under `explicit` a recall tool could only ever answer "retrieval is not enabled", which is a dead
 end with a schema attached, so it is not offered (`backend/memory_modes.py:26-28`,
-`backend/agent.py:901-910`).
+`backend/agent.py:861-870`).
 
 Memory is not a plugin and has not been for some time. It used to be, and the plugin's switch decided
 what the agent could call while the memory mode decided what was injected, so the two could disagree

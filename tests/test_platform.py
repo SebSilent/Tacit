@@ -2224,8 +2224,13 @@ class TestRepeatGuard(Isolated):
             agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
         self.assertEqual(len(runs), 6, "distinct arguments were treated as repeats")
 
-    def test_a_blocked_repeat_names_the_file_that_is_still_missing(self):
-        """The whole point of the guard: stop the loop AND say what would finish the task."""
+    def test_a_blocked_repeat_with_nothing_on_disk_says_so(self):
+        """The guard stops the loop AND reports the one thing it can actually see.
+
+        It names no file. The version of this test asked for "attack.py" in the blocked result,
+        which was asserting the guess rather than the guarantee: that name came from the prompt
+        wording, not from anything the turn did.
+        """
         from backend import agent
         import tempfile
         runs = []
@@ -2247,7 +2252,6 @@ class TestRepeatGuard(Isolated):
             runs.append(n)
             out["result"] = "0x80808080 -> 0x02000002"
             return iter([])
-            return iter([])
 
         agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
         try:
@@ -2260,10 +2264,53 @@ class TestRepeatGuard(Isolated):
             agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
         blocked = [m for m in msgs if m.get("role") == "tool" and "BLOCKED" in str(m.get("content"))]
         self.assertTrue(blocked)
-        self.assertIn("attack.py", blocked[0]["content"],
-                      "a blocked call with no deliverable must point at the deliverable")
+        self.assertIn("Nothing has been written or edited this turn", blocked[0]["content"],
+                      "a blocked call on an empty disk has to report the empty disk")
+        self.assertIn("ignore this", blocked[0]["content"],
+                      "and it has to let a task that owed no file decline the reminder")
+        self.assertNotIn("attack.py", blocked[0]["content"],
+                         "the harness must not name a file it only read off the prompt")
         self.assertIn("0x80808080", blocked[0]["content"],
                       "and it must still hand back the previous result")
+
+    def test_the_reminder_stops_once_something_has_been_written(self):
+        """The report is about an empty disk, so a disk that is not empty stops the report."""
+        from backend import agent
+        import tempfile
+        orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
+        turns = iter([[{"type": "tool_calls", "calls": [
+            {"id": "w0", "name": "write_file",
+             "arguments": '{"path": "out.py", "content": "print(1)"}'}]},
+            {"type": "done", "model": None}]]
+            + [[{"type": "tool_calls", "calls": [
+                {"id": f"c{i}", "name": "run_shell",
+                 "arguments": '{"command": "python3 out.py"}'}]},
+               {"type": "done", "model": None}] for i in range(5)]
+            + [[{"type": "text", "delta": "done"}, {"type": "done", "model": None}]])
+
+        def fake_stream(msgs, **k):
+            ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
+                      .get("content") or "")
+            if "Out of steps" in ask:
+                return iter([{"type": "text", "delta": "done"}, {"type": "done", "model": None}])
+            return iter(next(turns))
+
+        def fake_tool(n, a, ctx, out, call=None):
+            out["result"] = "wrote 15 chars to out.py" if n == "write_file" else "1"
+            return iter([])
+
+        agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                msgs = [{"role": "system", "content": "base"},
+                        {"role": "user", "content": f"write out.py and run it, in {d}"}]
+                list(agent.run_turn(msgs, project=d, max_steps=7))
+        finally:
+            agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
+        blocked = [m for m in msgs if m.get("role") == "tool" and "BLOCKED" in str(m.get("content"))]
+        self.assertTrue(blocked, "the repeat guard should still have fired")
+        self.assertNotIn("Nothing has been written", blocked[0]["content"],
+                         "a turn that already wrote a file is not told it wrote nothing")
 
     def test_a_blocked_repeat_stays_short_after_the_first_time(self):
         """Echoing the whole payload into every blocked call is its own kind of waste."""
@@ -2291,62 +2338,51 @@ class TestRepeatGuard(Isolated):
 
 
 class TestDeliverables(Isolated):
-    """The thing being graded is a file, so its absence is worth detecting."""
+    """The thing being graded is usually a file, so an empty disk is worth reporting.
 
-    def test_named_files_that_exist_are_inputs_not_deliverables(self):
-        import tempfile
-        from backend import agent
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "requests_bucket_1.jsonl").write_text("{}", encoding="utf-8")
-            got = agent.deliverables(
-                "Read requests_bucket_1.jsonl and write attack.py, then emit plan_b1.jsonl", d)
-            self.assertEqual(got, ["attack.py", "plan_b1.jsonl"],
-                             "inputs already on disk must not be nagged about")
+    What is not worth reporting is *which* file. This loop used to read filenames out of the task
+    text and nag about the ones that were absent, and the guess is not recoverable: `read alpha.py`
+    quoted as a session title, `parser.py throws a KeyError` as a bug report, and `write alpha.py`
+    as an order are the same regex match, separated only by what the sentence means. One wrong
+    guess spends a turn demanding a file nobody asked for; the other kind is never heard at all,
+    because a single apostrophe in the prompt used to switch the guarantee off by parity. What
+    survives states one fact the harness can observe and leaves the judgement to the agent.
+    """
 
-    def test_paths_in_the_text_are_reduced_to_a_bare_name(self):
-        from backend import agent
-        got = agent.deliverables("create src/deep/attack.py", None)
-        self.assertEqual(got, ["src/deep/attack.py"])
+    def test_the_advisory_names_no_file(self):
+        from backend import guidance
+        text = guidance.for_step(step=28, steps=30, nothing_written=True)
+        self.assertIn("Nothing has been written", text)
+        self.assertNotIn(".py", text, "the harness must not invent a filename to deliver")
+        self.assertIn("ignore this", text,
+                      "a task that owed no file has to be able to dismiss the message")
 
-    def test_no_file_names_means_no_nagging(self):
-        from backend import agent
-        self.assertEqual(agent.deliverables("explain what this cipher does", None), [])
+    def test_a_turn_that_wrote_something_gets_the_clock_instead(self):
+        from backend import guidance
+        text = guidance.for_step(step=28, steps=30, nothing_written=False)
+        self.assertIn("step(s) left", text,
+                      "once something is on disk the only nudge left worth paying for is the clock")
 
-    def test_a_filename_mentioned_in_passing_is_not_a_deliverable(self):
-        """A title or an object is not an order to create.
+    def test_a_salvage_round_without_a_named_target_does_not_invent_one(self):
+        """The round that orders a file into existence needs a path somebody already chose."""
+        from backend import guidance
+        text = guidance.salvage([])
+        self.assertIn("this turn has written nothing", text)
+        self.assertNotIn(".py", text, "no placeholder filename, no guessed one")
+        self.assertIn("needed no file", text)
 
-        The real prompt that broke this was a bug report about deleted sessions:
-        `those sessions named "work on it" and "read alpha.py" keep coming back`.
-        `alpha.py` is not on disk, so the extension match alone promoted a session
-        *title* to a required output, and the nagger then spent the entire turn
-        demanding the agent write a file nobody asked for -- six times, escalating to
-        "reply with the COMPLETE file in one fenced code block and it will be written
-        for you". Absence is only a request to create when the sentence asks for it.
-        """
-        from backend import agent
-        report = ('the sessions that I remove appear again, specially those named '
-                  '"work on it" and "read alpha.py" they keep coming back')
-        self.assertEqual(agent.deliverables(report, None), [])
-        self.assertEqual(agent.deliverables("please read alpha.py and summarise it", None), [])
-        self.assertEqual(agent.deliverables("fix the bug in `parser.py`", None), [])
-        # ...and the same words, when the sentence really does ask, still count.
-        self.assertEqual(agent.deliverables("write alpha.py and beta.py", None),
-                         ["alpha.py", "beta.py"])
-        self.assertEqual(agent.deliverables("read input.csv, then write clean.py", None),
-                         ["clean.py"])
-
-    def test_the_missing_file_outranks_the_repeat_advice_near_the_cap(self):
+    def test_nothing_written_outranks_the_repeat_advice_near_the_cap(self):
         from backend import guidance
         text = guidance.for_step(step=28, steps=30, errors=(), repeated=("run_shell",),
-                                 missing=("attack.py",))
-        self.assertIn("attack.py", text)
+                                 nothing_written=True)
+        self.assertIn("Nothing has been written", text)
         self.assertNotIn("already ran", text,
-                         "a cell that never wrote the file is graded on the file, not the loop")
+                         "a cell that never wrote anything is graded on the file, not the loop")
 
-    def test_a_failure_still_outranks_the_missing_file(self):
+    def test_a_failure_still_outranks_the_advisory(self):
         from backend import guidance
         text = guidance.for_step(step=28, steps=30, errors=(("edit_file", "ERROR: no match"),),
-                                 missing=("attack.py",))
+                                 nothing_written=True)
         self.assertIn("edit_file", text)
 
     def test_the_nudge_arrives_once_and_not_early(self):
@@ -2364,7 +2400,8 @@ class TestDeliverables(Isolated):
                                            if m.get("role") == "user"), {}).get("content") or ""):
                 return iter([{"type": "text", "delta": "done"}, {"type": "done", "model": None}])
             blocks.append([m.get("content") or "" for m in msgs
-                           if m.get("role") == "system" and "named in the task" in str(m)])
+                           if m.get("role") == "system"
+                           and "Nothing has been written" in str(m)])
             return iter(next(turns))
 
         def fake_tool(n, a, ctx, out, call=None):
@@ -2379,7 +2416,7 @@ class TestDeliverables(Isolated):
         finally:
             agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
         fired = [i for i, b in enumerate(blocks) if b]
-        self.assertTrue(fired, "the missing deliverable was never mentioned")
+        self.assertTrue(fired, "an empty disk was never mentioned")
         self.assertGreaterEqual(fired[0], 3,
                                "nagging from step one wastes the budget it is trying to save")
 
@@ -2464,12 +2501,18 @@ class TestStuckTurnExit(Isolated):
     """The guard has to change outcomes, not only costs.
 
     From the fixed Linux arm: cells that solved did it in 14 to 25 rounds, while the cells that
-    failed issued up to 26 refused repeats and stopped at the cap with the named file still absent.
+    failed issued up to 26 refused repeats and stopped at the cap with the file still absent.
     A refused repeat is nearly free now, so a turn can afford to notice it is stuck: end early and
-    spend the last round writing the deliverable, with only the tools that can produce it.
+    spend the last round writing what it was already trying to write, with only the tools that can
+    produce it.
+
+    What earns that phase is evidence, not inference: a write this turn aimed at and missed. The
+    driver below therefore has the model reach for the file and fail, which is what the phase is
+    for. It used to be enough for the instruction to contain the word `attack.py`, and that is not
+    the same thing at all.
     """
 
-    def _drive(self, agent, instruction, steps=12):
+    def _drive(self, agent, instruction, steps=12, attempted_write=True):
         orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
         offered, runs = [], []
 
@@ -2485,6 +2528,12 @@ class TestStuckTurnExit(Isolated):
             if "Answer now without using any more tools" in ask:
                 return iter([{"type": "text", "delta": "reported"},
                              {"type": "done", "model": None}])
+            if attempted_write and not [r for r in runs if r[0] != "run_shell"]:
+                # The turn reaches for the file on step one and misses.
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w0", "name": "write_file",
+                     "arguments": '{"path": "attack.py", "content": ""}'}]},
+                    {"type": "done", "model": None}])
             return iter([{"type": "tool_calls", "calls": [
                 {"id": "p", "name": "run_shell",
                  "arguments": '{"command": "python3 probe.py"}'}]},
@@ -2492,7 +2541,13 @@ class TestStuckTurnExit(Isolated):
 
         def fake_tool(n, a, ctx, out, call=None):
             runs.append((n, str(a.get("path") or "")))
-            out["result"] = "same answer" if n == "run_shell" else "wrote attack.py"
+            if n == "run_shell":
+                out["result"] = "same answer"
+            else:
+                # The first attempt is refused. Every later one, including the salvage round, lands.
+                out["result"] = ("ERROR: refused by the sandbox"
+                                 if len([r for r in runs if r[0] != "run_shell"]) == 1
+                                 else "wrote attack.py")
             return iter([])
 
         agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
@@ -2509,21 +2564,23 @@ class TestStuckTurnExit(Isolated):
         _m, events, _o, _r = self._drive(agent, "Write attack.py that recovers the key.")
         notes = [e["message"] for e in events if e["type"] == "notify"]
         self.assertTrue(any("refused in a row" in n for n in notes), notes)
-        self.assertTrue(any(n.startswith("stopped after 6 steps") for n in notes),
-                        "two runs plus four refusals is the end of the story, not twelve rounds")
+        self.assertTrue(any(n.startswith("stopped after 7 steps") for n in notes),
+                        "one refused write, two runs and four refusals is the end of the story, "
+                        "not twelve rounds")
 
-    def test_the_last_round_writes_the_named_file(self):
+    def test_the_last_round_writes_the_file_it_was_trying_to_write(self):
         from backend import agent
         _m, _e, offered, runs = self._drive(agent, "Write attack.py that recovers the key.")
-        self.assertIn(("write_file", "attack.py"), runs,
-                      "a named deliverable must be written before the turn ends")
+        wrote = [i for i, (n, _p) in enumerate(runs) if n == "write_file"]
+        self.assertGreaterEqual(len(wrote), 2,
+                                "the write it attempted and missed has to be finished before the "
+                                "turn ends")
         phase = [names for names in offered
                  if names and set(names) <= set(agent.SALVAGE_TOOLS)]
         self.assertTrue(phase, "no deliverable phase ran")
         self.assertLessEqual(len(phase), agent.SALVAGE_ROUNDS,
                              "the phase is bounded, or one turn quietly becomes two")
-        wrote = runs.index(("write_file", "attack.py"))
-        self.assertTrue([n for n, _p in runs[wrote + 1:] if n == "run_shell"],
+        self.assertTrue([n for n, _p in runs[wrote[-1] + 1:] if n == "run_shell"],
                         "the file has to be RUN before the phase counts itself done")
         self.assertEqual(len(phase), 2,
                          "one round to write it, one to run it - not every round")
@@ -2533,12 +2590,15 @@ class TestStuckTurnExit(Isolated):
         from backend import agent
         orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
         asked = []
+        calls = {"n": 0}
 
         def fake_stream(msgs, **k):
             ask = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
                       .get("content") or "")
             asked.append(ask)
+            calls["n"] += 1
             if "Write it now with write_file" in ask:
+                # The rounds never land the file: this is the case that must burn all three.
                 return iter([{"type": "tool_calls", "calls": [
                     {"id": "w", "name": "run_shell",
                      "arguments": '{"command": "python3 attack.py"}'}]},
@@ -2546,12 +2606,18 @@ class TestStuckTurnExit(Isolated):
             if "Answer now without using any more tools" in ask:
                 return iter([{"type": "text", "delta": "reported"},
                              {"type": "done", "model": None}])
+            if calls["n"] == 1:
+                # The evidence that earns the rounds: a write aimed at attack.py and missed.
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w0", "name": "write_file",
+                     "arguments": '{"path": "attack.py", "content": ""}'}]},
+                    {"type": "done", "model": None}])
             return iter([{"type": "tool_calls", "calls": [
                 {"id": "p", "name": "run_shell", "arguments": '{"command": "python3 p.py"}'}]},
                 {"type": "done", "model": None}])
 
         def fake_tool(n, a, ctx, out, call=None):
-            out["result"] = "ran, no output"
+            out["result"] = "ran, no output" if n == "run_shell" else "ERROR: write refused"
             return iter([])
 
         agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
@@ -2565,29 +2631,49 @@ class TestStuckTurnExit(Isolated):
                          agent.SALVAGE_ROUNDS,
                          "a file that never lands should get every bounded round, not one")
 
-    def test_nothing_is_salvaged_when_the_task_named_no_file(self):
-        """An investigation task has no deliverable, so it must not get a round of invention."""
+    def test_nothing_is_salvaged_when_the_turn_never_reached_for_a_file(self):
+        """An investigation turn that wrote nothing and attempted nothing gets no round."""
         from backend import agent
-        _m, _e, offered, runs = self._drive(agent, "Find out why the suite is red.")
+        _m, _e, offered, runs = self._drive(agent, "Find out why the suite is red.",
+                                            attempted_write=False)
         self.assertEqual([n for n in offered
                           if n and set(n) <= set(agent.SALVAGE_TOOLS)], [])
         self.assertNotIn("write_file", [n for n, _p in runs])
 
-    def test_a_turn_that_stops_early_still_delivers_the_named_file(self):
+    def test_a_prompt_naming_a_file_is_not_on_its_own_a_reason_to_salvage(self):
+        """The retired guess, pinned so it cannot come back.
+
+        The instruction asks for attack.py in as many words as it can. The turn never attempts the
+        write. Under the old code that was enough to spend three restricted rounds inventing a file
+        nobody had asked the harness to produce; now it earns a closing summary and nothing else.
+        """
+        from backend import agent
+        _m, _e, offered, runs = self._drive(agent, "Write attack.py that recovers the key.",
+                                            attempted_write=False)
+        self.assertEqual([n for n in offered
+                          if n and set(n) <= set(agent.SALVAGE_TOOLS)], [],
+                         "the harness must not invent a file to force into existence")
+
+    def test_a_turn_that_stops_early_still_delivers_the_file_it_was_writing(self):
         """The worst hard-set cells ended on their own — 13 turns, 45,000 output tokens,
         no attack.py. Waiting for the step cap never reached them, so this exit had to
-        grow the same deliverable phase."""
+        grow the same deliverable phase. What it finishes is a write the turn started."""
         from backend import agent
         orig_stream, orig_tool = agent.engine.stream_chat, agent.call_tool
         offered, wrote = [], []
         calls = {"n": 0}
+        attempts = {"n": 0}
 
         def fake_stream(msgs, **k):
             offered.append([t["function"]["name"] for t in (k.get("tools") or [])])
             calls["n"] += 1
             if calls["n"] == 1:
+                # It reaches for the file on the first step and the write is refused. That attempt
+                # is the only thing which later earns the salvage round.
                 return iter([{"type": "text", "delta": "Let me look at the cipher. " * 20},
                              {"type": "tool_calls", "calls": [
+                                 {"id": "w0", "name": "write_file",
+                                  "arguments": '{"path": "attack.py", "content": ""}'},
                                  {"id": "a", "name": "run_shell",
                                   "arguments": '{"command": "python3 -c 1"}'}]},
                              {"type": "done", "model": None}])
@@ -2603,8 +2689,12 @@ class TestStuckTurnExit(Isolated):
 
         def fake_tool(n, a, ctx, out, call=None):
             if n == "write_file":
-                wrote.append(str(a.get("path") or ""))
-                out["result"] = f"wrote {a.get('path')}"
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    out["result"] = "ERROR: refused by the sandbox"
+                else:
+                    wrote.append(str(a.get("path") or ""))
+                    out["result"] = f"wrote {a.get('path')}"
             else:
                 out["result"] = "1"
             return iter([])

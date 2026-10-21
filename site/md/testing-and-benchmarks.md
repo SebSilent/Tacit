@@ -125,7 +125,7 @@ installs nothing (`scripts/check_site_render.js:13-15`).
 
 The benchmark section of the README is the evidence for the architecture, not the argument itself: one
 model for every row, GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its checker files
-untouched, three tasks, three trials each, one build, both operating systems
+untouched, three tasks, three trials each, one build, both operating systems, all rows Tacit v1.0.0
 (`README.md:226-227`).
 
 How it holds up, which this page owns rather than the README:
@@ -158,17 +158,22 @@ else can re-run.
 Three mechanisms exist because of what the cells showed, and they are documented here so a reader knows
 which results were helped by them.
 
-**The delivery guarantee** orders a missing file written, makes it run, and spends the last minutes of
-wall budget landing the artifact, so a failed cell is still a graded artifact
+**The delivery guarantee** finishes a write the turn started and missed, makes it run, and spends the last
+minutes of wall budget landing the artifact, so a failed cell is still a graded artifact
 (`README.md:268-271`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
-(`backend/config.py:441-445`). The salvage phase gets three rounds rather than one, because writing the
-file is step one and the model then needs to run it and fix what the run shows; it is bounded, because an
-unbounded "one more chance" is how a turn becomes two turns (`backend/agent.py:772-776`).
+(`backend/config.py:441-445`). What opens the phase is evidence rather than the prompt: a `write_file` or
+`edit_file` call the turn made and did not land. It used to open on a filename appearing in the task text,
+and that guess is not sound, because a name in a prompt can be a session title, an input, a question or an
+order, and only the sentence says which; a turn that wrote nothing and attempted nothing now gets the
+nudge and the closing summary, and the nudge names no file. The salvage phase gets three rounds rather than
+one, because writing the file is step one and the model then needs to run it and fix what the run shows; it
+is bounded, because an unbounded "one more chance" is how a turn becomes two turns
+(`backend/agent.py:777-781`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
-blocked repeats in a row ends the turn early (`backend/agent.py:762-771`). It exists because one cell
+blocked repeats in a row ends the turn early (`backend/agent.py:767-776`). It exists because one cell
 spent 26 of its 29 shell calls on refused repeats and ended with nothing written
-(`backend/agent.py:756-759`, `:767-770`).
+(`backend/agent.py:761-764`, `:767-770`).
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch

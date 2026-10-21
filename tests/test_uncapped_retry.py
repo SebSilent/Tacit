@@ -156,6 +156,13 @@ class TestWallBudgetAwareness(Isolated):
             if any("Write it now" in a for a in asks[-1]):
                 return iter([{"type": "text", "delta": "no more tools"},
                              {"type": "done", "model": None, "finish": "stop"}])
+            if not runs:
+                # The turn reaches for the file on step one and the write is refused. That attempt
+                # is what the clock later delivers. The wording of the instruction is not.
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w0", "name": "write_file",
+                     "arguments": '{"path": "attack.py", "content": ""}'}]},
+                    {"type": "done", "model": None, "finish": "stop"}])
             return iter([{"type": "tool_calls", "calls": [
                 {"id": "p", "name": "run_shell",
                  "arguments": '{"command": "python3 probe.py"}'}]},
@@ -163,7 +170,7 @@ class TestWallBudgetAwareness(Isolated):
 
         def fake_tool(name, a, ctx, out, call=None):
             runs.append(name)
-            out["result"] = "ok"
+            out["result"] = "ERROR: refused by the sandbox" if name == "write_file" else "ok"
             return iter([])
 
         agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
@@ -246,11 +253,11 @@ class TestDeliveryOff(Isolated):
             config.prefs = orig_prefs
         return events, asks
 
-    def test_off_never_orders_or_forces(self):
+    def test_off_never_advises_or_forces(self):
         events, asks = self._run(guarantee_env="0")
         notes = [e["message"] for e in events if e["type"] == "notify"]
         self.assertFalse([n for n in notes if "on disk" in n or "delivering" in n], notes)
-        self.assertFalse([a for a in asks if "Write it now" in a or "still not on disk" in a
+        self.assertFalse([a for a in asks if "Write it now" in a or "on disk yet" in a
                           or "never executed" in a], asks)
 
     def test_off_beats_prefs_on(self):
@@ -261,19 +268,28 @@ class TestDeliveryOff(Isolated):
         _e, asks = self._run(pref=False)
         self.assertFalse([a for a in asks if "Write it now" in a], asks)
 
-    def test_default_still_orders(self):
+    def test_default_still_advises(self):
         # The switch exists so it can be turned off. On, it has to keep behaving as measured:
-        # a probing turn still gets the mid-turn order.
+        # a probing turn still gets the mid-turn nudge. It names no file, so the marker is the
+        # statement about the disk, not a filename.
         events, asks = self._run(guarantee_env="1")
-        self.assertTrue([a for a in asks if "still not on disk" in a], asks)
+        nudges = [a for a in asks if "nothing is on disk yet" in a]
+        self.assertTrue(nudges, asks)
+        self.assertFalse([a for a in nudges if "attack.py" in a],
+                         "the nudge reports the empty disk, it must not name a file it inferred")
 
 
 class TestProseExtraction(Isolated):
     """A phase that ends with nothing on disk scored zero however well it argued.
 
-    feal trial 2 of the current arm: 16 turns, 38,500 tokens, no write_file ever attempted, and the
-    checker's whole verdict is `attack.py does not exist`. When the answer to "write it now" is
-    prose containing the code, the code is the deliverable.
+    When the answer to "write it now" is prose containing the code, the code is the deliverable and
+    the harness may move it onto disk unedited. What licenses the round is a write the turn itself
+    attempted and missed, which is also where the target path comes from: the model named it.
+
+    feal trial 2 (16 turns, 38,500 tokens, no write_file ever attempted) is the case this used to
+    cover by guessing `attack.py` off the instruction. It no longer does: with nothing attempted
+    there is no path to write to, and inventing one is authorship, not delivery. That turn now
+    gets the nudge and the closing summary.
     """
 
     CODE = "def attack(encrypt_fn):\n    return 5\n"
@@ -293,12 +309,23 @@ class TestProseExtraction(Isolated):
                     {"id": "r", "name": "run_shell",
                      "arguments": '{"command": "python3 t.py"}'}]},
                     {"type": "done", "model": None, "finish": "stop"}])
+            if not [r for r in runs if r[0] == "write_file"]:
+                # It reaches for the file on step one and the write is refused. That attempt is the
+                # only reason a salvage round runs, and the only reason the harness may move the
+                # model's prose onto disk: the path is the model's own, not one it inferred.
+                return iter([{"type": "tool_calls", "calls": [
+                    {"id": "w0", "name": "write_file",
+                     "arguments": '{"path": "attack.py", "content": ""}'}]},
+                    {"type": "done", "model": None, "finish": "stop"}])
             return iter([{"type": "text", "delta": "considering the differential"},
                          {"type": "done", "model": None, "finish": "stop"}])
 
         def fake_tool(name, a, ctx, out, call=None):
             runs.append((name, str(a.get("path") or ""), str(a.get("content") or "")))
-            out["result"] = "wrote" if name == "write_file" else "ok"
+            if name == "write_file" and not (a.get("content") or ""):
+                out["result"] = "ERROR: refused by the sandbox"
+            else:
+                out["result"] = "wrote" if name == "write_file" else "ok"
             return iter([])
 
         agent.engine.stream_chat, agent.call_tool = fake_stream, fake_tool
@@ -313,7 +340,9 @@ class TestProseExtraction(Isolated):
 
     def test_a_prose_reply_still_lands_the_file(self):
         events, runs = self._run("Here it is:\n```python\n" + self.CODE + "```\n")
-        wrote = [r for r in runs if r[0] == "write_file"]
+        # Only the writes that carried content count: the turn's own refused attempt is the
+        # evidence that earns the round, not a delivery.
+        wrote = [r for r in runs if r[0] == "write_file" and r[2]]
         self.assertTrue(wrote, runs)
         self.assertEqual(wrote[0][1], "attack.py")
         self.assertIn("def attack(encrypt_fn)", wrote[0][2],
@@ -325,7 +354,7 @@ class TestProseExtraction(Isolated):
         # Fabricating a stub to have *something* on disk would be gaming the checker, not
         # delivering the model's work.
         _e, runs = self._run("I could not complete the attack in the budget.")
-        self.assertFalse([r for r in runs if r[0] == "write_file"], runs)
+        self.assertFalse([r for r in runs if r[0] == "write_file" and r[2]], runs)
 
 
 if __name__ == "__main__":
@@ -432,7 +461,7 @@ class TestMidTurnDemand(Isolated):
             last = str(next((m for m in reversed(msgs) if m.get("role") == "user"), {})
                        .get("content") or "")
             asks.append(last)
-            ordered = "still not on disk" in last
+            ordered = "nothing is on disk yet" in last
             if ordered and writes_after_demand:
                 return iter([{"type": "tool_calls", "calls": [
                     {"id": "w", "name": "write_file",
@@ -468,29 +497,29 @@ class TestMidTurnDemand(Isolated):
             agent.engine.stream_chat, agent.call_tool = orig_stream, orig_tool
         return events, asks, runs
 
-    def test_a_turn_that_only_probes_is_ordered_to_write(self):
+    def test_a_turn_that_only_probes_is_advised_to_write(self):
         _e, asks, runs = self._run(writes_after_demand=True)
-        demand_at = [i for i, a in enumerate(asks) if "still not on disk" in a]
-        self.assertTrue(demand_at, "a probing turn with no artifact was never ordered to write")
-        self.assertGreaterEqual(demand_at[0], 3,
-                                "the order comes once half the turn is gone, not on step one")
+        nudge_at = [i for i, a in enumerate(asks) if "nothing is on disk yet" in a]
+        self.assertTrue(nudge_at, "a probing turn with an empty disk was never advised to write")
+        self.assertGreaterEqual(nudge_at[0], 3,
+                                "the nudge comes once half the turn is gone, not on step one")
         self.assertIn(("write_file", "attack.py"), runs,
                       "and the turn converts: the file lands inside the same turn")
 
-    def test_the_order_escalates_once(self):
-        # The demand stays in the transcript, so later steps still see it as the last user
+    def test_the_nudge_escalates_once(self):
+        # The advice stays in the transcript, so later steps still see it as the last user
         # message - count distinct messages, not occurrences.
         _e, asks, _r = self._run(writes_after_demand=False, steps=10)
         uniq = [a for i, a in enumerate(asks) if i == 0 or a != asks[i - 1]]
         first = [a for a in uniq if "of this turn is spent" in a]
-        second = [a for a in uniq if "STILL not on disk" in a]
+        second = [a for a in uniq if "This turn is almost over" in a]
         self.assertEqual(len(first), 1, first)
         self.assertEqual(len(second), 1, second)
 
     def test_a_turn_that_already_writes_is_not_interrupted(self):
         # Every step costs a request; nagging a healthy turn would slow the cells that work.
         _e, asks, _runs = self._run(writes_after_demand=None)
-        self.assertFalse([a for a in asks if "not on disk" in a], asks)
+        self.assertFalse([a for a in asks if "on disk yet" in a], asks)
 
 
 if __name__ == "__main__":

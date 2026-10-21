@@ -751,6 +751,11 @@ SUBTASK = "task"
 # file a command changed.
 MUTATING = {"write_file", "edit_file", "run_shell"}
 
+# The subset that names a file it means to put on disk. `run_shell` mutates too and earns a
+# snapshot, but its argument is a command rather than a path, so it can never say which file was
+# owed. Only these two calls can turn a guess into evidence.
+WRITE_TOOLS = ("write_file", "edit_file")
+
 # Tools the repeat guard never caches: a repeated write may be a recovery, and
 # silently skipping a mutation that was asked for would make the harness lie
 # about what it did to the project. `run_shell` is deliberately NOT exempt —
@@ -777,72 +782,27 @@ SALVAGE_TOOLS = ("write_file", "edit_file", "run_shell")
 _REPEAT_REPLY = (
     "BLOCKED: {tool} has already run with exactly these arguments {n} times this turn, and it "
     "will not run again. Its result was:\n\n{prev}\n\nThat answer has not changed. Do something "
-    "different: change the arguments, or write down what you have and use it.{missing}")
+    "different: change the arguments, or write down what you have and use it.{advice}")
 
 # This reminder rides on the blocked result rather than only on the guidance block, because the
 # guidance block fires once and is then suppressed as a duplicate three steps before the cap.
 # The cell that started this one was told once and spent 26 more calls not writing the file.
-_MISSING_IN_REPLY = ("\n\n{names} is what this task asks you to produce, and it is not written "
-                     "yet. Write it now with write_file; describing it in your final answer "
-                     "scores nothing.")
+#
+# It names no file. This loop used to guess the deliverable by reading filenames out of the task
+# text, and the guess is not sound: `read alpha.py` quoted as a session title, `parser.py throws a
+# KeyError` as a bug report, and `write alpha.py` as an order are the same regex match, separated
+# only by what the sentence means. A wrong guess in one direction spends a turn demanding a file
+# nobody asked for; in the other it drops the guarantee without a sound, which is what a stray
+# apostrophe used to do. So this states one fact the harness can actually observe and leaves the
+# rest to the agent.
+_NOTHING_WRITTEN_REPLY = ("\n\nNothing has been written or edited this turn. If your answer "
+                          "contains a file the task asked for, write it with write_file now; "
+                          "describing it in your final answer scores nothing. If this task needed "
+                          "no files, ignore this.")
 
-# A file name in the task text that is not on disk yet is the thing being asked for. This is the
-# cheapest possible completion signal, and it is the one a 30-step turn can act on: a cell that
-# derives the right answer and never writes it down scores zero, because the checker reads files.
-_ARTIFACT = re.compile(
-    r"(?<!\w)[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh|js|ts|tsx|jsx|c|h|cpp|go|rs|java|scm|txt"
-    r"|json|jsonl|md|yaml|yml|toml|html|css|sql)\b")
-
-
-# A file named as the object of a verb is something to consume, not to produce. Without this the
-# extension regex alone decides, and a task that merely mentions a filename in passing acquires a
-# phantom deliverable.
-_CONSUME = re.compile(
-    r"(?:read|open|show|list|print|cat|run|execute|edit|change|fix|delete|remove|rename|archive|"
-    r"summarise|summarize|describe|review|inspect|explain|parse|check|test|use|using|load)\s*[.:;,)]*$",
-    re.I)
-
-
-def _incidental(text: str, start: int) -> bool:
-    """True when this mention names the file as something to consume, not to produce.
-
-    The task that surfaced this said: those sessions named "work on it" and "read alpha.py" keep
-    coming back. `alpha.py` is a session *title* there, but it matches `_ARTIFACT`, it is not on
-    disk, and `deliverables()` then hands it to the guidance nagger, which spends a whole turn
-    insisting the agent write a file nobody asked for.
-    """
-    head = text[:start]
-    # Inside a quoted span: a title, a name, a citation. Not an order to produce.
-    if head.count('"') % 2 or head.count("'") % 2 or head.count("`") % 2:
-        return True
-    tail = head.rstrip()[-32:]
-    return bool(_CONSUME.search(tail))
-
-
-def deliverables(text: str, project: str | None) -> list:
-    """File names the task text names that do not exist in the project yet.
-
-    Inputs are excluded by the same rule that makes this useful: a named file already on disk is
-    something to read or edit, not something still to produce. A name the sentence only *refers*
-    to -- quoted as a title, or the object of "read"/"delete"/"fix" -- is excluded the same way
-    even when it is absent, because absence is not a request to create it.
-    """
-    if not text:
-        return []
-    out, seen = [], set()
-    for m in _ARTIFACT.finditer(text):
-        name = m.group(0)
-        base = name.rsplit("/", 1)[-1]
-        if base in seen:
-            continue
-        if _incidental(text, m.start()):
-            continue
-        seen.add(base)
-        if project and (os.path.exists(os.path.join(project, name))
-                        or os.path.exists(os.path.join(project, base))):
-            continue
-        out.append(name)
-    return out[:4]
+# What the turn has to go on is what the turn did, not what the prompt said. The regex that read
+# deliverables out of the task text used to live here; `_NOTHING_WRITTEN_REPLY` above carries the
+# reason it was removed.
 
 
 def _turn_msg_index(session: str):
@@ -1953,13 +1913,12 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     # Consecutive identical calls refused this turn. Reset by any call that actually runs, because
     # "stuck" means nothing changed, not that the same tool was used twice.
     blocked_run = 0
-    # Names the task asks for that are not on disk yet, and the names this turn has written.
-    wanted = deliverables(next((str(m.get("content") or "") for m in messages
-                                if m.get("role") == "user"), ""), project)
+    # Only what this turn actually did: the basenames that landed, and the paths whose own write
+    # attempt did not. Neither is inferred from the wording of the task, which is the whole point.
     guarantee = config.deliver_guarantee()
     written: set = set()
+    pending: list = []
     phase_ran = [False]
-    touched = [False]
     ran_after_write = [False]
     demanded = [0]
     forced = 0
@@ -2008,10 +1967,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                    "message": "salvage round hit the output cap mid-write; retrying without one"}
         if not calls:
             # The phase exists because a cell that ends with nothing on disk scores zero however
-            # well it argued. feal trial 2 is exactly that: 16 turns, 38,500 tokens, no write_file
-            # ever attempted. If the reply to "write it now" is prose with the code in it, that
+            # well it argued. If the reply to "write it now" is prose with the code in it, that
             # code is the deliverable and the only thing between 0 and a chance is who puts it on
             # disk. Extraction is not authorship - the content is the model's, unedited.
+            #
+            # `names` has to be non-empty, and it only ever holds a path the agent's own write call
+            # named. That is the line this is allowed to cross: writing the model's bytes to a path
+            # the model chose is delivery, inventing a path from the prompt wording and writing
+            # something into it is authorship, and the harness does not do that any more.
             prose = "".join(got)
             block = _code_block(prose)
             if block and names:
@@ -2063,8 +2026,15 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 phase_ran[0] = True
             _audit_tool(c["name"], args, result, failed, ctx)
             path = str(args.get("path") or args.get("file") or "")
-            if path:
-                written.add(path.replace("\\", "/").rsplit("/", 1)[-1])
+            if path and c["name"] in WRITE_TOOLS:
+                # The same rule as the main loop: a write that failed is intent, not delivery.
+                base = path.replace("\\", "/").rsplit("/", 1)[-1]
+                if failed:
+                    if base not in written and path not in pending:
+                        pending.append(path)
+                else:
+                    written.add(base)
+                    pending[:] = [p for p in pending if p.rsplit("/", 1)[-1] != base]
             _ms = int(round((time.monotonic() - _t0) * 1000))
             # `backend`/`changed` ride the same path as `elapsed_ms`: onto the stored
             # record (so a reload keeps them) and onto the live event.
@@ -2078,35 +2048,40 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             trace.append({"text": "".join(got), "reason": "".join(why).strip(),
                           "tools": step_tools})
 
-    def _report(missing=(), closing=True, verify=()):
+    def _report(unfinished=(), closing=True, verify=()):
         """One closing call with no tools offered, so it can only say where things
         stand. Used whenever the turn would otherwise end with no answer. `closing=False`
         keeps the deliverable phase but skips the summary, for a turn that already said
-        something and simply left the named file unwritten."""
+        something and left its own write unfinished.
+
+        Both arguments are evidence, never guesses: `unfinished` is paths this turn's own
+        write_file/edit_file calls aimed at and missed, `verify` is basenames that actually
+        landed. A turn that wrote nothing and attempted nothing gets the closing summary and
+        nothing else, because there is no file the harness can claim it owes."""
         nonlocal turn_tokens
         if chat or not tools:
             return
         # The other half of the same failure. schemelike shipped `Missing closing parenthesis`
         # three trials running because the deliverable EXISTED: the salvage loop below only fires
         # for files that are absent, so a written-but-never-run file ended the turn untouched. This
-        # asks for the run, on the files the task named, without offering the authoring tools a
+        # asks for the run, on the files this turn wrote, without offering the authoring tools a
         # second time around - nothing here writes a new file from scratch.
-        if verify and not missing:
+        if verify and not unfinished:
             for _ in range(SALVAGE_ROUNDS):
                 yield from _salvage(list(verify), run_check=True)
                 if ran_after_write[0] or phase_ran[0]:
                     break
             if not closing:
                 return
-        if missing and config.deliver_guarantee():
-            names = list(missing)
+        if unfinished and config.deliver_guarantee():
+            names = list(unfinished)
             # Landing the file does not end the phase. It ends when the file has landed AND
             # something has been run inside it - otherwise a syntactically broken deliverable
             # counts as done and the cell dies at the checker instead of at a failing run.
             for _ in range(SALVAGE_ROUNDS):
-                yield from _salvage(names if names else list(missing),
+                yield from _salvage(names if names else list(unfinished),
                                     run_check=not names)
-                names = [n for n in missing if n.rsplit("/", 1)[-1] not in written]
+                names = [n for n in unfinished if n.rsplit("/", 1)[-1] not in written]
                 if not names and phase_ran[0]:
                     break
             if not closing:
@@ -2176,15 +2151,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         step_errors: list = []
         try:
             ctx_msgs = windowed(messages, budget)
-            # Only in the last few steps: a task that names an optional file should not be
-            # nagged about it for the whole turn, and near the cap it is the only thing worth
-            # spending a step on, because the checker reads files rather than answers.
-            missing = ()
-            if wanted and steps - i <= 3:
-                missing = tuple(n for n in wanted
-                                if n.rsplit("/", 1)[-1] not in written)
+            # Only in the last few steps, and only on something the harness can see: this turn has
+            # put nothing on disk. It does not claim a file is owed, because it cannot know that,
+            # and it says so in the block itself. A turn that already wrote something is not told
+            # to write one.
+            nothing_written = steps - i <= 3 and not written
             block = guidance.for_step(step=i, steps=steps, errors=last_errors,
-                                      repeated=repeats, missing=missing,
+                                      repeated=repeats, nothing_written=nothing_written,
                                       first=(i == 0 and not has_prior_work),
                                       project=bool(project) and not has_instructions, previous=last_block)
             if block:
@@ -2214,17 +2187,18 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 ctx_msgs = ctx_msgs + [{"role": "system",
                                        "content": guidance.time_left(left)}]
             # Late enough that another probe is not affordable, early enough that a file can still
-            # land. Write the deliverable with what is already known rather than being cut off
-            # mid-thought: a rough artifact that exists beats a perfect plan that never landed.
+            # land. Write it with what is already known rather than being cut off mid-thought: a
+            # rough artifact that exists beats a perfect plan that never landed. This fires only on
+            # a write this turn aimed at and missed. Ending a turn early to force out a file the
+            # harness inferred from the wording of the prompt is exactly the behaviour that went.
             if (guarantee and left is not None and left <= guidance.EMERGENCY_S
-                    and wanted and not chat and not nested and depth == 0):
-                late = tuple(n for n in wanted
-                             if n.rsplit("/", 1)[-1] not in written)
+                    and not chat and not nested and depth == 0):
+                late = tuple(n for n in pending if n.rsplit("/", 1)[-1] not in written)
                 if late:
                     yield {"type": "notify", "level": "info",
                            "message": f"{max(0, int(left))}s of wall budget left and "
-                                      f"{', '.join(late)} is not written: delivering now"}
-                    yield from _report(missing=late, closing=False)
+                                      f"{', '.join(late)} never landed: delivering now"}
+                    yield from _report(unfinished=late, closing=False)
                     return
 
             finish = ""
@@ -2317,24 +2291,24 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                        "message": "planning detected: guided back to action"}
                 continue
             stopped = stop is not None and stop.is_set()
-            # Ending the turn on its own without the file the task named is the most
+            # Ending the turn on its own with a write still unfinished is the most
             # common hard-set failure there is: the model thinks out loud, says something
             # sensible, and leaves nothing for a checker to read. Waiting for the step cap
             # never reaches these cells — the ones that stopped at 13 turns had 45,000
             # output tokens and no artifact — so the deliverable phase runs here too.
-            unwritten = ()
-            if wanted and not stopped and not chat:
-                unwritten = tuple(n for n in wanted
-                                  if n.rsplit("/", 1)[-1] not in written)
-            if unwritten and guarantee:
-                yield from _report(missing=unwritten, closing=bool(narration))
-            elif (guarantee and wanted and not stopped and not chat and not nested and touched[0]
+            # What starts it is a write this turn aimed at and missed, never a filename the
+            # harness read out of the prompt: a turn that wrote nothing and attempted nothing
+            # owed nothing as far as this loop can tell, and it gets the closing summary only.
+            unfinished = tuple(n for n in pending if n.rsplit("/", 1)[-1] not in written)
+            if unfinished and not stopped and not chat and guarantee:
+                yield from _report(unfinished=unfinished, closing=bool(narration))
+            elif (guarantee and written and not stopped and not chat and not nested
                     and not ran_after_write[0]
                     and (not deadline or time.time() < deadline - 60)):
-                # Everything the task named is on disk, the model wrote it, and it never executed
-                # once. Ship it to the checker anyway and the cell dies on a syntax error the
-                # model could have seen for one `python3 interp.py`.
-                yield from _report(verify=tuple(wanted), closing=bool(narration))
+                # The files this turn wrote are on disk and nothing was ever executed. Ship it to
+                # the checker anyway and the cell dies on a syntax error the model could have seen
+                # for one `python3 interp.py`.
+                yield from _report(verify=tuple(sorted(written)), closing=bool(narration))
             elif not narration and not stopped:
                 # It stopped calling tools and said nothing on the way out. Left as
                 # is, the user got a transcript of results with no answer at all.
@@ -2412,12 +2386,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 # Third identical successful call. Running it again is not new information, and
                 # the model gets its own previous result back so it cannot claim it was withheld.
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
-                still = [n for n in wanted if n.rsplit("/", 1)[-1] not in written]
                 prev = (str(call_cache[key])[:REPEAT_ECHO] if seen == REPEAT_BLOCK_AFTER
                         else "(its result is already in the transcript above)")
-                miss = (_MISSING_IN_REPLY.format(names=", ".join(still[:3])) if still else "")
+                # The reminder rides here because the guidance block fires once and is then
+                # suppressed as a duplicate. It reports only that nothing has landed: which file,
+                # if any, is the agent's call, not this loop's.
+                advice = "" if written else _NOTHING_WRITTEN_REPLY
                 out = {"result": _REPEAT_REPLY.format(n=seen, tool=c["name"], prev=prev,
-                                                     missing=miss)}
+                                                     advice=advice)}
                 yield {"type": "notify", "level": "info",
                        "message": f"blocked repeat call #{seen} of {c['name']}"}
                 blocked_run += 1
@@ -2431,19 +2407,25 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 _ms = int(round((time.monotonic() - _t0) * 1000))
             result = out.get("result", "ERROR: the tool produced no result")
             call_cache[key] = result
-            if c["name"] in MUTATING:
-                path = str(args.get("path") or args.get("file") or "")
-                if path:
-                    written.add(path.replace("\\", "/").rsplit("/", 1)[-1])
-            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             failed = str(result).startswith("ERROR:")
-            # Two facts the turn cannot be answered without: did the model touch a file the task
-            # named, and did anything ever RUN after that. `written` alone cannot tell them apart.
             here = str(args.get("path") or args.get("file") or "").replace("\\", "/")
-            if not failed and here and here.rsplit("/", 1)[-1] in {
-                    n.rsplit("/", 1)[-1] for n in wanted}:
-                touched[0] = True
-            elif not failed and touched[0] and c["name"] == "run_shell":
+            # Two kinds of evidence, both taken from the agent's own call rather than from the
+            # wording of the task: a write that landed proves a file exists, a write that did not
+            # proves a file was intended. The second is the only licence this loop has for ordering
+            # a delivery. A refused write used to fall the other way, added to `written` whatever
+            # the result said, which silenced the nag exactly when the file was most certainly
+            # absent.
+            if c["name"] in WRITE_TOOLS and here:
+                base = here.rsplit("/", 1)[-1]
+                if failed:
+                    if base not in written and here not in pending:
+                        pending.append(here)
+                else:
+                    written.add(base)
+                    pending[:] = [p for p in pending if p.rsplit("/", 1)[-1] != base]
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+            # Did anything land, and did anything ever RUN after that.
+            if not failed and written and c["name"] == "run_shell":
                 # The only tool that proves the deliverable was executed. Reading a file, or
                 # listing the directory, is not running eval.scm - a 200-char fragment passed
                 # this test before and the cell died on `Unexpected closing parenthesis`.
@@ -2472,28 +2454,31 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
 
         last_errors = step_errors
 
-        # Order the artifact in the middle of the turn, not after it.
+        # Nudge toward delivery in the middle of the turn, not after it.
         # feal trial 2: 16 turns, 38,500 tokens, no write attempted. schemelike trial 3: 34 turns,
         # no file. Both ended because the turn ran out, so the end-of-turn deliverable phase -
         # which only runs when the model chooses to stop - never got to force anything. Halfway in,
         # while there is still budget to write AND to run it, there is.
-        if guarantee and wanted and not chat and not nested and depth == 0:
-            still = [n for n in wanted if n.rsplit("/", 1)[-1] not in written]
+        #
+        # The trigger is the absence of evidence rather than the presence of a guessed name: this
+        # turn has put nothing on disk. That is the whole of what the harness knows, the message
+        # says as much, and it invites the agent to discard it when the task owed no file.
+        if guarantee and not written and not chat and not nested and depth == 0:
             # Two triggers, because a turn can run out on either clock. 40% of the steps is the
-            # earliest the order pays for itself (a real feal run wrote attack.py only after the
-            # order at 15/30 and then had to be cut short), and half the wall budget left catches
+            # earliest the nudge pays for itself (a real feal run wrote attack.py only after the
+            # nudge at 15/30 and then had to be cut short), and half the wall budget left catches
             # turns that burn steps slowly - s2's feal cell died at 1,081s with nothing on disk.
             due = (i + 1 >= max(3, steps * 2 // 5)
                    or (left is not None and left <= guidance.EMERGENCY_S * 2))
             late = (i + 1 >= max(3, steps * 3 // 4)
                     or (left is not None and left <= guidance.EMERGENCY_S))
-            if still and (due or late) and demanded[0] < (2 if late else 1):
+            if (due or late) and demanded[0] < (2 if late else 1):
                 demanded[0] += 1
                 messages.append({"role": "user",
-                                 "content": guidance.demand(still, f"{i + 1} of {steps} steps",
-                                                            demanded[0])})
+                                 "content": guidance.advisory(pending, f"{i + 1} of {steps} steps",
+                                                              demanded[0])})
                 yield {"type": "notify", "level": "info",
-                       "message": "no deliverable on disk yet: ordered it written now"}
+                       "message": "nothing on disk yet: advised delivering a file if one is owed"}
 
         # ── the cost governor ───────────────────────────────────────────
         # Reported live, at fractions of the model's real window, so a turn that
@@ -2562,16 +2547,17 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # changes the outcome rather than the cost: those steps go to the deliverable instead.
             yield {"type": "notify", "level": "warn",
                    "message": f"{blocked_run} identical calls refused in a row, ending the turn "
-                              "on the deliverable"}
-            yield from _report([n for n in wanted
-                                if n.rsplit("/", 1)[-1] not in written])
+                              "on what is unfinished"}
+            yield from _report(unfinished=[n for n in pending
+                                           if n.rsplit("/", 1)[-1] not in written])
             yield {"type": "notify", "message": f"stopped after {i + 1} steps", "level": "warn"}
             yield {"type": "done"}
             return
 
     # The step budget ran out while work was still open, so report where it stands.
     if not (stop is not None and stop.is_set()):
-        yield from _report([n for n in wanted if n.rsplit("/", 1)[-1] not in written])
+        yield from _report(unfinished=[n for n in pending
+                                       if n.rsplit("/", 1)[-1] not in written])
 
     yield {"type": "notify", "message": f"stopped after {steps} steps", "level": "warn"}
     yield {"type": "done"}
