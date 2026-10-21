@@ -88,7 +88,14 @@ def _meta(rec: dict) -> dict:
         # redraw the strip instead of starting a second plan to find out. Read
         # from the runtime rather than from this handler's copy of ``rec``, which
         # is as old as the connection and would show a plan already superseded.
-        "plan": plan_runtime.snapshot(rec["id"]),
+        # The record is passed, not just the id: `snapshot` falls back to
+        # `store.get(sid)` when it has nothing in hand, and `_meta` is called on
+        # every hello and every get_state. Reading the disk here re-reads a record
+        # the caller is already holding, and for a caller that synthesized one
+        # (tests, and any future internal use) it reaches whatever store the
+        # process currently points at — which is how a contract test that never
+        # redirects the store ended up opening a real session file.
+        "plan": plan_runtime.snapshot(rec["id"], rec),
         "usage": _usage_snapshot(rec),
     }
 
@@ -209,6 +216,14 @@ async def ws_session(ws: WebSocket, sid: str):
                            mode=q.get("mode") or "agent",
                            thinking=q.get("thinking") or "default",
                            project=q.get("workdir") or "", sid=sid)
+        if rec is None:
+            # The id was deleted. `create` refuses it rather than re-materialising
+            # a session the person threw away, which is the one way a delete can
+            # still be undone from the browser side: a tab that kept the id in its
+            # own copy of the list asks for it back after a 4404, and until now the
+            # store obliged. Say the same thing again and let the view drop the row.
+            await ws.close(code=4404, reason="session deleted")
+            return
         sid = rec["id"]
     else:
         changed = False

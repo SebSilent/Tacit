@@ -160,7 +160,7 @@ None of this was invented here.
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
   size actually is (`backend/agent.py:1102`).
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1200-1228`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1230-1258`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
 - **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first

@@ -49,6 +49,29 @@ _lock = threading.Lock()
 _turns: dict[str, dict] = {}
 # sid -> {"stop": Event, "worker": TurnWorker | None, "thread": Thread}
 _assistants: dict[str, dict] = {}
+# Every driver thread still alive, whatever its session row says. `_turns` is
+# keyed by sid and the epilogue pops that row partway through (the idle mark,
+# the autonomy chain and the last store write follow the pop), so a thread
+# looked up by session id is already unreachable while it is still running.
+# `shutdown()` needs the handle that lives as long as the thread does, or a
+# turn's final write outruns whatever the caller has already given back —
+# which is how a redirected test home leaks a session into the real one.
+_drivers: set[threading.Thread] = set()
+
+
+def _spawn(target, args, kwargs) -> threading.Thread:
+    """Start a driver thread and keep it in `_drivers` until it exits itself."""
+    def _run():
+        try:
+            target(*args, **kwargs)
+        finally:
+            with _lock:
+                _drivers.discard(t)
+    t = threading.Thread(target=_run, daemon=True)
+    with _lock:
+        _drivers.add(t)
+    t.start()
+    return t
 
 
 def turn_running(sid: str) -> bool:
@@ -1023,15 +1046,11 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
             _turns.pop(sid, None)
         return {"ok": False, "error": str(exc)}
 
-    t = threading.Thread(
-        target=_drive_turn,
-        args=(sid, rec, messages),
-        kwargs={"project": project, "ref": ref, "chat": chat,
+    t = _spawn(_drive_turn, (sid, rec, messages),
+               {"project": project, "ref": ref, "chat": chat,
                 "has_instructions": bool(instructions.get("text")),
-                "reasoning": reasoning, "trace": trace, "run": run, "bus": bus},
-        daemon=True)
+                "reasoning": reasoning, "trace": trace, "run": run, "bus": bus})
     run["thread"] = t
-    t.start()
     return {"ok": True, "sid": sid}
 
 
@@ -1089,12 +1108,8 @@ def start_assistant(sid: str, rec: dict, text: str,
         with _lock:
             _assistants.pop(sid, None)
         return {"ok": False, "error": str(exc)}
-    t = threading.Thread(
-        target=_drive_assistant,
-        args=(sid, rec, mini, text, cfg, trace, run, bus),
-        daemon=True)
+    t = _spawn(_drive_assistant, (sid, rec, mini, text, cfg, trace, run, bus), {})
     run["thread"] = t
-    t.start()
     return {"ok": True, "sid": sid}
 
 
@@ -1171,8 +1186,12 @@ def shutdown() -> dict:
     """
     with _lock:
         sids = sorted(set(_turns) | set(_assistants))
+        # The run rows first, then every driver still on the list: a thread
+        # whose epilogue already popped its own sid is exactly the one that is
+        # still writing when a caller asks for a clean stop.
         threads = [run.get("thread") for run in
                    list(_turns.values()) + list(_assistants.values())]
+        threads += [d for d in _drivers if d is not None]
     for sid in sids:
         try:
             cancel(sid)

@@ -42,6 +42,15 @@ let activeId = localStorage.getItem('tacit.active') || null;
 let ws = null;
 let sockets = new Map();   // sid -> WebSocket, one per session
 let streaming = null;   // {msg, el} current assistant message being streamed
+// Which card the turn in flight owns: {sid, msg, el} where `el` is the `.msg`
+// wrap. `streaming` is the live writer and it is cleared by a session switch,
+// by a reconnect, and by any idle report the server makes, so it cannot answer
+// "which bubble is this turn's" once it is null — and the answer was being taken
+// from "the last assistant bubble on screen", which at the moment the server
+// marks a session busy is the bubble the PREVIOUS turn finished in. That is the
+// whole card-flow corruption: the new turn's deltas were written into the old
+// card, and only a reload drew the transcript the way it is stored.
+let openCard = null;
 let busy = false;
 // True while this session's transcript is being folded. It is not `busy`: a hand
 // compaction runs with no turn in flight, and the composer has to shut for it
@@ -176,6 +185,48 @@ function persist(opts) {
   if (!localOnly) scheduleServerSync();
 }
 
+// ── deleted session ids ──────────────────────────────────────────────
+// A session this browser has seen deleted, in both directions: the ids the
+// server lists in its registry, and the ones this window deleted itself (kept
+// locally, because a delete performed while the server was unreachable still has
+// to hold on the next load). `localStorage` holds a full copy of the session
+// list, so without this a removed session is re-added by `loadServerRegistry()`
+// as a "local-only session worth rescuing" and the socket then asks the server to
+// create it back under the same id.
+const DELETED_KEY = 'tacit.deleted';
+const deletedIds = new Set((() => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(x => typeof x === 'string') : [];
+  } catch (e) { return []; }
+})());
+
+function noteDeleted(id) {
+  if (!id) return;
+  deletedIds.add(id);
+  try {
+    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(deletedIds).slice(-200)));
+  } catch (e) { /* private mode: the server's own list still covers it */ }
+}
+
+// A row that the store says is gone, taken out of the list and the page.
+function dropGhost(id) {
+  const before = sessions.length;
+  sessions = sessions.filter(s => s.id !== id);
+  if (sessions.length === before) return;
+  const sock = sockets.get(id);
+  if (sock) { try { sock.onclose = null; sock.close(); } catch (e) {} sockets.delete(id); }
+  if (openCard && openCard.sid === id) openCard = null;
+  if (activeId === id) activeId = sessions.length ? sessions[0].id : null;
+  persist({ localOnly: true });
+  renderSessionList();
+  endStreamQuiet();
+  renderTranscript(cur());
+  renderModelChip();
+  renderTokMeter();
+  attachCurrent();
+}
+
 function scheduleServerSync() {
   if (serverSyncTimer) clearTimeout(serverSyncTimer);
   serverSyncTimer = setTimeout(() => {
@@ -207,6 +258,13 @@ async function loadServerRegistry() {
     // Server wins for cross-device consistency; keep local messages only
     // for sessions the server does not know about yet.
     const byId = new Map((reg.sessions || []).map(s => [s.id, s]));
+    // Drop what the store has deleted, and what this browser deleted while the
+    // store was not listening, before the loop below can mistake either for a
+    // local-only session worth rescuing.
+    for (const id of (reg.deleted || [])) deletedIds.add(id);
+    // Filtered here rather than through `dropGhost()`: this runs during boot,
+    // before the list is assembled, and a row that is not on it needs no redraw.
+    sessions = sessions.filter(s => byId.has(s.id) || !deletedIds.has(s.id));
     let changed = false;
     for (const ls of sessions) {
       const ss = byId.get(ls.id);
@@ -540,6 +598,11 @@ function connectSession(s) {
     // status line while nothing can ever change. Ask once for the server to
     // adopt the id this tab already has; if it still refuses, stop.
     if (ev && ev.code === 4404 && s) {
+      // The server says it has never seen this id. When this window deleted the
+      // session, that answer is correct, and asking for the id back is the bug:
+      // `?create=1` re-materialises a session the person threw away, under the id
+      // and the title they removed. Drop the row instead of adopting it.
+      if (deletedIds.has(s.id)) { dropGhost(s.id); return; }
       if (!s._adopted) {
         s._adopted = true;
         s._adopt = true;
@@ -661,31 +724,69 @@ function flushPending() {
   }
 }
 
+// The one card this view may write into for the turn in flight. Held by
+// send(), by renderTranscript() for a session that is mid-turn, and by nothing
+// else: a bubble that merely happens to be the last assistant row on screen
+// belongs to a turn that already ended.
+function setOpenCard(s, msg, bodyEl) {
+  const wrap = bodyEl && bodyEl.closest('.msg');
+  if (wrap) openCard = { sid: s.id, msg, el: wrap };
+  return bodyEl;
+}
+
+// The card the turn in flight owns, if this view still holds it: same session,
+// still the last row of the transcript, still in the document.
+function heldCard(s) {
+  if (!openCard || openCard.sid !== s.id) return null;
+  if (s.messages[s.messages.length - 1] !== openCard.msg) return null;
+  if (!openCard.el || !openCard.el.isConnected) return null;
+  return openCard;
+}
+
 // re-attach to an assistant response still streaming in this session
 function resumeLiveStream() {
   const s = cur();
-  if (!s) return;
-  let last = s.messages[s.messages.length - 1];
-  if (!last || last.role !== 'assistant') {
-    last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
-    s.messages.push(last);
-  }
+  if (!s || streaming) return;
   emptyState.style.display = 'none';
-  // renderTranscript already drew the partial bubble (bgIngest kept it fresh);
-  // reuse it instead of appending a duplicate.
-  const rendered = messagesEl.querySelectorAll('.msg.assistant');
-  let body;
-  if (rendered.length) {
-    body = rendered[rendered.length - 1].querySelector('.msg-body-inner');
-  } else {
-    body = appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last));
-    const c = body.querySelector('.msg-content');
-    c._raw = last.content || '';
-    c.innerHTML = md(last.content || '');
-    if (last.reason) body.querySelector('.reason-body').textContent = last.reason;
+  const held = heldCard(s);
+  if (held) {
+    // renderTranscript (or send) already drew this turn's card, partial and
+    // all; re-arming it is what keeps a reconnect from splitting one answer
+    // across two bubbles.
+    streaming = { msg: held.msg, el: held.el.querySelector('.msg-body-inner') };
+    setBusy(true);
+    return;
   }
-  streaming = { msg: last, el: body };
+  // Nothing of ours is open, so this turn starts a fresh card. Reusing the
+  // previous turn's row is the bug this function used to have.
+  const row = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
+  s.messages.push(row);
+  const body = setOpenCard(s, row,
+    appendMsg('assistant', '', null, row.ts, s.messages.indexOf(row)));
+  streaming = { msg: row, el: body };
   setBusy(true);
+}
+
+// A user row ends the previous turn's claim on the view. `armed` is the card
+// that was open when the row arrived: if it sits before this row in the
+// transcript it belongs to the turn this prompt follows, so it stops receiving
+// text, and if it never got any content it is a stray this view opened on a
+// busy signal that arrived too early and it comes out of both the list and the
+// page.
+function rebaseOnUserRow(s, armed) {
+  if (!armed) return;
+  const at = s.messages.indexOf(armed.msg);
+  // Always released, whatever position it holds: this window has already
+  // returned for a prompt it typed itself, so a user row reaching here came
+  // from somewhere else and starts a turn whose card does not exist yet.
+  streaming = null;
+  if (openCard && openCard.msg === armed.msg) openCard = null;
+  const empty = !armed.msg.content && !armed.msg.reason
+    && !(armed.msg.tools || []).length;
+  if (!empty || at < 0) return;    // real text, or not in this transcript: leave it
+  s.messages.splice(at, 1);
+  const el = armed.el && armed.el.closest('.msg');
+  if (el) el.remove();
 }
 
 function handle(m) {
@@ -813,7 +914,10 @@ function handle(m) {
           }
         }
         persist();
-        renderTranscript(s);
+        // A non-empty replay is the turn saying it is still running: paint it and
+        // record the trailing card as the one this turn owns, whatever the state
+        // poll has to say about `busy` three seconds from now.
+        renderTranscript(s, m.events.length > 0);
         if (busy) resumeLiveStream();
       }
       break;
@@ -858,16 +962,23 @@ function handle(m) {
       // `ts` comes from the server's row (session_runtime publishes it), not from
       // this window's clock, so a prompt typed in another tab shows when it was
       // actually sent.
+      // A user row always starts a new agent card. Whatever was open belongs to
+      // the turn this prompt follows — the server marks the session busy before
+      // the prompt reaches the transcript, so a view that armed itself on that
+      // signal is holding the previous turn's card, not this one's.
+      rebaseOnUserRow(s, streaming);
       s.messages.push({ role: 'user', content: m.text || '', origin: m.origin, ts: m.ts });
       persist();
       appendMsg('user', m.text || '', m.origin, m.ts);
-      // A fresh assistant bubble for the turn this prompt started. No-op when
-      // one is already open; the point is that the *previous* turn's bubble is
-      // not still the thing receiving text.
+      // A fresh assistant bubble for the turn this prompt started.
       ensureStreamingBubble();
       break;
     }
     case 'text':
+      // Self-heal, the same guard 'reason' already had: a delta that arrives
+      // with no card open used to be dropped on the floor, and the turn looked
+      // like it had said nothing.
+      if (!streaming) ensureStreamingBubble();
       if (streaming) { streaming.msg.content += m.delta; appendText(m.delta); }
       break;
     case 'reason':
@@ -878,6 +989,7 @@ function handle(m) {
       }
       break;
     case 'tool_start':
+      if (!streaming) ensureStreamingBubble();
       if (streaming) { addToolCard(m); streaming.msg.tools.push({ id: m.id, name: m.name, args: m.args }); }
       // a tasks call can add items, so the strip is scheduled on the start
       // as well as refreshed on the end
@@ -1059,6 +1171,10 @@ function send(text) {
   appendMsg('user', text, null, sent, at - 1);
   const el = appendMsg('assistant', '', null, sent, at);
   streaming = { msg: s.messages[s.messages.length - 1], el };
+  // This bubble is this turn's card. Recorded here so a busy signal that
+  // arrives after a stale idle report re-arms it rather than opening a second
+  // one, and so the turn that ends can let go of it.
+  setOpenCard(s, s.messages[at], el);
   setBusy(true);
   markActiveSessionState('busy');
 
@@ -1122,24 +1238,14 @@ function updateSteerHint() {
   if (h) h.hidden = !(busy && !planLive);
 }
 
-// make sure an assistant bubble exists even if reason/text arrives before send()
+// Make sure an assistant bubble exists even if reason/text arrives before send().
+// One implementation with resumeLiveStream(), on purpose: this used to fall back
+// on "the last row, if it is an assistant row", which after a turn has ended is
+// the previous turn's row, and on "otherwise append a bubble", which never
+// recorded which bubble the turn owned. Both of those are the question
+// resumeLiveStream() now answers in one place.
 function ensureStreamingBubble() {
-  if (streaming) return;
-  const s = cur();
-  if (!s) return;
-  let last = s.messages[s.messages.length - 1];
-  if (!last || last.role !== 'assistant') {
-    last = { role: 'assistant', content: '', reason: '', tools: [], ts: nowTs() };
-    s.messages.push(last);
-  }
-  emptyState.style.display = 'none';
-  // The row's own index, live. That is the coordinate the snapshot marker uses, so
-  // an undo point taken during this turn can hang on this bubble before the
-  // epilogue writes the row. indexOf rather than length-1 because the row being
-  // drawn may already have existed.
-  const el = appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last));
-  streaming = { msg: last, el };
-  setBusy(true);
+  resumeLiveStream();
 }
 
 // ── turn sounds ────────────────────────────────────────────────────
@@ -1264,6 +1370,10 @@ function endStream() {
     }
   }
   streaming = null;
+  // The turn is over, so nothing owns a card any more. This is the line that
+  // keeps the next turn off the previous answer: until the card is released
+  // here, `resumeLiveStream()` treats it as still open.
+  openCard = null;
   setBusy(false);
   markActiveSessionState('idle');
   // The chime belongs to a turn that really ended in this view (ranHere), not
@@ -1628,7 +1738,7 @@ function toolCardMeta(m) {
   return bits.join(' · ');
 }
 
-function renderTranscript(s) {
+function renderTranscript(s, midTurn) {
   const inner = ensureInner();
   inner.innerHTML = '';
   if (!s) { emptyState.style.display = ''; return; }
@@ -1660,6 +1770,7 @@ function renderTranscript(s) {
     if (msg.role === 'assistant' && last && last.role === 'assistant') last.parts.push(msg);
     else groups.push({ role: msg.role, parts: [msg], at: i });
   });
+  let lastAsst = null;   // the trailing assistant card, if one survived
   for (const g of groups) {
     const head = g.parts[0];
     const text = g.parts.map(p => p.content || '').join('\n\n');
@@ -1710,6 +1821,25 @@ function renderTranscript(s) {
     // A step that ran tools and said nothing is real work, but a group with
     // nothing at all in it is noise left behind by an interrupted turn.
     if (!text && !reason && !g.parts.some(p => (p.tools || []).length)) body.closest('.msg').remove();
+    else lastAsst = body;
+  }
+  // A session that is mid-turn has exactly one card still open: the trailing
+  // assistant group, the row the turn in flight is writing into. Recording it
+  // here is what lets a reload, a switch-back or a reconnect re-arm that bubble
+  // instead of opening an empty one beside it — and a card that is not the last
+  // group can never be adopted, which is the other half of the fix.
+  // `midTurn` is the caller's own knowledge, and the replay path needs it: a
+  // viewer that arrives mid-turn is handed the turn's buffered events, which is
+  // proof the turn is running, while the state poll that feeds `sessionStates`
+  // is up to three seconds stale and `endStreamQuiet()` has just cleared `busy`.
+  // Without it the rebuilt card is not recorded, and the turn's first delta
+  // opens a second empty bubble beside the text the replay already painted.
+  const live = !!midTurn || !!(sessionStates[s.id] && sessionStates[s.id].busy)
+    || s._busy || (s.id === activeId && busy);
+  if (live && lastAsst && groups.length && groups[groups.length - 1].role === 'assistant') {
+    setOpenCard(s, s.messages[s.messages.length - 1], lastAsst);
+  } else if (openCard && openCard.sid === s.id) {
+    openCard = null;
   }
   // Async on purpose: the transcript paints the instant the rows are known, and
   // the undo points arrive when the snapshot directory has been read.
@@ -1887,26 +2017,60 @@ function endStreamQuiet() {
   if (streaming) {
     const el = streaming.el.closest('.msg');
     if (el) el.classList.remove('streaming');
+    // A card that received anything is a finished turn. Some turns never
+    // publish `done` — a worker that dies, an error path that ends on `error` —
+    // and an idle report is the only end they get, so holding that card is
+    // exactly how the next turn lands inside the previous answer.
+    // An empty card is a send still in flight: a reconnect or a stale idle
+    // report must not split one answer across two bubbles, so it stays held and
+    // is re-armed when the busy signal arrives.
+    const m = openCard && openCard.msg;
+    if (m && (m.content || m.reason || (m.tools || []).length)) openCard = null;
     streaming = null;
   }
   setBusy(false);
 }
 
-function deleteSession(id) {
+async function deleteSession(id) {
+  const gone = sessions.find(s => s.id === id);
+  // Recorded before the request, not after it. The gap between the two is where
+  // a reconnect, a registry sync or another tab used to put the session back:
+  // the delete was fire-and-forget, its result never read, and the tombstone
+  // only existed on the disk the browser was not consulting.
+  noteDeleted(id);
   sessions = sessions.filter(s => s.id !== id);
   if (activeId === id) activeId = sessions.length ? sessions[0].id : null;
   // Its socket dies with it: a deleted session must not keep a live
   // transport (or a running turn's stream) pointed at a record that is gone.
   const sock = sockets.get(id);
   if (sock) { try { sock.onclose = null; sock.close(); } catch (e) {} sockets.delete(id); }
+  if (openCard && openCard.sid === id) openCard = null;
   persist();
-  fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
   renderSessionList();
   endStreamQuiet();
   renderTranscript(cur());
   renderModelChip();
   renderTokMeter();
   attachCurrent();
+  let failed = '';
+  try {
+    const r = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) failed = (d && d.error) || ('the server answered ' + r.status);
+  } catch (e) {
+    failed = 'the server did not answer';
+  }
+  if (!failed) return;
+  // The store kept it, so the list must keep it too. A row that is only gone in
+  // one window comes back on the next load, which reads as the delete failing.
+  deletedIds.delete(id);
+  try {
+    localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(deletedIds).slice(-200)));
+  } catch (e) { /* private mode */ }
+  if (gone && !sessions.find(s => s.id === id)) sessions.unshift(gone);
+  persist();
+  renderSessionList();
+  toast('Could not delete that session: ' + failed, true);
 }
 
 // ── edit a past user message: rewind the session to it (ChatGPT-style) ──

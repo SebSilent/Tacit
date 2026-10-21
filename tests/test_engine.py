@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import anthropic, config, thinking  # noqa: E402
 from backend.ai import engine  # noqa: E402
-from tests.helpers import state_paths  # noqa: E402
+from tests.helpers import drain_turns, state_paths  # noqa: E402
 
 
 def sse(*payloads) -> list[str]:
@@ -551,6 +551,9 @@ class WebSocketTurnTest(unittest.TestCase):
         self.addCleanup(setattr, _engine, "stream_chat", self._stream)
 
     def tearDown(self):
+        # Before the paths go back: a driver thread still running writes its
+        # epilogue into the real ~/.tacit. See helpers.drain_turns.
+        drain_turns()
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)
@@ -727,6 +730,9 @@ class TurnBusReplayTest(unittest.TestCase):
         self.addCleanup(setattr, _engine, "stream_chat", self._stream)
 
     def tearDown(self):
+        # Before the paths go back: a driver thread still running writes its
+        # epilogue into the real ~/.tacit. See helpers.drain_turns.
+        drain_turns()
         config.HOME = self._home
         for k, v in self._orig.items():
             setattr(config, k, v)

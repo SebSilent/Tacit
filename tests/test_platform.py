@@ -2312,6 +2312,29 @@ class TestDeliverables(Isolated):
         from backend import agent
         self.assertEqual(agent.deliverables("explain what this cipher does", None), [])
 
+    def test_a_filename_mentioned_in_passing_is_not_a_deliverable(self):
+        """A title or an object is not an order to create.
+
+        The real prompt that broke this was a bug report about deleted sessions:
+        `those sessions named "work on it" and "read alpha.py" keep coming back`.
+        `alpha.py` is not on disk, so the extension match alone promoted a session
+        *title* to a required output, and the nagger then spent the entire turn
+        demanding the agent write a file nobody asked for -- six times, escalating to
+        "reply with the COMPLETE file in one fenced code block and it will be written
+        for you". Absence is only a request to create when the sentence asks for it.
+        """
+        from backend import agent
+        report = ('the sessions that I remove appear again, specially those named '
+                  '"work on it" and "read alpha.py" they keep coming back')
+        self.assertEqual(agent.deliverables(report, None), [])
+        self.assertEqual(agent.deliverables("please read alpha.py and summarise it", None), [])
+        self.assertEqual(agent.deliverables("fix the bug in `parser.py`", None), [])
+        # ...and the same words, when the sentence really does ask, still count.
+        self.assertEqual(agent.deliverables("write alpha.py and beta.py", None),
+                         ["alpha.py", "beta.py"])
+        self.assertEqual(agent.deliverables("read input.csv, then write clean.py", None),
+                         ["clean.py"])
+
     def test_the_missing_file_outranks_the_repeat_advice_near_the_cap(self):
         from backend import guidance
         text = guidance.for_step(step=28, steps=30, errors=(), repeated=("run_shell",),

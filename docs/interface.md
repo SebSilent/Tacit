@@ -14,7 +14,7 @@ Three regions, and each one has a different relationship to the agent.
 └──────────────┴─────────────────────────────────┴──────────────────┘
 ```
 
-**Sessions** (left). One session per project folder, and one running turn per session. The state dot tells you which are working; stopping one leaves the others running. Each session has its own WebSocket (`backend/routers/chat.py:193`), so a turn is never cut off because you opened another session. A socket that arrives with an id the store does not know is closed with code 4404 rather than served an empty session: only the New session action may create one, and it says so with `?create=1`.
+**Sessions** (left). One session per project folder, and one running turn per session. The state dot tells you which are working; stopping one leaves the others running. Each session has its own WebSocket (`backend/routers/chat.py:200`), so a turn is never cut off because you opened another session. A socket that arrives with an id the store does not know is closed with code 4404 rather than served an empty session: only the New session action may create one, and it says so with `?create=1`.
 
 The folder you opened a session in is fixed for the life of that session. Switching sessions switches the workspace chip, the mode, the model, the context meter and the composer draft with it.
 
@@ -51,7 +51,7 @@ Cost and context live in Settings, not in a bar above the composer. The meter is
 Compaction is visible while it happens. The meter reads `compacting…` and the composer is disabled for
 the session doing it, so a prompt typed during a fold cannot land in the transcript the fold is
 rewriting (`static/app.js:1110-1115`, refused at `:1016`). The state arrives on the same socket as
-everything else, from `compacting_notice` in `backend/session_runtime.py:484`, and it is cleared when
+everything else, from `compacting_notice` in `backend/session_runtime.py:507`, and it is cleared when
 the fold is written, not when the model answers: a fold that reclaimed nothing clears too. The figure
 the meter shows afterwards is the surviving record, floored at what is actually stored, because the
 number that matters is what the next request will pay.

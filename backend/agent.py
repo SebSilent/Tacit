@@ -794,18 +794,48 @@ _ARTIFACT = re.compile(
     r"|json|jsonl|md|yaml|yml|toml|html|css|sql)\b")
 
 
+# A file named as the object of a verb is something to consume, not to produce. Without this the
+# extension regex alone decides, and a task that merely mentions a filename in passing acquires a
+# phantom deliverable.
+_CONSUME = re.compile(
+    r"(?:read|open|show|list|print|cat|run|execute|edit|change|fix|delete|remove|rename|archive|"
+    r"summarise|summarize|describe|review|inspect|explain|parse|check|test|use|using|load)\s*[.:;,)]*$",
+    re.I)
+
+
+def _incidental(text: str, start: int) -> bool:
+    """True when this mention names the file as something to consume, not to produce.
+
+    The task that surfaced this said: those sessions named "work on it" and "read alpha.py" keep
+    coming back. `alpha.py` is a session *title* there, but it matches `_ARTIFACT`, it is not on
+    disk, and `deliverables()` then hands it to the guidance nagger, which spends a whole turn
+    insisting the agent write a file nobody asked for.
+    """
+    head = text[:start]
+    # Inside a quoted span: a title, a name, a citation. Not an order to produce.
+    if head.count('"') % 2 or head.count("'") % 2 or head.count("`") % 2:
+        return True
+    tail = head.rstrip()[-32:]
+    return bool(_CONSUME.search(tail))
+
+
 def deliverables(text: str, project: str | None) -> list:
     """File names the task text names that do not exist in the project yet.
 
     Inputs are excluded by the same rule that makes this useful: a named file already on disk is
-    something to read or edit, not something still to produce.
+    something to read or edit, not something still to produce. A name the sentence only *refers*
+    to -- quoted as a title, or the object of "read"/"delete"/"fix" -- is excluded the same way
+    even when it is absent, because absence is not a request to create it.
     """
     if not text:
         return []
     out, seen = [], set()
-    for name in _ARTIFACT.findall(text):
+    for m in _ARTIFACT.finditer(text):
+        name = m.group(0)
         base = name.rsplit("/", 1)[-1]
         if base in seen:
+            continue
+        if _incidental(text, m.start()):
             continue
         seen.add(base)
         if project and (os.path.exists(os.path.join(project, name))

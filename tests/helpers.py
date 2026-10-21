@@ -25,3 +25,30 @@ def state_paths(config) -> tuple:
             continue
         out.append(key)
     return tuple(sorted(out))
+
+
+def drain_turns(timeout: float = 5.0) -> None:
+    """Finish every turn driver thread before the test gives its state paths back.
+
+    `state_paths` redirects the store by setting module attributes, and the
+    teardown puts them back. `store._path` resolves a session's path at write
+    time (backend/store.py:9-21, the house rule that a cached path once made a
+    redirected test write into the real ~/.tacit). Those two facts combine
+    badly: a driver thread still running at teardown writes its epilogue —
+    `store.save`, then `_autonomy_bump` → `store.patch` (backend/session_runtime.py:761-783),
+    which lands after the restore, in the real home. `store.save` also re-appends
+    a missing index row (backend/store.py:144), so the leak is not one stray
+    file: it re-lists the session, the interface serves it, and a person who
+    deleted it watches it come back every time the suite runs.
+
+    So the drain runs first, and it is a cleanup rather than a wait in the test
+    body: a test that asserts on a turn it left running is exactly the one that
+    would otherwise leak.
+    """
+    import time
+    from backend import session_runtime, session_state
+    session_runtime.shutdown()
+    deadline = time.monotonic() + timeout
+    while session_state.all_states() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    session_state.reset()

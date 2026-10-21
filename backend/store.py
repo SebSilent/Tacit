@@ -39,13 +39,19 @@ def list_sessions() -> list[dict]:
 
 
 def create(title: str = "New session", model: str = "", mode: str = "agent",
-           thinking: str = "default", project: str = "", sid: str = "") -> dict:
+           thinking: str = "default", project: str = "", sid: str = "") -> dict | None:
     """Make a session. Only ever called for an explicit request.
 
     A session exists because the user started one. Nothing on a page load, a
     reconnect, or a sync is allowed to conjure one, so `sid` may be supplied by
     the caller to keep the client and server agreed on the id.
+
+    An id that was deleted is refused, and returns None: the caller asked for
+    *that* session, not for a new one, and honouring it is how a delete came
+    back from the dead. A caller that wants a session of its own passes no sid.
     """
+    if sid and is_deleted(sid):
+        return None
     if sid and get(sid) is not None:
         return get(sid)
     sid = sid or uuid.uuid4().hex
@@ -189,6 +195,9 @@ def remove(sid: str) -> bool:
             return False
         rows = [r for r in index() if r.get("id") != sid]
         _write_index(rows)
+        # Inside the same lock as the unlink: a delete that is not recorded is a
+        # delete that the next `create(sid=...)` undoes.
+        _note_deleted(sid)
     # Outside the lock, and after the row is gone: the session's scratch folder holds
     # whatever its tools wrote during a project-less turn, and nothing else collects it.
     config.remove_workspace(sid)
@@ -305,7 +314,51 @@ def registry(rows: list[dict] | None = None, preview: int = REGISTRY_PREVIEW,
             spent += 2   # an empty tail still ships "[]"
         out.append({**r, "messageCount": len(msgs),
                     "trimmed": len(msgs) > len(keep), "messages": keep})
-    return {"sessions": out, "active": (out[0]["id"] if out else "")}
+    # The ids this store has deleted, newest last, so a browser holding an old
+    # copy of the list can drop them instead of re-creating them. Capped: the
+    # full tombstone list is only ever consulted by `create()`, which reads the
+    # file, and 15 KB of ids is not a boot payload a drawer needs.
+    return {"sessions": out, "active": (out[0]["id"] if out else ""),
+            "deleted": deleted()[-DELETED_EXPOSE:]}
+
+
+# ── a delete is the last word ────────────────────────────────────────
+# `save()` refuses a record whose two halves are both gone (see :101-118), which
+# closed the resurrection a live socket used to perform. It cannot cover the
+# other one: `create()` writes both halves itself and never reaches that guard,
+# so an id that comes back from a browser still holding it — the interface's own
+# `?create=1` re-attach after a socket answered 4404, or a stale copy of the list
+# — re-materialises the session, transcript and all, and the delete reads as
+# flaky. So the id is remembered. Bounded, stored beside the index it guards, and
+# handed to the browser with the registry so a local copy of the list stops being
+# a path back to a session a person threw away.
+DELETED_CAP = 400
+# How many of them the registry hands to a browser. The store refuses every
+# tombstoned id whether it is listed here or not; this only decides which ghosts
+# a stale localStorage copy can be cleaned of on the next load.
+DELETED_EXPOSE = 120
+
+
+def _deleted_path() -> Path:
+    # Resolved per call, like every other path in this module (:9-21).
+    return config.SESSIONS_DIR / "deleted.json"
+
+
+def deleted() -> list[str]:
+    rows = config.read_json(_deleted_path(), [])
+    return [r for r in rows if isinstance(r, str)] if isinstance(rows, list) else []
+
+
+def is_deleted(sid: str) -> bool:
+    return bool(sid) and sid in set(deleted())
+
+
+def _note_deleted(sid: str) -> None:
+    if not sid:
+        return
+    rows = [r for r in deleted() if r != sid]
+    rows.append(sid)
+    config.write_json(_deleted_path(), rows[-DELETED_CAP:])
 
 
 def merge(payload: dict) -> dict:

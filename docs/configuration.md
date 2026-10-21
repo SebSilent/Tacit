@@ -164,7 +164,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `turnSound` | `backend/config.py:413` | on by default |
 | `alertSound` | `backend/config.py:426` | off by default |
 | `allowVersionControl` | `backend/config.py:496` | absent means the agent may not run git |
-| `disabledTools` | `backend/agent.py:876`, `backend/profiles.py:236` | tool names removed from the registry |
+| `disabledTools` | `backend/agent.py:906`, `backend/profiles.py:236` | tool names removed from the registry |
 | `projectRoots` | `backend/config.py:595` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:798`, `:804` | stop reading `AGENTS.md` and friends |
 | `memoryBudget` | `backend/memory_store.py:142` | startup memory ceiling in tokens |

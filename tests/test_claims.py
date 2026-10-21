@@ -2650,16 +2650,22 @@ class TestTurnBusClaims(Isolated):
         self.assertLess(end_at, finish_at,
                         "the bus is released last in the epilogue")
         spawn_at = src.index("turn_worker.spawn(")
-        thread_at = src.index("t = threading.Thread(", spawn_at)
+        thread_at = src.index("t = _spawn(", spawn_at)
         self.assertIn("turn_bus.finish(sid)", src[spawn_at:thread_at],
                       "a failed spawn must finish the bus it opened")
         # The anti-orphan invariant: the driver thread is started before
         # start_turn returns, so no browser event can come between the worker
-        # and its reader.
-        started_at = src.index("t.start()", thread_at)
-        return_at = src.index('return {"ok": True, "sid": sid}', started_at)
-        self.assertLess(started_at, return_at,
-                        "the driver thread starts before start_turn returns")
+        # and its reader. The start lives in `_spawn` now, which is also what
+        # keeps the thread in `_drivers` until it exits — the handle shutdown()
+        # needs for a turn whose own epilogue has already dropped its session row,
+        # and without which a test's teardown let that write land in the real
+        # ~/.tacit.
+        def_at = src.index("def _spawn(")
+        body = src[def_at:src.index("def turn_running", def_at)]
+        self.assertIn("t.start()", body, "_spawn no longer starts the thread it returns")
+        return_at = src.index('return {"ok": True, "sid": sid}', thread_at)
+        self.assertLess(thread_at, return_at,
+                        "the driver thread is handed off before start_turn returns")
 
 
 # ── 24. the updater's transport is plain HTTPS, never git ─────────────────

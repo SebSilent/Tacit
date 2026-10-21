@@ -245,7 +245,11 @@ class TestDesktopDrawsTheControl(unittest.TestCase):
 
     def test_the_live_bubble_gets_its_index_before_the_row_is_written(self):
         app = code(APP)
-        self.assertIn("appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last))",
+        # The live card is created with its own row index and its own clock. It moved
+        # out of ensureStreamingBubble() when the card-flow fix made one function own
+        # "which bubble does this turn write into"; the index still has to be passed
+        # at creation, because the snapshot marker reads it off the element.
+        self.assertIn("appendMsg('assistant', '', null, row.ts, s.messages.indexOf(row))",
                       app)
         self.assertIn("const el = appendMsg('assistant', '', null, sent, at);", app)
 

@@ -33,7 +33,7 @@ transcript is saved by the turn's own epilogue, and any window that opens the se
 is caught up from the buffer (`backend/session_runtime.py:6-11`).
 
 A socket that arrives with an id the store does not know is closed with code 4404 rather than served
-an empty session (`backend/routers/chat.py:198-206`). Only the New session action may create one,
+an empty session (`backend/routers/chat.py:206-227`). Only the New session action may create one,
 and it says so with `?create=1`.
 
 Two workers are normal for one session, and they are independent: the turn worker and the assistant
@@ -109,17 +109,17 @@ frontend with no build step (`backend/main.py:175`).
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
 - **Compaction.** `should_compact` decides whether the transcript is over budget, answering
-  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1111`,
-  `stored_tokens` at `backend/agent.py:1102`): a mid-turn compaction shrinks the prompt on
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1141`,
+  `stored_tokens` at `backend/agent.py:1132`): a mid-turn compaction shrinks the prompt on
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
-  between turns (`backend/agent.py:1332`) and `compact_messages` does it inside a growing turn
-  (`backend/agent.py:1431`), which is what `TACIT_COMPACT_MID_TURN` controls
+  between turns (`backend/agent.py:1362`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1461`), which is what `TACIT_COMPACT_MID_TURN` controls
   (`backend/config.py:140-143`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
-  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1358`),
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1388`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
-  (`backend/session_runtime.py:501`), because a hand compaction that moves neither the meter
+  (`backend/session_runtime.py:524`), because a hand compaction that moves neither the meter
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).

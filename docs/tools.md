@@ -45,7 +45,7 @@ counts what the model is offered.
 ## Four rules decide whether a tool is offered
 
 **1. A disabled tool is gone.** `disabledTools` in `~/.tacit/prefs.json` removes entries by name
-(`backend/agent.py:876-878`). The same list is what **Skills & Tools** edits.
+(`backend/agent.py:906-908`). The same list is what **Skills & Tools** edits.
 
 **2. A read-only caller loses the tools that can change things.** `READONLY_BLOCKED` holds
 `write_file`, `edit_file`, `run_shell`, `bg_start` and `bg_stop` (`backend/agent.py:622`), and adds
@@ -62,9 +62,9 @@ helpers are four dead ends that cost tokens and invite calls that can only fail
 still gets them, because listing and searching are how the model learns what it could start.
 
 **4. Memory tools follow the memory mode.** Both are removed when the mode is off
-(`backend/agent.py:896-908`). `memory_recall` is removed again in `explicit` mode, because that mode
+(`backend/agent.py:926-938`). `memory_recall` is removed again in `explicit` mode, because that mode
 injects what you approved and retrieves nothing, so the tool could only ever answer "not enabled"
-(`backend/agent.py:901-910`, `backend/memory_modes.py:26-29`).
+(`backend/agent.py:931-940`, `backend/memory_modes.py:26-29`).
 
 ## What the tools are told about themselves
 
@@ -93,7 +93,7 @@ rather than a fallback to somewhere else.
 
 `MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:748-752`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:867-871`). `run_shell` is in that set because a command can rewrite the tree, and
+(`backend/agent.py:897-901`). `run_shell` is in that set because a command can rewrite the tree, and
 the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to

@@ -246,7 +246,6 @@ class TheGuardHasTeeth(unittest.TestCase):
         working. The first draft's pattern saw only `last.content`, so the other three
         could regress with the suite green."""
         plants = [
-            ("c.innerHTML = md(last.content || '');", "c.innerHTML = last.content || '';"),
             ("cc.innerHTML = md(cc._raw || '');", "cc.innerHTML = cc._raw || '';"),
             ("c.innerHTML = md(c._raw || '');", "c.innerHTML = c._raw || '';"),
             ("c.innerHTML = md(text);", "c.innerHTML = text;"),
@@ -273,14 +272,19 @@ class UntrustedSinksStayOnTextContent(unittest.TestCase):
     def test_the_guard_is_not_looking_at_nothing(self):
         """Anti-vacuity for the guard above: an empty `bad` list is also what you get
         when the payload regex matches no line at all. The audited sinks must actually
-        be inside the pattern's view — 4 of the 5 carry model text through a name in
-        `_PAYLOAD` (the 5th is the literal `'(empty response)'`, which has no payload)."""
+        be inside the pattern's view — 3 of the 4 carry model text through a name in
+        `_PAYLOAD` (the 4th is the literal `'(empty response)'`, which has no payload).
+
+        It was 4 of 5 until the live-bubble rework: `resumeLiveStream()` used to paint
+        a row it had just created, and it now only ever creates an empty one, so that
+        sink had nothing to render. The count went down with it, here and in the test
+        below, rather than being left to fail as a stray."""
         seen = [s.strip() for s in APP.splitlines()
                 if ".innerHTML" in s and not s.strip().startswith("//")
                 and _PAYLOAD.search(_LITERAL.sub(" ", s.strip()))]
-        self.assertEqual(4, len(seen),
+        self.assertEqual(3, len(seen),
                          f"the payload pattern reaches {len(seen)} innerHTML lines; "
-                         "the audited sinks are 4 payload-carrying + 1 literal — if this "
+                         "the audited sinks are 3 payload-carrying + 1 literal — if this "
                          "drops, the guard has stopped looking at the things it guards")
 
     def test_the_three_known_sinks_are_textContent(self):
@@ -291,9 +295,9 @@ class UntrustedSinksStayOnTextContent(unittest.TestCase):
     def test_the_model_text_html_sinks_are_few_and_pinned(self):
         """Every place agent prose becomes HTML. A sixth one is a review, not a merge."""
         sites = re.findall(r"\.innerHTML = md\(", APP)
-        self.assertEqual(5, len(sites),
+        self.assertEqual(4, len(sites),
                          "model text enters innerHTML through md() at "
-                         f"{len(sites)} sites; the audited number is 5")
+                         f"{len(sites)} sites; the audited number is 4")
 
 
 if __name__ == "__main__":

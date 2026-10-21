@@ -204,6 +204,99 @@ class TheSecondWriter(Isolated):
         self.assertIn("row-1", [r.get("id") for r in store.index()])
 
 
+class TheBrowserAsksItBack(Isolated):
+    """Hypothesis 3: the delete holds on disk and is then undone by `create()`.
+
+    `save()` refuses a record whose two halves are gone (store.py:107-124), which
+    is the writer `test_a_session_deleted_while_a_socket_held_it_stays_deleted`
+    covers. It cannot cover this one: `create()` writes both halves itself and
+    never reaches that guard, and the interface calls it with the browser's own
+    id when a socket answers 4404 (static/app.js `?create=1`, backend/routers/
+    chat.py). So a tab that still held the id in its localStorage copy of the
+    list asked the store to re-materialise the session the person had just
+    deleted, under that id and with that title.
+
+    The store now remembers the ids it has deleted and refuses them, while an
+    unknown id that was never deleted is still adopted — the recovery that
+    `test_a_stale_session_is_adopted_under_the_id_the_browser_holds` exists for.
+    """
+
+    def test_a_deleted_id_is_not_created_back(self):
+        self.make("resurrect-1", title="read alpha.py")
+        self.assertTrue(store.remove("resurrect-1"))
+        self.assertIsNone(store.create(title="read alpha.py", model="m",
+                                       mode="agent", sid="resurrect-1"),
+                          "create() re-made a session this store deleted")
+        seen = self.read_as_new_process("resurrect-1")
+        self.assertFalse(seen["record"], "record file written back by create()")
+        self.assertNotIn("resurrect-1", seen["index"], "index row written back")
+        self.assertNotIn("resurrect-1", seen["registry"], "served to the browser again")
+
+    def test_an_id_that_was_never_deleted_is_still_adopted(self):
+        """The refusal must not eat the recovery it sits next to."""
+        rec = store.create(title="a tab that outlived its store", sid="adopt-me-9")
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["id"], "adopt-me-9")
+
+    def test_a_new_session_is_never_blocked_by_the_tombstones(self):
+        """Only an id the caller supplied can be refused, so `create()` with no
+        sid still makes a session however many deletes have happened."""
+        for i in range(5):
+            self.make(f"bulk-{i}")
+            store.remove(f"bulk-{i}")
+        fresh = store.create(title="New session")
+        self.assertIsNotNone(fresh)
+        self.assertTrue(store.get(fresh["id"]))
+
+    def test_the_registry_tells_the_browser_what_is_deleted(self):
+        """A stale localStorage copy is the other half of the resurrection, so the
+        list has to reach the page that holds it."""
+        self.make("listed-1")
+        store.remove("listed-1")
+        reg = store.registry()
+        self.assertIn("listed-1", reg["deleted"])
+        self.assertNotIn("listed-1", [s["id"] for s in reg["sessions"]])
+
+    def test_the_browser_drops_deleted_rows_before_rescuing_local_ones(self):
+        """The server refusing is only half of it.
+
+        `merge()` never creates an unknown id, but the browser holds its own copy
+        in `tacit.sessions`, and a hard refresh reads that before the server
+        answers. `loadServerRegistry()` then treats any row the server does not
+        list as a local-only session worth rescuing (static/app.js:272) -- so a
+        deleted session is resurrected by the page, and pushed straight back to
+        the server on the next persist. The filter at :267 has to run before that
+        loop, and it has to consult both tombstone sources: the ids the server
+        lists, and the ones this browser saw deleted while the store was not
+        listening.
+
+        Verified end-to-end against a real DOM (jsdom, seeded localStorage, fake
+        socket): with the filter the ghost is absent from the drawer, from
+        localStorage and from the push; delete the filter and all three come back.
+        """
+        src = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
+            encoding="utf-8")
+        boot = src[src.index("async function loadServerRegistry"):
+                   src.index("async function loadServerRegistry") + 4000]
+        self.assertIn("for (const id of (reg.deleted || [])) deletedIds.add(id)", boot,
+                      "the server's tombstones must reach the browser's set")
+        filter_at = boot.index("sessions = sessions.filter(s => byId.has(s.id) || "
+                               "!deletedIds.has(s.id));")
+        rescue_at = boot.index("if (ls.messages && ls.messages.length)")
+        self.assertLess(filter_at, rescue_at,
+                        "the filter must precede the loop that rescues local-only rows")
+
+    def test_the_tombstone_list_is_bounded(self):
+        """It is a file that grows one entry per delete and is read on every
+        create; an unbounded one is a slow leak with the shape of a feature."""
+        for i in range(store.DELETED_CAP + 40):
+            store._note_deleted(f"flood-{i}")
+        rows = store.deleted()
+        self.assertLessEqual(len(rows), store.DELETED_CAP)
+        self.assertIn(f"flood-{store.DELETED_CAP + 39}", rows, "the newest delete is kept")
+        self.assertNotIn("flood-0", rows, "the cap is not trimming the oldest")
+
+
 class TheInterleave(Isolated):
     """Hypothesis 2: save() and remove() racing, and the ghost it used to leave."""
 

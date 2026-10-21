@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 from backend import config, session_state, store
-from tests.helpers import state_paths
+from tests.helpers import drain_turns, state_paths
 
 
 class _SlowProvider:
@@ -63,6 +63,10 @@ class SessionIsolationTest(unittest.TestCase):
         self._orig = {k: getattr(config, k) for k in self._keys}
         self._home = config.HOME
         self.addCleanup(self._restore_config)
+        # Registered after the restore so it runs before it (cleanups are LIFO):
+        # a driver thread still writing its epilogue when the paths go back
+        # lands in the real ~/.tacit, not in this temp home. See helpers.drain_turns.
+        self.addCleanup(drain_turns)
         config.HOME = home
         for k in self._keys:
             target = home / Path(self._orig[k]).name

@@ -60,7 +60,7 @@ additionally gated on the learning mode, so with learning off its thread never s
 block, no worker.
 The memory tools are removed from the registry when the mode is off, and `memory_recall` is removed
 again when the mode cannot retrieve, because a tool that can only answer "not enabled" is a dead end with
-a schema attached (`backend/agent.py:896-910`).
+a schema attached (`backend/agent.py:926-940`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced
@@ -86,6 +86,15 @@ subprocess and will tell you.
 attach their own (`tests/test_frontend_weight.py:1-20`). The test pins the structure rather than the
 behaviour, and it explains why the rule was invisible for months: the one place that did follow it looked
 like the whole file did (`:13-16`).
+
+**A streaming turn writes into the card it owns, not into the last card on screen.** `streaming` is the
+writer, and a session switch, a reconnect or any idle report clears it, so it cannot answer which bubble a
+turn is using; `openCard` is the record that does (`static/app.js:53`). Adopting "the last assistant bubble"
+instead put a new turn's deltas inside the previous answer, and only a reload drew it correctly, because
+the stored rows were never the problem. The ordering that makes it happen is in the runtime: the session is
+marked busy (`backend/session_runtime.py:877`) before the prompt is published (`:920`), so a view that arms
+itself on the busy signal is holding the turn that just ended. `tests/test_transcript_card_flow.py` pins
+the structure, for the same reason the listener rule does.
 
 **Frontend weight is budgeted per file.** The baselines are measured raw and gzipped and the budgets are
 that plus about four percent (`tests/test_frontend_weight.py:36`, re-measured at `:39-42`). If your change pushes a file over,

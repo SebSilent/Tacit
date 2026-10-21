@@ -133,7 +133,9 @@ class TestDesktopDrawsTheTime(unittest.TestCase):
         self.assertIn("appendMsg('user', text, null, sent, at - 1);", app)
         self.assertIn("role: 'assistant', content: '', reason: '', tools: [], ts: nowTs()",
                       app)
-        self.assertIn("appendMsg('assistant', '', null, last.ts, s.messages.indexOf(last))",
+        # Moved with the live-bubble creation into resumeLiveStream(); the clock still
+        # has to be stamped at creation, which is what this asserts.
+        self.assertIn("appendMsg('assistant', '', null, row.ts, s.messages.indexOf(row))",
                       app)
 
     def test_the_clock_is_never_revealed_by_a_pointer(self):
