@@ -18,6 +18,10 @@ router = APIRouter()
 # preference saved before this change is not rejected as invalid input.
 THINKING_LEVELS = ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
+# Model refs with a detection probe already running. The picker polls while a
+# probe is in flight; without this set every poll started another probe.
+_thinking_probes: set[str] = set()
+
 
 def thinking_meta(ref: str | None = None) -> dict:
     from .. import thinking
@@ -755,13 +759,22 @@ async def get_thinking(ref: str = "", ensure: int = 0):
         # and the picker re-reads the cache once the probe lands.
         import threading as _threading
 
-        def _detect():
-            try:
-                thinking.ensure(chosen)
-            except Exception:  # noqa: BLE001
-                pass
-        _threading.Thread(target=_detect, daemon=True).start()
+        # The picker polls every few seconds while a probe runs, and each poll
+        # would start another probe here — several threads of paid requests against
+        # the same endpoint, all racing to cache the same answer. One at a time per
+        # model; the pollers keep asking and pick the result up when it lands.
         detected = True
+        if chosen not in _thinking_probes:
+            _thinking_probes.add(chosen)
+
+            def _detect():
+                try:
+                    thinking.ensure(chosen)
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    _thinking_probes.discard(chosen)
+            _threading.Thread(target=_detect, daemon=True).start()
     return {"default_thinking": config.prefs().get("thinking", "default"),
             "ref": chosen, **_thinking_block(chosen),
             "detected": detected,

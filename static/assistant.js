@@ -18,6 +18,7 @@
   let preview = null;
   let models = [];
   let thinkingLevels = [];
+  let thinkingInfo = {};
   let sessionModel = '';
   let sessionThinking = 'medium';
   let streaming = null;      // { el, text, raf }
@@ -315,9 +316,42 @@
     if (d.goal !== undefined) goal = d.goal || '';
     models = d.models || [];
     thinkingLevels = d.thinking_levels || [];
+    thinkingInfo = d.thinking_info || {};
     sessionModel = d.session_model || '';
     sessionThinking = d.session_thinking || 'medium';
     renderAll();
+    pollThinking();
+  }
+
+  // The ladder arrives late when the server-side probe is still running: this
+  // endpoint reports what is already known and spawns nothing itself. A panel
+  // opened during the probe used to keep the picker at "model default" until it
+  // was closed and reopened. Poll briefly for the measured ladder; a model that
+  // genuinely has no rungs (known, bare list) stops at once, and the cap keeps a
+  // dead endpoint from being polled forever.
+  let thinkingPolls = 0;
+  function pollThinking() {
+    if (thinkingLevels.length > 1) { thinkingPolls = 0; return; }
+    if (thinkingInfo.known !== false || thinkingPolls >= 6) return;
+    const ref = (settings && settings.model) || sessionModel || '';
+    if (!ref) return;
+    thinkingPolls++;
+    setTimeout(async () => {
+      // The panel may have moved to another session or model while this poll
+      // waited; applying the old model's ladder now would show the wrong rungs.
+      const nowRef = (settings && settings.model) || sessionModel || '';
+      if (nowRef !== ref) { thinkingPolls = 0; return; }
+      const d = await api('/api/harness/thinking?ensure=1&ref=' + encodeURIComponent(ref));
+      if (d.thinking_levels && d.thinking_levels.length > thinkingLevels.length) {
+        thinkingLevels = d.thinking_levels;
+        thinkingInfo = d.thinking_info || thinkingInfo;
+        thinkingPolls = 0;
+        renderControls();
+      } else {
+        thinkingInfo = d.thinking_info || thinkingInfo;
+        pollThinking();
+      }
+    }, 4000);
   }
 
   async function save(patch) {

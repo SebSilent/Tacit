@@ -2630,27 +2630,47 @@ function renderModelPickers() { renderProviderSelect(); renderModelSelect(); }
 
 // Levels are per model, learned once, cached here so switching back does not ask
 // again. There is deliberately no preset list to fall back to: a guessed rung is
-// what this replaced.
+// what this replaced. Entries carry the time they were filled, because a bare
+// fallback cached while the server-side probe was still running must not outlive
+// it: that staleness is what left this picker at "model default" for a model whose
+// ladder had since been measured. The TTL only guards the fallback — a real ladder
+// is a measured fact and does not expire.
 const thinkCache = {};
+const THINK_FALLBACK_TTL = 10000;
+const thinkRetries = {};
 async function renderThinkSelect() {
   const s = cur();
   const ref = (s && s.model) || info.default || '';
-  let levels = thinkCache[ref];
+  const hit = thinkCache[ref];
+  let levels = (hit && (hit.levels.length > 1 || Date.now() - hit.at < THINK_FALLBACK_TTL))
+    ? hit.levels : null;
   if (!levels) {
     // Render at once with the honest fallback; probing runs server-side in a
     // background thread, so a re-fetch below picks the real ladder up when it
     // lands. Waiting here froze the picker for as long as the probe ran.
     levels = ['default'];
+    let retry = false;
     try {
       const r = await fetch('/api/harness/thinking?ensure=1&ref=' + encodeURIComponent(ref));
       const d = await r.json();
       if (d.thinking_levels && d.thinking_levels.length) levels = d.thinking_levels;
-      if (d.detected) {
-        // the probe was still running; ask again shortly for its result
-        setTimeout(() => { delete thinkCache[ref]; if (cur() && ((cur().model) || info.default || '') === ref) renderThinkSelect(); }, 4000);
-      }
-    } catch (e) { /* keep the fallback */ }
-    thinkCache[ref] = levels;
+      retry = !!d.detected;
+    } catch (e) {
+      // A failed fetch used to cache the fallback with no retry scheduled, and
+      // the picker stayed at "model default" until a full reload. Ask again.
+      retry = true;
+    }
+    thinkCache[ref] = { levels, at: Date.now() };
+    const tries = thinkRetries[ref] || 0;
+    if (retry && tries < 8) {
+      // the probe was still running (or the fetch failed); ask again shortly.
+      // Bounded so a model that never answers stops polling instead of spinning
+      // forever; a later render re-fetches anyway once the fallback expires.
+      thinkRetries[ref] = tries + 1;
+      setTimeout(() => { delete thinkCache[ref]; if (cur() && ((cur().model) || info.default || '') === ref) renderThinkSelect(); }, 4000);
+    } else if (!retry) {
+      delete thinkRetries[ref];
+    }
   }
   if (thinkSelect.dataset.ref !== ref || thinkSelect.options.length !== levels.length) {
     thinkSelect.dataset.ref = ref;

@@ -1812,6 +1812,34 @@ def model_reasons(ref: str | None = None) -> bool:
         return False
 
 
+# A thinking model that reads its own replayed reasoning can fall into a loop
+# where the "thinking" it produces is a disclaimer about the replay instead of
+# reasoning about the task: "There is no previous thinking to reproduce. This is
+# the start of our conversation...". One such block is a harmless bad sample;
+# replayed back, it becomes the example the next step imitates, and a turn can
+# spend its whole step budget on it — one session logged 188 consecutive rows.
+# The opening sentence is stable across sessions and providers (188 of 188 spam
+# rows in that session opened with it), so replay swaps it for a neutral note.
+# Replaced rather than dropped because DeepSeek returns 400 for a tools request
+# whose assistant turns omit reasoning_content entirely.
+REASON_ATTRACTOR = "there is no previous thinking to reproduce"
+REASON_ELIDED = "(reasoning elided)"
+
+
+def clean_reason(text) -> str:
+    """Neutralise attractor text in a chain of thought before it is replayed.
+
+    Only a block that OPENS with the disclaimer is replaced: real reasoning that
+    merely quotes the phrase stays untouched, and an empty reason stays empty so
+    rows that never reasoned still carry no key at all. A stored row can carry
+    a non-string (a malformed row, a number), and one bad row must not take the
+    whole transcript build down with it."""
+    t = text.strip() if isinstance(text, str) else ""
+    if t.lower().startswith(REASON_ATTRACTOR):
+        return REASON_ELIDED
+    return t
+
+
 def transcript_messages(rows: list[dict], reasoning: bool = False) -> list[dict]:
     """Expand stored transcript rows into the messages a model should see.
 
@@ -1838,8 +1866,10 @@ def transcript_messages(rows: list[dict], reasoning: bool = False) -> list[dict]
             out.append({"role": "user", "content": body})
         elif role == "assistant":
             row = {"role": "assistant", "content": body}
-            if reasoning and (m.get("reason") or "").strip():
-                row["reasoning_content"] = m["reason"]
+            if reasoning:
+                cr = clean_reason(m.get("reason"))
+                if cr:
+                    row["reasoning_content"] = cr
             if calls:
                 row["tool_calls"] = [
                     {"id": t["id"], "type": "function",
@@ -2045,7 +2075,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             yield {"type": "tool_end", "name": c["name"], "result": result,
                    "id": c["id"], "is_error": failed, "elapsed_ms": _ms, **_card}
         if trace is not None:
-            trace.append({"text": "".join(got), "reason": "".join(why).strip(),
+            trace.append({"text": "".join(got), "reason": clean_reason("".join(why)),
                           "tools": step_tools})
 
     def _report(unfinished=(), closing=True, verify=()):
@@ -2123,7 +2153,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     "else. Ask again with a narrower task.")
             yield {"type": "text", "delta": body}
         if trace is not None:
-            trace.append({"text": body, "reason": "".join(why).strip(), "tools": []})
+            trace.append({"text": body, "reason": clean_reason("".join(why)),
+                          "tools": []})
     # The project context is read once at the start of a task, not on every
     # turn. Repeating it spends the window on advice the model already followed, so
     # discovery is only offered while the transcript holds no assistant work.
@@ -2273,7 +2304,12 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             turn_tokens += int(retry.get("tokens") or 0)
 
         narration = "".join(step_text).strip()
-        thinking = "".join(step_reason).strip()
+        # Sanitised here, at the single point the step's thinking is finalised, so
+        # every downstream use — the trace the pane renders and the
+        # reasoning_content the next step reads back — sees the neutral note
+        # instead of attractor text. Without this, one spammy step teaches the
+        # next one, and the turn burns its step budget on the disclaimer.
+        thinking = clean_reason("".join(step_reason))
 
         if not calls:
             # A step that announces intent and runs nothing is deliberation, not

@@ -103,10 +103,18 @@ GZIP_BASELINE = 115_372
 # gzip and the shipped union at 505,555 / 133,488. Both were over the old lines, the
 # gzip one quietly so: the raw assert fired first and hid it. Budgets are the new
 # figures plus ~4%: 500,000 / 133,000 for the page, 526,000 / 139,000 shipped.
-RAW_BUDGET = 500_000
-GZIP_BUDGET = 133_000
-SHIPPED_RAW_BUDGET = 526_000
-SHIPPED_GZIP_BUDGET = 139_000
+#
+# Raised again for the thinking-ladder polling: `app.js` grew by 4.4 KB (the
+# fallback cache now carries the time it was filled, so a bare fallback cannot
+# outlive the server-side probe that supersedes it) and `assistant.js` by 2.3 KB
+# (the panel polls briefly for a ladder that arrives late). Page measured
+# 497,300 raw / 133,467 gzip, union 521,619 / 138,936 - the gzip line was already
+# over, the shipped gzip line had 64 bytes of headroom left. Budgets are the new
+# figures plus ~4%: 517,000 / 139,000 for the page, 542,000 / 144,500 shipped.
+RAW_BUDGET = 517_000
+GZIP_BUDGET = 139_000
+SHIPPED_RAW_BUDGET = 542_000
+SHIPPED_GZIP_BUDGET = 144_500
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
