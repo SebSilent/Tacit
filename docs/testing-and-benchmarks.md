@@ -94,7 +94,7 @@ at the same time, and that is what "connecting..." for ages actually is
 (`:13-14`).
 
 `scripts/measure_registry.py` counts bytes rather than messages for `/api/sessions/registry`
-(`scripts/measure_registry.py:3`, route at `backend/routers/api.py:676`). Counting messages is not enough
+(`scripts/measure_registry.py:3`, route at `backend/routers/api.py:695`). Counting messages is not enough
 to know whether the payload is small, because one message can carry a 48,000-character `read_file`
 result, and bytes are the unit the wire and the parser actually pay (`:5-7`). It is read-only and takes an
 optional home directory so a synthetic case can be measured

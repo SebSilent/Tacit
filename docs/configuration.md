@@ -155,8 +155,8 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 
 | Key | Read at | Notes |
 |---|---|---|
-| `model` | `backend/routers/api.py:734` | the session default when no ref is given |
-| `thinking` | `backend/routers/api.py:68`, `:751` | reasoning level, written at `:767` |
+| `model` | `backend/routers/api.py:752` | the session default when no ref is given |
+| `thinking` | `backend/routers/api.py:72`, `:778` | reasoning level, written at `:794` |
 | `delegateModel` | `backend/config.py:365` | overridden by `TACIT_DELEGATE_MODEL` |
 | `fallbackModel` | `backend/config.py:381` | the model a session runs on when its own is gone; without it the turn fails and says so |
 | `deliverGuarantee` | `backend/config.py:444` | overridden by `TACIT_DELIVER_GUARANTEE` |
@@ -166,7 +166,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `allowVersionControl` | `backend/config.py:496` | absent means the agent may not run git |
 | `disabledTools` | `backend/agent.py:866`, `backend/profiles.py:236` | tool names removed from the registry |
 | `projectRoots` | `backend/config.py:701` | folders the workspace picker offers |
-| `noContextFiles` | `backend/routers/api.py:798`, `:804` | stop reading `AGENTS.md` and friends |
+| `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |
 | `memoryBudget` | `backend/memory_store.py:142` | startup memory ceiling in tokens |
 | `memoryBudgetOverride` | `backend/memory_store.py:147` | lifts the 500 ceiling to 100,000 |
 
