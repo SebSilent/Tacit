@@ -6,23 +6,23 @@ and "everything on" is one action with a known price (`backend/profiles.py:3-9`)
 
 ## What the fixed cost is made of
 
-The standing prompt is assembled in one function (`backend/ai/prompts.py:148-176`):
+The standing prompt is assembled in one function (`backend/ai/prompts.py:154-182`):
 
 | Part | Source | When it appears |
 |---|---|---|
 | Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:49-56`) for a delegated run |
-| The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:153` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
-| Project scope | `backend/ai/prompts.py:27-31`, added at `:155-156` | when the session has a usable project (`backend/config.py:680`) |
-| Scratch-workspace notice | `backend/ai/prompts.py:33-38`, added at `:157-162` | when there is no usable project and a session id, so the model is told where it is working |
-| Read-only or chat notice | `backend/ai/prompts.py:40-44`, added at `:167-170` | per mode |
-| Skill index | added at `backend/ai/prompts.py:171-175` | only when skills exist; bodies are fetched on demand by the `skill` tool |
+| The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:159` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
+| Project scope | `backend/ai/prompts.py:27-31`, added at `:161-162` | when the session has a usable project (`backend/config.py:680`) |
+| Scratch-workspace notice | `backend/ai/prompts.py:33-38`, added at `:163-168` | when there is no usable project and a session id, so the model is told where it is working |
+| Read-only or chat notice | `backend/ai/prompts.py:40-44`, added at `:173-176` | per mode |
+| Skill index | added at `backend/ai/prompts.py:177-181` | only when skills exist; bodies are fetched on demand by the `skill` tool |
 
 On top of that sits the tool schemas, then plugin tools, then memory, then any eagerly injected MCP
 schemas. `cost_of` returns those five numbers separately rather than one total, so a reader can see
 which part of the bill moved (`backend/profiles.py:199-203`).
 
 The published figures are in the README: 974 characters of standing instructions, about 768 tokens on
-Minimal and 1,914 on Default (`README.md:13-15`). A test reads the table back out of the README and
+Minimal and 1,913 on Default (`README.md:13-15`). A test reads the table back out of the README and
 re-measures it against `cost_of`, because 1,889 stayed published for a while after the schemas grew
 past it and nothing noticed.
 
@@ -160,19 +160,19 @@ None of this was invented here.
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
   size actually is (`backend/agent.py:1062`).
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1190-1218`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1220-1248`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
 - **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
   note falls into the region being summarised rather than being pinned
-  (`backend/agent.py:1276-1289`).
+  (`backend/agent.py:1336-1342`).
 - **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
-  failed and the most recent activity (`backend/agent.py:1194-1201`).
+  failed and the most recent activity (`backend/agent.py:1254-1278`).
 - **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
   acted on, which is how a compacted session restarts work it already finished.
-- **Compaction runs during a turn, not only between them** (`backend/agent.py:1391-1426`). Checking the
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1451-1486`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
 - **The standing prompt and the task are pinned against elision** (`backend/agent.py:896-916`). Pinning
