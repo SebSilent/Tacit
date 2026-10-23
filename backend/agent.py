@@ -1825,19 +1825,123 @@ def model_reasons(ref: str | None = None) -> bool:
 REASON_ATTRACTOR = "there is no previous thinking to reproduce"
 REASON_ELIDED = "(reasoning elided)"
 
+# Neutralising the exact disclaimer bred a milder family: the same loop now
+# produces a block that misreads the conversation as "system setup, no task,
+# previous turn was a bare acknowledgement" — 23 rows across six sessions after
+# the first fix, whole for short reasons and interleaved between real blocks
+# for long ones. It is caught the same way, sentence by sentence, with the same
+# replacement. A sentence that QUOTES one of the exact phrases is left alone:
+# the attractor wording is exactly what a model quotes when it reasons about
+# the bug, and such quotes carry no confusion vocabulary of their own. The
+# milder family's sentences that do carry quotes are still caught, by their
+# weaker vocabulary.
+_CONFUSION_STRONG = (
+    re.compile(r"there is no (?:previous|prior) (?:thinking|reasoning) to reproduce", re.I),
+    re.compile(r"this is the start of (?:our|this|the) conversation", re.I),
+    re.compile(r"the user hasn'?t (?:actually )?asked (?:a question|anything|me)", re.I),
+    re.compile(r"the user has sent a system", re.I),
+    re.compile(r"understood\.? ?i will follow these instructions", re.I),
+)
+_CONFUSION_WEAK = (
+    re.compile(r"just system (?:setup|instructions|context)", re.I),
+    re.compile(r"system[- ]level (?:setup|instruction)", re.I),
+    re.compile(r"system setup with instructions", re.I),
+    re.compile(r"instruction preamble", re.I),
+    re.compile(r"system (?:prompt|message|reminder) says to always invoke", re.I),
+    re.compile(r"always invoke a function call in response to user queries", re.I),
+    re.compile(r"no actual task", re.I),
+    re.compile(r"there'?s no task", re.I),
+    re.compile(r"no task to perform", re.I),
+    re.compile(r"no real query", re.I),
+    re.compile(r"no query here", re.I),
+    re.compile(r"nothing to do here", re.I),
+    re.compile(r"nothing to reason about", re.I),
+    re.compile(r"nothing substantive to reproduce", re.I),
+    re.compile(r"no substantive reasoning", re.I),
+    re.compile(r"no real thinking content", re.I),
+    re.compile(r"no reasoning process to reproduce", re.I),
+    re.compile(r"no concrete request to act on", re.I),
+    re.compile(r"no substantive request", re.I),
+    re.compile(r"acknowledge briefly", re.I),
+    re.compile(r"brief acknowledgment", re.I),
+    re.compile(r"acknowledgment and (?:to )?wait", re.I),
+    re.compile(r"wait for the actual request", re.I),
+    re.compile(r"i'?ll keep it to one line", re.I),
+    re.compile(r"without fabricating a task", re.I),
+    re.compile(r"with no content beyond that", re.I),
+    re.compile(r"(?:just|simply) acknowledged the instructions", re.I),
+    re.compile(r"i simply responded", re.I),
+    re.compile(r"minimal acknowledgment", re.I),
+    re.compile(r"my (?:previous )?(?:response|turn) (?:was|had)[^.]{0,120}"
+               r"(?:no (?:real |substantive |meaningful )?(?:thinking|reasoning)"
+               r"|acknowledg|understood|(?:just|simply) (?:acknowledged|responded))", re.I),
+    re.compile(r"the conversation has not yet", re.I),
+)
+# Sentence boundaries: the usual ones, plus a period glued to the next capital
+# ("...29-33.The user..."), which is how the interleaved blocks arrive.
+_SENTENCE = re.compile(r"((?<=[.!?])\s+|(?<=[a-z0-9]\.)(?=[A-Z]))")
+# An apostrophe between two letters is a contraction, not a quote mark.
+_QUOTE = re.compile(r'"|(?<![A-Za-z])\'|\'(?![A-Za-z])')
+
+
+def _weak_hits(sentence: str) -> int:
+    """How many of the milder family's phrases one sentence carries."""
+    return sum(1 for op in _CONFUSION_WEAK if op.search(sentence))
+
+
+def _confusion_class(sentence: str) -> str:
+    """'strong', 'weak' or '' for one sentence of a chain of thought."""
+    if any(op.search(sentence) for op in _CONFUSION_STRONG) and not _QUOTE.search(sentence):
+        return "strong"
+    hits = _weak_hits(sentence)
+    if hits >= 2 or (hits == 1 and len(sentence) < 200):
+        return "weak"
+    return ""
+
 
 def clean_reason(text) -> str:
     """Neutralise attractor text in a chain of thought before it is replayed.
 
-    Only a block that OPENS with the disclaimer is replaced: real reasoning that
-    merely quotes the phrase stays untouched, and an empty reason stays empty so
-    rows that never reasoned still carry no key at all. A stored row can carry
-    a non-string (a malformed row, a number), and one bad row must not take the
-    whole transcript build down with it."""
+    A block that OPENS with the disclaimer is replaced whole. Any other run of
+    confusion sentences — the milder family that replaced it — is replaced by
+    the same note, sentence by sentence, so real reasoning between two runs
+    survives. A sentence that quotes one of the exact phrases stays untouched,
+    and an empty reason stays empty so rows that never reasoned still carry no
+    key at all. A stored row can carry a non-string (a malformed row, a
+    number), and one bad row must not take the whole transcript build down
+    with it."""
     t = text.strip() if isinstance(text, str) else ""
     if t.lower().startswith(REASON_ATTRACTOR):
         return REASON_ELIDED
-    return t
+    if not t:
+        return t
+    parts = _SENTENCE.split(t)
+    frags, seps = parts[0::2], parts[1::2]
+    classes = [_confusion_class(f) for f in frags]
+    out: list[str] = []
+    i = 0
+    while i < len(frags):
+        if not classes[i]:
+            out.append(frags[i])
+            if i < len(seps):
+                out.append(seps[i])
+            i += 1
+            continue
+        j = i
+        while j < len(frags) and classes[j]:
+            j += 1
+        # A run is elided when it is more than one sentence, or when its single
+        # sentence is condemned outright or carries two of the weaker phrases.
+        if j - i > 1 or classes[i] == "strong" or _weak_hits(frags[i]) >= 2:
+            out.append(REASON_ELIDED)
+            if j - 1 < len(seps):
+                out.append(seps[j - 1])
+        else:
+            out.append(frags[i])
+            if i < len(seps):
+                out.append(seps[i])
+        i = j
+    return "".join(out).strip()
 
 
 def transcript_messages(rows: list[dict], reasoning: bool = False) -> list[dict]:

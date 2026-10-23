@@ -639,17 +639,23 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
             return
 
         narration = "".join(step_text).strip()
-        thinking = "".join(step_reason).strip()
+        thinking = agent.clean_reason("".join(step_reason)).strip()
 
         if not calls:
             if trace is not None:
                 trace.append({"text": narration, "reason": thinking, "tools": []})
             break
 
-        messages.append({"role": "assistant", "content": narration, "tool_calls": [
+        assistant_msg = {"role": "assistant", "content": narration, "tool_calls": [
             {"id": c["id"], "type": "function",
              "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
-            for c in calls]})
+            for c in calls]}
+        if thinking:
+            # Same as the main loop: the chain of thought travels back with the
+            # transcript, or the model sees its own tool turns reasoning-less and
+            # starts narrating why.
+            assistant_msg["reasoning_content"] = thinking
+        messages.append(assistant_msg)
         step_tools: list[dict] = []
         for call in calls:
             try:
