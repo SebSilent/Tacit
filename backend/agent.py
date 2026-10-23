@@ -1148,7 +1148,23 @@ def _tail_budget(trigger_tokens: int) -> int:
                         int(trigger_tokens * config.COMPACT_TAIL_SHARE)))
 
 
-def _tail_split(rest: list[dict], budget: int | None = None) -> tuple[list[dict], list[dict]]:
+def _carries_reason(m: dict) -> bool:
+    """Whether a row carries real reasoning, under either key the two shapes use.
+
+    Stored rows keep it under ``reason``, live wire rows under
+    ``reasoning_content``. The elided marker does not count: it is what the
+    replay cleaner leaves where a junk block stood, and planting it on purpose
+    would hand the imitation loop the exact sample it feeds on.
+    """
+    for key in ("reason", "reasoning_content"):
+        v = m.get(key)
+        if isinstance(v, str) and v.strip() and v.strip() != REASON_ELIDED:
+            return True
+    return False
+
+
+def _tail_split(rest: list[dict], budget: int | None = None,
+                keep_reason: bool = False) -> tuple[list[dict], list[dict]]:
     """Split into (to_summarise, to_keep) by token budget, not message count.
 
     A fixed count is six huge tool results on one turn and six one-line answers on
@@ -1156,6 +1172,13 @@ def _tail_split(rest: list[dict], budget: int | None = None) -> tuple[list[dict]
     recent work that was cheap to keep. A token budget treats both alike, with a
     message floor so a tail of one enormous result still keeps its neighbours and
     a ceiling so a tail of hundreds of tiny ones cannot eat the summary.
+
+    With ``keep_reason`` the tail is walked back until it contains the most recent
+    real reasoning block. A thinking model that sees no reasoning anywhere reads
+    the transcript as a fresh conversation and narrates the absence, and a tail
+    that is only the newest user message shows it exactly that. The walk never
+    reaches index 0, so the fold side always keeps at least one row and
+    compaction cannot be starved; the extra cost is bounded by one row's tokens.
     """
     if not rest:
         return [], []
@@ -1181,6 +1204,13 @@ def _tail_split(rest: list[dict], budget: int | None = None) -> tuple[list[dict]
         split -= 1
     if split < len(rest) and rest[split].get("role") == "tool":
         return [], list(rest)      # no owning call anywhere: nothing safe to fold
+    if keep_reason:
+        # Extending backwards only adds rows before the tail, so the tail still
+        # opens on a non-tool row and no result is orphaned by the walk.
+        for i in range(split - 1, 0, -1):
+            if rest[i].get("role") == "assistant" and _carries_reason(rest[i]):
+                split = i
+                break
     return rest[:split], rest[split:]
 
 
@@ -1329,7 +1359,7 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
         return None
     ctx = (rec.get("usage") or {}).get("context") or {}
     trigger = config.context_fill_target(ctx.get("window") or 0) or (_chars(msgs) // 4)
-    old, tail = _tail_split(rest, _tail_budget(trigger))
+    old, tail = _tail_split(rest, _tail_budget(trigger), keep_reason=model_reasons(ref))
     if not old:
         return None
     before = _chars(msgs)
@@ -1434,7 +1464,7 @@ def compact_messages(messages: list[dict], ref: str | None = None,
         return None
     trigger = (int(budget_chars) // token_mod.CHARS_PER_TOKEN
                if budget_chars else config.COMPACT_TAIL_TOKENS)
-    old, tail = _tail_split(rest, _tail_budget(trigger))
+    old, tail = _tail_split(rest, _tail_budget(trigger), keep_reason=model_reasons(ref))
     if not old:
         return None
     before = wire_chars(messages)

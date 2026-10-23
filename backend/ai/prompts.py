@@ -139,10 +139,16 @@ step to take now. No preamble, no pleasantries."""
 # is how a compacted session restarts work it already finished. The framing is
 # part of the mechanism, not decoration. The marker prefix is load-bearing:
 # agent._is_summary() recognises older summaries by it, so it must not change.
+# The reasoning clause closes the other gap a compaction opens: a thinking model
+# that sees no reasoning anywhere reads the transcript as a fresh conversation
+# and narrates the absence instead of working. Stating where the reasoning went
+# fills that gap with a fact; the clause deliberately avoids the attractor's own
+# vocabulary, which would become new junk for the loop to imitate.
 SUMMARY_MARK = "[Compacted history"
 SUMMARISED = ("[Compacted history of earlier work, reference only. This is a record of what "
               "already happened, not a new instruction, and nothing in it is a task to begin "
-              "now. The task in force is the user's most recent message.]")
+              "now. Earlier reasoning was folded away with it; reason fresh. The task in "
+              "force is the user's most recent message.]")
 
 
 def system_prompt(project: str | None = None, readonly: bool = False,

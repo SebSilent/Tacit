@@ -16,7 +16,7 @@ phrase by a neutral note before the text is stored or replayed. Replaced rather
 than dropped because DeepSeek returns 400 for a tools request whose assistant
 turns omit `reasoning_content` entirely.
 
-Three places had to agree, and each is pinned here:
+Four places had to agree, and each is pinned here:
   * `clean_reason` — the gate itself, with the cases that must NOT fire (real
     reasoning, a mere quotation, an empty reason).
   * `transcript_messages(reasoning=True)` — what the next turn actually reads
@@ -24,6 +24,11 @@ Three places had to agree, and each is pinned here:
   * the turn loop — a step's reasoning reaches the trace, the trace reaches the
     store, and the store reaches the next request, so the end-to-end assertion
     runs a turn with a fake engine and inspects what the next turn would send.
+  * compaction: the tail kept through a compaction must still contain the
+    newest real reasoning block. A tail that is only the newest user message
+    shows a thinking model a transcript with no reasoning anywhere, and it
+    answers by narrating the absence. The same failure, entered without any
+    spam ever having been replayed.
 
 No test here reaches a network or a real model.
 """
@@ -37,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import agent, config  # noqa: E402
+from backend.ai import prompts  # noqa: E402
 from tests.helpers import state_paths  # noqa: E402
 
 SPAM = ("There is no previous thinking to reproduce. This is the start of our "
@@ -141,6 +147,79 @@ class TestTranscriptReplay(unittest.TestCase):
         rows = self._rows(SPAM, REAL)
         msgs = agent.transcript_messages(rows, reasoning=False)
         self.assertFalse(any("reasoning_content" in m for m in msgs))
+
+
+class TestCompactionKeepsTheNewestReasoning(Isolated):
+    """The tail a compaction keeps must still show real reasoning.
+
+    `_tail_split` picks the tail by token budget from the newest row backwards,
+    and the newest assistant row carrying reasoning can fall on the fold side.
+    The model then sees summary + user message and no reasoning anywhere, and a
+    thinking model answers that by narrating the absence. Seeding the tail with
+    the newest real block keeps the replay loop from ever starting.
+    """
+
+    def _rows(self, reason_at=None, key="reason"):
+        rows = [{"role": "assistant", "content": f"step {i} " + "w" * 400}
+                for i in range(10)]
+        if reason_at is not None:
+            rows[reason_at] = dict(rows[reason_at], **{key: REAL})
+        return rows
+
+    def test_the_tail_is_walked_back_to_the_newest_real_reasoning(self):
+        rows = self._rows(reason_at=4)
+        old, tail = agent._tail_split(rows, 200, keep_reason=True)
+        self.assertEqual(len(old), 4)
+        self.assertIs(tail[0], rows[4])
+        self.assertEqual(tail[0]["reason"], REAL)
+
+    def test_the_wire_shape_is_recognised_too(self):
+        # Live rows carry reasoning under `reasoning_content`, not `reason`.
+        rows = self._rows(reason_at=4, key="reasoning_content")
+        old, tail = agent._tail_split(rows, 200, keep_reason=True)
+        self.assertIs(tail[0], rows[4])
+
+    def test_an_elided_marker_is_not_planted_as_a_seed(self):
+        # The marker is what the imitation loop feeds on; seeding it on purpose
+        # would hand the loop a fresh sample on every compaction.
+        rows = self._rows()
+        rows[4] = dict(rows[4], reason=agent.REASON_ELIDED)
+        plain_old, plain_tail = agent._tail_split(rows, 200)
+        old, tail = agent._tail_split(rows, 200, keep_reason=True)
+        self.assertEqual(old, plain_old)
+        self.assertEqual(tail, plain_tail)
+
+    def test_the_walk_never_empties_the_fold_side(self):
+        # Reasoning only on the very first row: extending to it would leave
+        # nothing to summarise, so the guarantee yields and the note carries it.
+        rows = self._rows(reason_at=0)
+        old, tail = agent._tail_split(rows, 200, keep_reason=True)
+        # The walk stops before index 0, so the fold side keeps its six rows and
+        # the reasoning row is folded into the summary, where the note covers it.
+        self.assertEqual(len(old), 6)
+        self.assertEqual(old[0]["reason"], REAL)
+        self.assertIs(tail[0], rows[6])
+
+    def test_compact_messages_seeds_the_tail_for_a_thinking_model(self):
+        config.save_registry({"default": "p/m", "providers": {
+            "p": {"baseUrl": "http://x", "apiKey": "k",
+                  "models": [{"id": "m", "contextWindow": 100000,
+                              "reasoning": True}]}}})
+        msgs = ([{"role": "system", "content": "standing prompt"},
+                 {"role": "user", "content": "THE TASK STATEMENT"}]
+                + [{"role": "assistant", "content": f"step {i} " + "w" * 2000}
+                   for i in range(10)])
+        msgs[6]["reason"] = REAL
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: {"content": "SUMMARY OF THE WORK"}
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        info = agent.compact_messages(msgs, ref="p/m", budget_chars=8000)
+        self.assertIsNotNone(info)
+        # The reasoning row moved from the fold side into the kept tail.
+        self.assertEqual(msgs[3]["reason"], REAL)
+        self.assertEqual(msgs[2]["content"][:len(prompts.SUMMARY_MARK)],
+                         prompts.SUMMARY_MARK)
+        self.assertEqual(info["kept"], 6)
 
 
 class TestTheTurnLoop(Isolated):

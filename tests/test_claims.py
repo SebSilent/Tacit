@@ -1638,6 +1638,23 @@ class TestSummaryFraming(unittest.TestCase):
         self.assertIn("reference only", prompts.SUMMARISED.lower())
         self.assertIn("not a new instruction", prompts.SUMMARISED.lower())
 
+    def test_the_marker_says_where_the_reasoning_went(self):
+        # A compaction folds reasoning away with the history it summarises; a
+        # thinking model that sees no reasoning anywhere narrates the absence
+        # instead of working. The note states where it went.
+        from backend.ai import prompts
+        self.assertIn("reasoning was folded away", prompts.SUMMARISED.lower())
+
+    def test_the_marker_never_speaks_the_attractor(self):
+        # A summary that reads as instructions gets acted on; a note that used
+        # the disclaimer's own words would become new junk for the loop to
+        # imitate. The vocabulary ban is the whole point of the phrasing.
+        from backend.ai import prompts
+        low = prompts.SUMMARISED.lower()
+        self.assertNotIn(agent.REASON_ATTRACTOR, low)
+        self.assertNotIn("reproduce", low)
+        self.assertNotIn("no previous thinking", low)
+
     def test_the_marker_prefix_is_stable_for_old_sessions(self):
         # agent._is_summary recognises summaries written by earlier builds, so the
         # prefix cannot change without orphaning them.
