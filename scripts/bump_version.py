@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bump Tacit's version: the VERSION file at the repo root, and package.json to match.
 
-Tacit's version is `VERSION` — one extensionless file, read by exactly one function
+Tacit's version is `VERSION`; one extensionless file, read by exactly one function
 (`backend/autoupdater.py::local_version`) and, since the update transport started
 ordering versions, compared by `autoupdater.compare_versions`. `package.json` used to
 carry its own number: that file is the optional Playwright driver's manifest, not
@@ -13,7 +13,7 @@ SemVer only, and the script refuses anything else on BOTH sides of the write:
   * the new value must parse as MAJOR.MINOR.PATCH with an optional -prerelease and
     +build, because a value the transport cannot parse is silently ordered as
     "older than every release", which is a wrong answer rather than an error;
-  * the value being replaced must also be valid SemVer — with one exception, the
+  * the value being replaced must also be valid SemVer; with one exception, the
     legacy date (YYYY-MM-DD) that this transport wrote before SemVer. That is the
     only migration this script performs, so the first
     `python scripts/bump_version.py 1.0.0` on a date-versioned checkout works and a
@@ -58,15 +58,15 @@ def main(argv: list[str] | None = None) -> int:
 
     new = args.version.strip()
     if not SEMVER.match(new):
-        die(f"{new!r} is not SemVer — expected MAJOR.MINOR.PATCH with optional "
+        die(f"{new!r} is not SemVer; expected MAJOR.MINOR.PATCH with optional "
             f"-prerelease and +build (e.g. 1.2.0, 1.2.0-rc.1)")
 
     if not VERSION_FILE.is_file():
-        die(f"{VERSION_FILE} is not there to bump — create it with the new value by hand "
+        die(f"{VERSION_FILE} is not there to bump; create it with the new value by hand "
             f"only if this install predates version tracking")
     old = VERSION_FILE.read_text(encoding="utf-8").strip()
     if old != new and not (SEMVER.match(old) or LEGACY_DATE.match(old)):
-        die(f"the version being replaced, {old!r}, is neither SemVer nor the legacy date — "
+        die(f"the version being replaced, {old!r}, is neither SemVer nor the legacy date; "
             f"VERSION has been edited by hand and this script will not guess what it meant")
 
     pkg_line = None
@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         text, m = pkg_line
         PACKAGE_FILE.write_text(text[:m.start(2)] + new + text[m.end(2):], encoding="utf-8")
         print(f"package.json: \"{m.group(2)}\" -> \"{new}\"")
-    print("Nothing was committed, and the running server still holds its loaded code — "
+    print("Nothing was committed, and the running server still holds its loaded code; "
           "Settings > General > Restart server applies a file the update transport wrote.")
     return 0
 

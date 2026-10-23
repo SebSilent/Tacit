@@ -34,7 +34,7 @@ def drain_turns(timeout: float = 5.0) -> None:
     teardown puts them back. `store._path` resolves a session's path at write
     time (backend/store.py:9-21, the house rule that a cached path once made a
     redirected test write into the real ~/.tacit). Those two facts combine
-    badly: a driver thread still running at teardown writes its epilogue —
+    badly: a driver thread still running at teardown writes its epilogue:
     `store.save`, then `_autonomy_bump` → `store.patch` (backend/session_runtime.py:761-783),
     which lands after the restore, in the real home. `store.save` also re-appends
     a missing index row (backend/store.py:144), so the leak is not one stray

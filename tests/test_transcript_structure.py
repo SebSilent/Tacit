@@ -1,4 +1,4 @@
-"""Two transcript bullets that were met, unclaimed, and unguarded — pinned.
+"""Two transcript bullets that were met, unclaimed, and unguarded; pinned.
 
 `the deleted plan, line 544-546`: "Tighten the transcript: clearer role separation, calmer tool
 cards (collapsed by default, expandable, result monospace), reasoning visually
@@ -8,7 +8,7 @@ distinct from the answer."
 collapsed by default, one click to expand, never interleaved into the answer text."
 
 Neither was ticked, neither was written up as done, and no test named any part of
-either — while all of it is decidable from source text, which is why it belongs here
+either, while all of it is decidable from source text, which is why it belongs here
 rather than in the browser list. (An earlier draft of this docstring merged the two
 bullets into one and added a "one-line summary" clause that exists in neither, nor
 anywhere else in the repo. Quoting the deleted plan from memory is how a wrong fact outlives
@@ -18,18 +18,18 @@ Two things this guard is *not*:
   * It does not judge pixels. Every assertion is on a declaration that exists in
     `static/style.css` or an assignment that exists in `static/app.js`. The
     collapsed/expanded *experience* stays a browser call; what is pinned is the
-    structure that makes the behaviour what it is — `display: none` by default, open
+    structure that makes the behaviour what it is; `display: none` by default, open
     while a turn is streaming (TestReasoningIsLive), closed again at the end of it,
     and after that the only thing that flips it is the click.
   * It does not trust prose. Comments in both files *describe* these properties
     (`app.js:1136-1139` explains why no listener sits on `.reason-toggle`;
     `style.css:994-996` explains the `.msg-tag` rationale), so comments are stripped
-    before matching — the same failure the toast guard recorded, and the one this
+    before matching; the same failure the toast guard recorded, and the one this
     file's own sibling (`test_md_escapes.py`) re-sprang on `reason` vs `reason-block`.
 
 Every predicate takes its source as an argument rather than reading the module
 global. That is not tidiness: the first draft had `collapsed_by_default` reading
-the global, and its planted violation passed — a guard that cannot be mutated
+the global, and its planted violation passed; a guard that cannot be mutated
 cannot be trusted.
 """
 import re
@@ -140,7 +140,7 @@ def div_depths(fragment):
 
 def reason_not_interleaved(js):
     """In the assistant skeleton, `.reason-block` and `.msg-content` sit at the
-    same depth — siblings, not one nested inside the other."""
+    same depth; siblings, not one nested inside the other."""
     skel = next((ln for ln in js if 'class="reason-block"' in ln), None)
     if skel is None:
         return False
@@ -263,7 +263,7 @@ class TestRoleSeparation(TestCase):
 
 
 class TestReasoningIsLive(TestCase):
-    """Collapsed by default is the rule for a *finished* turn — the trace must
+    """Collapsed by default is the rule for a *finished* turn; the trace must
     not bury the answer. It was never meant to apply while the trace is
     arriving, and applying it there made the thinking invisible until clicked,
     which read as the model not streaming at all."""
@@ -288,7 +288,7 @@ class TestReasoningIsLive(TestCase):
 
 
 class TestGuardHasTeeth(TestCase):
-    """Each check fails when its own property is broken — and the untouched
+    """Each check fails when its own property is broken, and the untouched
     source still passes it in the same breath, so a predicate that matches
     nothing cannot report a pass either."""
 

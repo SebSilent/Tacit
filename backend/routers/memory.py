@@ -74,7 +74,7 @@ async def stats(project: str = ""):
 
 @router.get("/api/memory/startup")
 async def startup(project: str = ""):
-    """What a turn would actually inject — with the mode applied.
+    """What a turn would actually inject; with the mode applied.
 
     This used to call ``memory_store.startup_selection``, which selects on the
     budget alone: it returned a full block for a session whose memory mode is

@@ -7,7 +7,7 @@ whichever one you happened to be hovering when the tab closed is now your theme.
 
 So:
 
-* `previewTheme` sets the document attribute and NOTHING else — no `localStorage`,
+* `previewTheme` sets the document attribute and NOTHING else; no `localStorage`,
   no write to the committed `theme` variable;
 * `endPreview` restores from `theme`, which is the committed value precisely
   because preview never touched it;
@@ -15,7 +15,7 @@ So:
   preview by hand: the panel repaint (click) and `loadPanel` (tab switch). A
   missed one leaves the app sitting on an unchosen theme with the flag claiming
   there was never a preview;
-* the keyboard gets it too — `focus`/`blur`, or the feature is mouse-only.
+* the keyboard gets it too; `focus`/`blur`, or the feature is mouse-only.
 """
 
 import pathlib
@@ -49,10 +49,10 @@ class TestPreviewDoesNotDecide(unittest.TestCase):
         body = fn(APP, "previewTheme")
         self.assertIsNotNone(body, "previewTheme is gone from app.js")
         self.assertNotIn("localStorage", body,
-                         "a hover wrote to storage — browsing is not deciding")
+                         "a hover wrote to storage; browsing is not deciding")
         self.assertNotIn("applyTheme", body,
                          "preview delegates to applyTheme, which persists")
-        # `theme =` as a STATEMENT, not as `dataset.theme =` — the substring alone
+        # `theme =` as a STATEMENT, not as `dataset.theme =`; the substring alone
         # also matches the very assignment that makes a preview a preview.
         self.assertIsNone(re.search(r"(?<![\w.])theme\s*=(?!=)", body),
                           "preview reassigned the committed theme, so endPreview "
@@ -97,7 +97,7 @@ class TestPreviewAlwaysEnds(unittest.TestCase):
                       "closing the overlay while hovering strands the preview")
 
     def test_the_guards_can_fail(self):
-        """Mutated COPY only — the shipped files must stay as the tests found them."""
+        """Mutated COPY only; the shipped files must stay as the tests found them."""
         persisting = APP.replace(
             "function previewTheme(id) {",
             "function previewTheme(id) { localStorage.setItem('tacit.theme', id);", 1)

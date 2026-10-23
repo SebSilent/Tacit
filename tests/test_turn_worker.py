@@ -2,7 +2,7 @@
 
 Stage 3 of the deleted plan. The decision (Decision 2) is process-per-turn with a
 two-stage stop: cooperative cancel first, hard tree kill after a 5s grace.
-These tests drive a REAL subprocess — no faked engine — because the whole
+These tests drive a REAL subprocess (no faked engine) because the whole
 point is that the turn runs somewhere a thread cannot reach.
 
 The worker runs `agent.run_turn` against a scripted model by pointing the
@@ -49,7 +49,7 @@ class TurnWorkerTest(unittest.TestCase):
         reg = {"default": "p/m", "providers": {"p": {"baseUrl": "http://127.0.0.1:9", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}
         config.save_registry(reg)
         # The suite-wide guard pins the thread path (tests/__init__.py);
-        # these tests exercise the process path, so they opt back in — and
+        # these tests exercise the process path, so they opt back in, and
         # restore the guard on the way out, or the next suite would spawn
         # real subprocesses against faked engines.
         self._worker_mode = os.environ.get("TACIT_TURN_WORKER")
@@ -58,7 +58,7 @@ class TurnWorkerTest(unittest.TestCase):
         # The worker is a separate process: it resolves its home from the
         # TACIT_HOME environment variable, not from this process's module
         # attribute. Without this the worker read the real ~/.tacit, talked
-        # to a real provider, and the test's fake server was never reached —
+        # to a real provider, and the test's fake server was never reached:
         # the unreachable-endpoint test passed by accident, because any
         # endpoint failure produces an error event.
         self._tacit_home = os.environ.get("TACIT_HOME")
@@ -102,7 +102,7 @@ class TurnWorkerTest(unittest.TestCase):
         kinds = [e.get("type") for e in events]
         self.assertIn("error", kinds, f"an unreachable endpoint must error, got {kinds}")
         # The turn errored before completing a step, so the trace is
-        # legitimately empty — but the trace EVENT must have arrived, which
+        # legitimately empty, but the trace EVENT must have arrived, which
         # is what the parent's capture mechanism needs. Assert the
         # attribute was written (it starts as the caller's list; events()
         # replaces it with what the worker sent).
@@ -116,7 +116,7 @@ class TurnWorkerTest(unittest.TestCase):
         The worker subprocess runs the real engine, so the model is faked
         at the only seam that exists across a process boundary: a local
         HTTP server speaking the OpenAI shape. One completion, no tool
-        calls — the turn completes one step, and the parent receives that
+        calls; the turn completes one step, and the parent receives that
         step through the kill-safe trace channel.
         """
         import threading
@@ -214,7 +214,7 @@ class KillTreeTest(unittest.TestCase):
     """The hard stop, against a process that will not cooperate.
 
     The worker under test is a plain python process that ignores stdin and
-    sleeps — the shape of a turn stuck in a model read. Cancel gets the
+    sleeps; the shape of a turn stuck in a model read. Cancel gets the
     grace period, then the tree kill lands, and the process is gone.
     """
 

@@ -7,8 +7,8 @@ Each of these was a thing the interface did wrong that no test could see:
   on top. Deleting an outline is an accessibility failure unless something visible
   stays, so this file pins the replacement, not just the removal.
 * A tool result had a 280px cap and a scrollbar, and still read as a card that
-  grew without limit, because its only separation from the card was a `border-top`
-  — containment you cannot see is not containment.
+  grew without limit, because its only separation from the card was a `border-top`.
+  Containment you cannot see is not containment.
 * The assistant's `assistant_tool_start` fired a toast and `assistant_tool_end`
   was an empty `break`. The backend was already emitting both events; nothing drew
   them. A feature that is half-wired is worse than one that is absent, because the
@@ -106,7 +106,7 @@ class ToolResultIsAWell(unittest.TestCase):
     def test_it_is_inset_from_the_card(self):
         """The margin is what makes it read as inside rather than as more card."""
         m = decl(rule(CSS_CODE, ".tool-body"), "margin")
-        self.assertIsNotNone(m, "no inset — the well touches the card's edges and "
+        self.assertIsNotNone(m, "no inset; the well touches the card's edges and "
                                 "reads as the card's lower half")
         self.assertNotEqual(m, "0")
 
@@ -160,7 +160,7 @@ class OneFocusIndicatorPerControl(unittest.TestCase):
     def test_no_selector_is_declared_twice(self):
         """The fix first shipped as a second `.composer:focus-within` block rather
         than an edit of the incumbent one. It rendered fine and defeated any guard
-        that reads the first match — the exact trap test_panel_cards documents."""
+        that reads the first match; the exact trap test_panel_cards documents."""
         for sel in (".composer:focus-within", ".composer textarea:focus-visible",
                     ".as-input textarea:focus-visible", ".tool-body"):
             self.assertEqual(count_rule(CSS_CODE, sel), 1,
@@ -216,7 +216,7 @@ class AssistantDrawsItsToolCalls(unittest.TestCase):
     def test_the_render_from_messages_draws_them_too(self):
         """The thread re-renders from `messages` on every save. If the cards were
         only appended by the live path they would vanish the moment the answer
-        was stored — which is the bug this whole case exists for."""
+        was stored, which is the bug this whole case exists for."""
         self.assertIn("asToolsHtml()", JS)
         i = JS.index("function renderMessages()")
         self.assertIn("asToolsHtml()", JS[i:i + 3000],
@@ -261,7 +261,7 @@ class ToolBlockIsBounded(unittest.TestCase):
     """The call list gets a box of its own once it is long enough to need one.
 
     A turn with twenty calls stacked an unbounded column of cards, so the newest
-    call — the one you are actually waiting on — landed below the fold and the
+    call (the one you are actually waiting on) landed below the fold and the
     answer arrived a screenful later. The fix is a capped, scrolling `.tools` box
     that appears only at three or more cards, plus a follow that keeps the newest
     card in view. Both halves matter: a box nobody scrolls inside is worse than no
@@ -292,7 +292,7 @@ class ToolBlockIsBounded(unittest.TestCase):
                          "behind it and the page jumps")
 
     def test_the_cap_is_the_same_number_as_the_wells(self):
-        """One token, three surfaces. If they drift, the guard has to say so — the
+        """One token, three surfaces. If they drift, the guard has to say so; the
         token exists precisely so they cannot."""
         well = self.resolved(CSS_CODE, ".tool-body", "max-height")
         block = self.resolved(CSS_CODE, self.SEL, "max-height")

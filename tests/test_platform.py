@@ -20,7 +20,7 @@ from backend import (agent, assistant, config, folders, gateways, hosting, mcp_r
                      providers, store, tokens, vcs)
 # session_runtime is deliberately NOT imported here: it touches the session store
 # at import time, and at module scope that happens before Isolated.setUp points
-# HOME at a temporary directory — so it would read, and lock against, the real
+# HOME at a temporary directory, so it would read, and lock against, the real
 # ~/.tacit. Every test below imports it locally, after redirection.
 from tests.helpers import state_paths  # noqa: E402
 
@@ -527,7 +527,7 @@ class TestProfiles(Isolated):
         """The mode, not a plugin, decides whether the agent has memory tools.
 
         `explicit` injects what you approved and retrieves nothing, so it gets
-        the propose tool but not the recall tool — a tool that could only ever
+        the propose tool but not the recall tool; a tool that could only ever
         answer "not enabled" is not offered.
         """
         profiles.apply("safe")
@@ -553,7 +553,7 @@ class TestProfiles(Isolated):
         """Memory is a capability a profile sets, not a plugin it enables.
 
         The mode and the budget travel together in one write, and no bundle
-        reaches for a plugin to get memory working — that coupling is what let
+        reaches for a plugin to get memory working, that coupling is what let
         the cost and the setting disagree about what memory was doing.
         """
         self.assertTrue(profiles.apply("safe")["ok"])
@@ -842,7 +842,7 @@ class TestTurnSoundSetting(Isolated):
     is "persisted, default on", and defines done as the toggle silencing it
     everywhere and surviving a reload. Two claims matter beyond the round-trip:
     the preference lives on the *server*, so "survives a reload" has to be
-    demonstrated against the file on disk — and the browser must ask the server
+    demonstrated against the file on disk, and the browser must ask the server
     before it makes a noise rather than chime on a stale default. What no test
     can reach is the sound itself: that a finishing turn is audible, including
     from a background tab, is a pair of ears' work.
@@ -913,7 +913,7 @@ class TestTurnSoundSetting(Isolated):
     # ── the second switch, and the merge that keeps the first one honest ──
 
     def _post_sound(self, payload):
-        """Call the real route the way the panel does — one key at a time."""
+        """Call the real route the way the panel does; one key at a time."""
         import asyncio
         from backend.routers import api as api_router
 
@@ -933,8 +933,8 @@ class TestTurnSoundSetting(Isolated):
 
     def test_setting_one_switch_does_not_silence_the_other(self):
         """The bug the per-key merge exists for. The panel's two switches post on
-        their own, so a handler that rebuilt the whole prefs dict from one field —
-        as this route once did — would turn the master back on every time someone
+        their own, so a handler that rebuilt the whole prefs dict from one field,
+        as this route once did, would turn the master back on every time someone
         enabled an alert, or silence the alerts on every master click."""
         self._post_sound({"turn_sound": False})
         out = self._post_sound({"alert_sound": True})
@@ -1168,7 +1168,7 @@ class TestAssistant(Isolated):
         cfg = dict(assistant.DEFAULTS)
         # Capture BEFORE patching. The first draft of this test registered the
         # second pair of cleanups after the patch, which captured MARK-* and
-        # would have restored those over the real constants — a leak into every
+        # would have restored those over the real constants; a leak into every
         # later test in the process.
         real_chat, real_auto = assistant.CHAT_TASK, assistant.AUTONOMY_PERSONA
         self.addCleanup(setattr, assistant, "CHAT_TASK", real_chat)
@@ -2070,7 +2070,7 @@ class TestSwitchHandler(Isolated):
 
     switch used to apply model/mode/thinking to whichever session was open when the
     target id could not be found, so a stale or mistyped id quietly reconfigured a
-    different conversation. Stage 1a made it idle-only; stage 1b deleted it — a
+    different conversation. Stage 1a made it idle-only; stage 1b deleted it; a
     socket is born attached to one session, and switching is the client opening a
     different socket. Both tests survive the deletion: the command still answers,
     and the invariant it was written to protect (a named session is the one that
@@ -2117,8 +2117,8 @@ class TestSwitchHandler(Isolated):
     def test_a_real_target_is_the_one_that_gets_the_settings(self):
         """The settings route that replaced switch: per-session metadata.
 
-        The invariant the old test protected — the named session is the one
-        that gets the settings, and the session left behind is untouched —
+        The invariant the old test protected (the named session is the one
+        that gets the settings, and the session left behind is untouched)
         now lives in the REST metadata route, which is what the client calls
         per session before opening its socket.
         """
@@ -2655,7 +2655,7 @@ class TestStuckTurnExit(Isolated):
                          "the harness must not invent a file to force into existence")
 
     def test_a_turn_that_stops_early_still_delivers_the_file_it_was_writing(self):
-        """The worst hard-set cells ended on their own — 13 turns, 45,000 output tokens,
+        """The worst hard-set cells ended on their own; 13 turns, 45,000 output tokens,
         no attack.py. Waiting for the step cap never reached them, so this exit had to
         grow the same deliverable phase. What it finishes is a write the turn started."""
         from backend import agent
@@ -2880,7 +2880,7 @@ class TestAutonomyPersistence(Isolated):
         first = store.get(sid)
         assistant.save_autonomy(first, {"enabled": True, "max_cycles": 42})
         again = store.get(sid)
-        # Nothing was saved, so the field is not on disk at all — the mutation
+        # Nothing was saved, so the field is not on disk at all; the mutation
         # died with the dict it was made on.
         self.assertNotIn(assistant.AUTONOMY_FIELD, again,
                          "a mutation of a fetched record must not be visible to the "
@@ -2951,7 +2951,7 @@ class TestAutonomyPersistence(Isolated):
         self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"])
 
     def test_reset_clears_the_tally_and_nothing_else(self):
-        """The hour budget is accumulated work_seconds, not a wall-clock start —
+        """The hour budget is accumulated work_seconds, not a wall-clock start,
         so a reset that left the spend behind would end the next run at once. And
         a reset that also took the limits, the Goal or the switch would be the
         panel editing the harness's own state."""
@@ -2996,7 +2996,7 @@ class TestAutonomyLaunchGate(Isolated):
     """``_autonomy_after_assistant`` against the real store, with the agent stubbed.
 
     The autonomous-cycle tick was wired onto this function's success path with no
-    test of its own — the deleted plan item 5 records that as the slice's debt, because the
+    test of its own; the deleted plan item 5 records that as the slice's debt, because the
     rule the tick leans on is the rule that was hardest to get right: a launch that
     did not happen charges no cycle, ends no run, and makes no noise. Every
     assertion below is about a number on disk or an event on the bus. No model, no

@@ -1,4 +1,4 @@
-"""Item 3 — a deleted session stays deleted.
+"""Item 3; a deleted session stays deleted.
 
 The bar this test was written to, stated here so the file stands on its own:
 
@@ -8,23 +8,23 @@ The bar this test was written to, stated here so the file stands on its own:
 
 The bug was never `remove()`. `remove()` unlinks the record and rebuilds the index,
 so in this process it looks correct. The resurrection came from a *second writer*
-holding a `rec` dict — a socket keeps one for the life of the connection — and
+holding a `rec` dict (a socket keeps one for the life of the connection) and
 calling `store.save()` minutes after the delete, which re-created the file and
 re-appended the index row. That is why it read as "sometimes": it only happened
 while something was still live.
 
 So the tests here are ordered by how much they prove:
 
-1. `TheFreshProcess` — the required test. A new interpreter, pointed at the same
+1. `TheFreshProcess`; the required test. A new interpreter, pointed at the same
    directory by `TACIT_HOME`, reads the disk and says whether the session exists.
    It also reads *before* deleting, which is what keeps the passing case honest:
    a reader pointed at the wrong store would report "gone" for every session ever
    written, and a test that only ever asserts absence would cheerfully agree.
-2. `TheSecondWriter` — the exact interleaving that caused it, in process, with a
+2. `TheSecondWriter`; the exact interleaving that caused it, in process, with a
    counterfactual showing the pre-fix code really does resurrect the session.
    Without that pair, a green suite could mean "the bug is fixed" or "nothing in
    this file ever wrote after a delete".
-3. `TheInterleave` — the ghost signature the plan names (a row in the index whose
+3. `TheInterleave`; the ghost signature the plan names (a row in the index whose
    file is gone opens as a session with an empty message list), checked after real
    concurrent save/remove traffic.
 """
@@ -47,7 +47,7 @@ ROOT = str(Path(__file__).resolve().parent.parent)
 # Runs in a child interpreter. argv[1] is the session id; argv[2] the id the test
 # expects to still exist, so one process answers both the before and the after
 # question. Prints the three views the UI could reach the session through: the
-# raw index, the record itself, and registry() — the payload /api/sessions serves.
+# raw index, the record itself, and registry(); the payload /api/sessions serves.
 _READER = r"""
 import json, sys
 sys.path.insert(0, %r)
@@ -116,8 +116,8 @@ class TheFreshProcess(Isolated):
         self.make("kept-1")
 
         before = self.read_as_new_process("gone-1", "kept-1")
-        # The control. If the child were reading some other directory — a stale
-        # TACIT_HOME, a path that drifted — this is where the test says so, rather
+        # The control. If the child were reading some other directory (a stale
+        # TACIT_HOME, a path that drifted), this is where the test says so, rather
         # than passing later on an absence that has nothing to do with the delete.
         self.assertIn("gone-1", before["index"],
                       "the fresh process is not reading the store this test writes")
@@ -185,7 +185,7 @@ class TheSecondWriter(Isolated):
         store._write_index(rows)
 
         self.assertIsNotNone(store.get("plant-1"),
-                             "the plant no longer reproduces the bug — update this test")
+                             "the plant no longer reproduces the bug; update this test")
         self.assertIn("plant-1", [r.get("id") for r in store.index()])
 
     def test_a_half_written_record_is_still_healed(self):
@@ -217,7 +217,7 @@ class TheBrowserAsksItBack(Isolated):
     deleted, under that id and with that title.
 
     The store now remembers the ids it has deleted and refuses them, while an
-    unknown id that was never deleted is still adopted — the recovery that
+    unknown id that was never deleted is still adopted; the recovery that
     `test_a_stale_session_is_adopted_under_the_id_the_browser_holds` exists for.
     """
 

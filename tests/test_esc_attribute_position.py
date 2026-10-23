@@ -2,11 +2,11 @@
 attribute it was put in?  (the deleted plan item 5, the `innerHTML` audit)
 
 `tests/test_md_escapes.py` settled model prose. It left the other ~180 `esc()` call
-sites — the ones fed by the filesystem, git and the planner — unexamined, and its own
+sites (the ones fed by the filesystem, git and the planner) unexamined, and its own
 docstring said the rest of the audit "needs a browser". It does not.
 
 Measured 2026-10-13 before writing this: `static/` defines **six** `esc()`s, one per
-module, and **five of them replace `"`**. `app.js`'s did not — it escaped `&`, `<`, `>`
+module, and **five of them replace `"`**. `app.js`'s did not; it escaped `&`, `<`, `>`
 only. That is not cosmetic. `esc()` is interpolated inside double-quoted attributes in
 the workspace listing (`wd-item`/`wd-new` `data-path`), the file browser (`fs-quick-btn`,
 `fs-row` `data-path`), the prompt queue (`pq-opt` `data-opt`) and the planner's status
@@ -22,7 +22,7 @@ Why the existing suite could not have seen this: every case in `test_md_escapes.
 asserts on `md()` output, which lands in *text* position, where a bare `"` is inert. The
 positions where `"` is load-bearing are precisely the ones no test executed. So this file
 runs the real `esc()` under node, renders it into the real attribute shape, and asks a
-**parser** — not a substring match — what attributes the browser would see.
+**parser**, not a substring match; what attributes the browser would see.
 
 Deliberately *not* pinned here: a source rule that "every interpolation inside a quoted
 attribute must be esc-wrapped". Measured against the renderers it fired on
@@ -65,7 +65,7 @@ ATTR_SITES = ('data-path="${esc(String(p.path))}"',
 # String(), and the value is a Date method's own output.
 ATTR_SITE_COUNT = 7
 
-# Only `esc` is lifted out — app.js as a whole touches `document` at load and would throw
+# Only `esc` is lifted out; app.js as a whole touches `document` at load and would throw
 # under node. Sliced from the anchor to the end of its line, then checked.
 _TAIL = """
 const P = JSON.parse(process.env.TACIT_PAYLOAD);
@@ -87,7 +87,7 @@ def esc_source(source=MD):
     lines = [ln.strip() for ln in source.splitlines()
              if ln.lstrip().startswith("function esc(t)")]
     if not lines:
-        raise AssertionError("could not slice markdown.js's esc() — it no longer starts with "
+        raise AssertionError("could not slice markdown.js's esc(); it no longer starts with "
                              "'function esc(t)'; the harness would be running nothing")
     body = lines[0]
     for needed in ("&amp;", "&lt;", "&gt;"):
@@ -131,7 +131,7 @@ def esc_definitions(sources):
     The boundary is the `;` that closes the statement, NOT the first one: these bodies
     are full of HTML entities, and `'&amp;'`, `'&lt;'`, `'&gt;'`, `'&quot;'` each end in a
     semicolon. The first draft sliced at the first `;`, so all six came back truncated at
-    their first entity and all six were reported as missing the quote — a guard that
+    their first entity and all six were reported as missing the quote; a guard that
     failed correct code, caught by running it rather than by reasoning about it."""
     found = {}
     for name, text in sources.items():
@@ -143,7 +143,7 @@ def esc_definitions(sources):
                     end = sm.end()
                     break
             if end is None:
-                raise AssertionError(f"{name}: no closing `;` located for esc() — the "
+                raise AssertionError(f"{name}: no closing `;` located for esc(); the "
                                      "definition changed shape and the guard would be "
                                      "silently reading nothing")
             if DELEGATE.search(body):
@@ -175,7 +175,7 @@ def run_coercion(source=MD):
     """Run the shared renderer's real `esc()` over non-strings and report what each one did.
 
     A fresh `new Function` per value set, because `esc()` is a declaration and the point
-    of the exercise is which argument throws — a renderer that throws here is caught by
+    of the exercise is which argument throws; a renderer that throws here is caught by
     the surrounding try/catch and the pane silently loses its content."""
     payload = "const SRC = " + json.dumps(esc_source(source)) + ";\n" + _TAIL_COERCE
     fd, path = tempfile.mkstemp(suffix=".js", prefix="tacit_coerce_")
@@ -193,7 +193,7 @@ def run_coercion(source=MD):
 
 class TagReader(html.parser.HTMLParser):
     """Collects the attributes a parser actually sees. Substring matching cannot answer
-    "did the value escape its attribute" — the text `onmouseover` is present in the
+    "did the value escape its attribute"; the text `onmouseover` is present in the
     *correct* output too, sitting inertly inside a quoted value."""
 
     def __init__(self):
@@ -211,7 +211,7 @@ def attributes_of(html_str):
     return r.tags
 
 
-@unittest.skipUnless(shutil.which("node"), "node not on PATH — esc() cannot be run")
+@unittest.skipUnless(shutil.which("node"), "node not on PATH; esc() cannot be run")
 class EscHoldsTheAttribute(unittest.TestCase):
     """Behavioural: these are strings `esc()` actually returned."""
 
@@ -246,7 +246,7 @@ class EscHoldsTheAttribute(unittest.TestCase):
 
     def test_the_value_still_arrives_intact(self):
         """Inert *and* faithful: the browser decodes `&quot;` back to `"` inside the
-        attribute value, so the path is usable — it just cannot end the value."""
+        attribute value, so the path is usable; it just cannot end the value."""
         tag, attrs = attributes_of(self.out["rendered"][0])[0]
         self.assertEqual("button", tag)
         self.assertEqual(PAYLOAD, attrs["data-path"])
@@ -283,7 +283,7 @@ class EveryEscaperEscapesTheQuote(unittest.TestCase):
         matched no definition at all."""
         defs = esc_definitions(static_sources())
         self.assertEqual(6, len(defs),
-                         f"found {sorted(defs)}; static/ defines six esc()s — if this "
+                         f"found {sorted(defs)}; static/ defines six esc()s; if this "
                          "changes, the guard below has stopped covering all of them")
 
     def test_no_definition_is_missing_the_quote(self):
@@ -296,13 +296,13 @@ class EveryEscaperEscapesTheQuote(unittest.TestCase):
     def test_no_definition_is_missing_the_coercion(self):
         """The second divergence in the same six definitions: every one of them wraps the
         argument in `String()` before calling `.replace`. `app.js` did not, so `esc(0)`
-        threw a TypeError into whatever renderer called it — and eight call sites, on six
+        threw a TypeError into whatever renderer called it, and eight call sites, on six
         lines of the workspace and file-browser renderers, had already started writing
         `esc(String(p.path))` by hand to avoid it. No line numbers here on purpose: this
         file has already had to re-derive them twice after edits landed above them.
 
         Recorded honestly: no call site passes a non-string *statically*, so this was
-        latent, not live — the guard is against a value arriving from JSON as something
+        latent, not live; the guard is against a value arriving from JSON as something
         else, which is exactly what those eight hand-written coercions were defending."""
         missing = sorted(name for name, body in esc_definitions(static_sources()).items()
                          if not COERCION.search(body))
@@ -320,7 +320,7 @@ class EveryEscaperEscapesTheQuote(unittest.TestCase):
             self.assertIn(".replace(", body, f"{name}'s slice does not contain the body")
 
 
-@unittest.skipUnless(shutil.which("node"), "node not on PATH — esc() cannot be run")
+@unittest.skipUnless(shutil.which("node"), "node not on PATH; esc() cannot be run")
 class NonStringsDoNotThrow(unittest.TestCase):
     """Behavioural: what the real `esc()` returns for values it used to throw on."""
 
@@ -340,14 +340,14 @@ class NonStringsDoNotThrow(unittest.TestCase):
             self.assertEqual(want, self.out[inp]["res"], f"esc({inp})")
 
     def test_strings_are_unaffected_by_the_coercion(self):
-        """The coercion must not change what a string escaper does — otherwise this fix
+        """The coercion must not change what a string escaper does; otherwise this fix
         is a rendering regression wearing a security costume."""
         self.assertEqual('a&quot;b&lt;c&gt;&amp;d', self.out['a"b<c>&d']["res"])
 
 
 class TheGuardHasTeeth(unittest.TestCase):
     """The fix must be the thing that makes these pass. Put the old `esc()` back and
-    require the parser to see the injected attribute — which also proves the finding was
+    require the parser to see the injected attribute, which also proves the finding was
     real rather than theoretical."""
 
     OLD = ("function esc(t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;')"
@@ -361,7 +361,7 @@ class TheGuardHasTeeth(unittest.TestCase):
         out = run_esc([PAYLOAD], source=source)
         tag, attrs = attributes_of(out["rendered"][0])[0]
         self.assertIn("onmouseover", attrs,
-                      "the unescaped esc() did NOT inject an attribute — so the passing "
+                      "the unescaped esc() did NOT inject an attribute, so the passing "
                       "tests above are guarding nothing")
         self.assertEqual("x", attrs["data-path"], "the quote did not close the value")
 
@@ -369,7 +369,7 @@ class TheGuardHasTeeth(unittest.TestCase):
 
     def test_the_coercion_guard_is_caught(self):
         """Put `app.js` back to the pre-fix form and require the six-definition guard to
-        name it — the same teeth check the quote clause has, because both guards fail
+        name it; the same teeth check the quote clause has, because both guards fail
         vacuously if their slice is wrong."""
         sources = static_sources()
         line = esc_source(sources["markdown.js"])
@@ -381,7 +381,7 @@ class TheGuardHasTeeth(unittest.TestCase):
                          if not COERCION.search(body))
         self.assertEqual(["markdown.js"], missing,
                          "the coercion was removed and the six-definition guard did not "
-                         "notice — it is matching something other than the "
+                         "notice; it is matching something other than the "
                          "coercion, in whichever dialect the definition is written")
 
     def test_the_uncoerced_form_actually_threw(self):
@@ -392,7 +392,7 @@ class TheGuardHasTeeth(unittest.TestCase):
             self.skipTest("node not on PATH")
         line = esc_source()
         out = run_coercion(source=MD.replace(line, line.replace(self.UNCOERCED_MARK, "t")))
-        self.assertTrue(out["null"]["threw"], "the uncoerced esc() did not throw on null — "
+        self.assertTrue(out["null"]["threw"], "the uncoerced esc() did not throw on null, "
                                              "so `test_no_non_string_throws` guards nothing")
         self.assertEqual("TypeError", out["null"]["res"])
         self.assertTrue(out["0"]["threw"], "and it did not throw on a number either")

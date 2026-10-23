@@ -13,7 +13,7 @@ Three things keep it honest:
 * It proposes. It never writes memory, never edits a prompt, never applies itself.
   The output of this module is input to the same gates `analyzer.detect` uses,
   and a finding that cannot cite a turn that exists is dropped there.
-* It costs a call per session, on a timer, off the request path — never inside a
+* It costs a call per session, on a timer, off the request path, never inside a
   turn. If it raises, the sweep continues on heuristics alone.
 
 The prompt is in `ai.prompts.PROPOSAL_PASS` with its worked examples, because the

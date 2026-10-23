@@ -194,7 +194,7 @@ def _mark_cache(system: list[dict], messages: list[dict], tools: list[dict]) -> 
     Anthropic caches the prefix up to and including a marked block, in the order
     tools, system, messages, and allows four marks. Two are enough and two is the
     documented pattern for an agent loop: one on the system block, which caches the
-    tools and the standing prompt together — the part re-paid on every step
+    tools and the standing prompt together; the part re-paid on every step
     otherwise, and one on the last message, so each step extends the cached
     transcript instead of rewriting it.
     """
@@ -272,14 +272,14 @@ def usage_of(raw) -> dict:
     """Anthropic reports input at message_start and output at message_delta.
 
     ``input`` is normalized to Tacit's single basis: every prompt token that
-    occupied the window, whether or not the provider served it from cache — the
+    occupied the window, whether or not the provider served it from cache; the
     basis OpenAI's ``prompt_tokens`` already uses, since its ``cached_tokens`` is
     a subset of that number. Anthropic's own ``input_tokens`` counts only the
     *uncached* remainder and reports the cached part in two separate fields, so
     passing it through unchanged made a session with a warm cache look nearly
     empty. That is the whole context meter's failure: the prompt grows every
-    step, the number barely moves, and ``should_compact`` — which reads that
-    number — never fires. The cache figures are re-pricings of a subset of the
+    step, the number barely moves, and ``should_compact``, which reads that
+    number, never fires. The cache figures are re-pricings of a subset of the
     prompt, so they are folded into the count and never reported as extra tokens.
     """
     raw = raw or {}
@@ -377,7 +377,7 @@ def is_cache_rejection(status: int, text: str) -> bool:
 
     A gateway that does not implement passthrough rejects an unknown field, and the
     honest recovery is to retry once without it rather than to fail the turn. Anything
-    else — auth, rate limit, a malformed tool call — must surface as itself.
+    else (auth, rate limit, a malformed tool call) must surface as itself.
     """
     if status not in (400, 422):
         return False

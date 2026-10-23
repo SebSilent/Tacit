@@ -85,7 +85,7 @@ _SALVAGE_ONE = ("Out of steps, and {names} is not written. Write it now with wri
 # file: plan_b1.jsonl" with the sibling already on disk. The calls are independent and a single round
 # can carry all of them, so the wording has to ask for every file at once.
 _SALVAGE_MANY = ("Out of steps, and none of these are written: {names}. Write every one of them now, "
-                 "each with its own write_file call in this one round — they are independent, so one "
+                 "each with its own write_file call in this one round; they are independent, so one "
                  "round can produce all of them. An approximation you can defend scores; a plan you "
                  "never ran scores nothing. If a tool call fails, reply with each complete file in "
                  "its own fenced code block - they will be written for you.")
@@ -521,7 +521,7 @@ def overlap_refusal(hit: dict) -> str:
     """The refusal for a command that is nothing but a worse version of a tool.
 
     Shaped like `readonly_guard`: an ERROR the model reads as a dead end, plus the
-    call to make instead, plus the switch that turns this off — because a refusal
+    call to make instead, plus the switch that turns this off, because a refusal
     that cannot be overridden reads as a broken tool rather than a redirect.
     """
     h = hit["hits"][0]

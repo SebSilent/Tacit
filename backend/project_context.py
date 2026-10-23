@@ -33,7 +33,7 @@ NAMES = ("AGENTS.md", "CLAUDE.md", "TACIT.md", ".cursorrules",
 # project and a plan the prompt merely *listed* was a plan the agent might ignore.
 # That is inverted now. An approved plan lives under ~/.tacit/plans with the session
 # that approved it, and the standing prompt carries a pointer to that path
-# (``plan.pointer``) instead of a copy of the file — which reaches the agent every
+# (``plan.pointer``) instead of a copy of the file, which reaches the agent every
 # turn whether or not context injection is switched on, and cannot be summarised
 # away. The harness no longer writes into a project at all, so a project's PLAN.md
 # is whatever the person put there: a document to be found, not an instruction to be

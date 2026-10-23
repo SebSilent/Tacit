@@ -6,7 +6,7 @@ theme*. Two ways that quietly stop being true, both invisible in the theme you a
 looking at:
 
 * a literal copied from the default theme into a shared rule. It renders correctly
-  in midnight and freezes midnight's colour in the other seven themes — which is how
+  in midnight and freezes midnight's colour in the other seven themes, which is how
   `#fff` ended up as the text on top of `var(--accent)` in `contrast` (white on
   yellow) and `mono` (white on white).
 * a `var(--name)` nobody declared. `#snapNote.err` read `var(--danger, #e5534b)`;
@@ -14,7 +14,7 @@ looking at:
   was bypassed with the syntax of a token.
 
 Allowed to be literal: the bare `:root`, every `[data-theme]` block (that is what a
-theme *is*), and the twenty-two `.sw-<theme>` swatch rules — a swatch must show its own
+theme *is*), and the twenty-two `.sw-<theme>` swatch rules; a swatch must show its own
 palette no matter which theme is active, so `var()` there would be wrong.
 """
 
@@ -37,7 +37,7 @@ SWATCH = re.compile(r"^\s*\.sw-[\w-]+\s*\{")
 
 # Colours the bare :root is allowed to hold. They are theme-independent *by intent*,
 # and the list is pinned so a theme-dependent colour cannot sneak in without a test
-# change — bare :root holding lengths only was the documented invariant.
+# change; bare :root holding lengths only was the documented invariant.
 BARE_ROOT_COLORS = {"--on-accent", "--shade"}
 
 # Kept in step with test_style_themes.THEME_COUNT: a swatch is two stops, so the
@@ -121,7 +121,7 @@ class TestColorLiterals(unittest.TestCase):
         """The exception is pinned, not open-ended.
 
         A swatch previews a palette the reader is not currently wearing, so it cannot
-        use var(). That is the one legitimate reason — and it is exactly one rule per
+        use var(). That is the one legitimate reason, and it is exactly one rule per
         theme, two stops each, so the count moves with the theme count and with
         nothing else.
         """
@@ -166,7 +166,7 @@ class TestVarReferences(unittest.TestCase):
         inline = set(re.findall(r'(--[\w-]+)\s*:', JS))
         missing = sorted(used - self.declared() - js_set - inline)
         self.assertEqual(missing, [],
-                         "var() names with no declaration anywhere — a fallback in "
+                         "var() names with no declaration anywhere; a fallback in "
                          "var(--x, literal) hides this, and the literal then always "
                          f"wins: {missing}")
 

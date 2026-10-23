@@ -1,7 +1,7 @@
 """The session list is a preview; the transcript stays whole.
 
 PLAN item 8's first symptom was a boot stall: one `/api/sessions/registry`
-response carried every message of every session — a 300-message session arrived
+response carried every message of every session; a 300-message session arrived
 with ~200 KB of tool output the sidebar never draws, and the page could not paint
 a word until it landed. The fix has two halves, and the second is the dangerous
 one: making the list a preview is worthless (and actively data-losing) unless the
@@ -11,7 +11,7 @@ So these tests pin, in order:
 
   * `store.registry()` sends the TAIL and says how much it left out, and does not
     touch the session file;
-  * the per-session endpoint really serves the full record — `ensureFull()` in
+  * the per-session endpoint really serves the full record; `ensureFull()` in
     app.js fetches exactly that URL, and if it were wrong every session would
     silently stay a fragment;
   * the client is wired to upgrade at boot, on switching, and before an edit.
@@ -110,7 +110,7 @@ class ThePreviewTail(IsolatedStore):
 
     def test_the_tail_keeps_what_the_renderer_needs(self):
         # A preview still has to draw bubbles, timestamps, tool cards and reasoning
-        # — it is short, not impoverished. The index fields the drawer row is built
+        #; it is short, not impoverished. The index fields the drawer row is built
         # from (backend/store.py:59) ride along untouched via `{**r}`.
         rec = self._session("rich", 30, mode="agent")
         row = next(r for r in store.registry()["sessions"] if r["id"] == "rich")
@@ -182,7 +182,7 @@ class TheFullRecordIsStillReachable(IsolatedStore):
 
     def test_a_missing_session_cannot_pass_for_an_empty_one(self):
         # `_fail` answers with HTTP 200 and no `id`. ensureFull's guard is
-        # `rec.id === s.id`, so this body cannot be adopted — which matters because
+        # `rec.id === s.id`, so this body cannot be adopted, which matters because
         # the adoption path ends in `delete s.trimmed`, and a session that lost its
         # id would otherwise be marked whole with nothing in it.
         r = self.client.get("/api/sessions/no-such-session-id")
@@ -220,7 +220,7 @@ class GzipOnTheWire(IsolatedStore):
     # Deliberately no "small responses are not compressed" test. That behaviour is
     # GZipMiddleware's own (main.py registers it with minimum_size=1024, commented
     # there); pinning it here meant asserting against Starlette's internals, and the
-    # attempt failed twice for a reason the test itself could not state — httpx
+    # attempt failed twice for a reason the test itself could not state; httpx
     # reports r.content decoded, so a length guard written against the raw body was
     # comparing a different quantity than the middleware uses.
 
@@ -232,7 +232,7 @@ class GzipOnTheWire(IsolatedStore):
 
 
 class TheClientUpgradesBeforeItActs(unittest.TestCase):
-    """Source pins on static/app.js — the repo's convention for untestable JS.
+    """Source pins on static/app.js; the repo's convention for untestable JS.
 
     Each of these is a place where acting on a preview tail would be wrong, not
     merely ugly: the edit path rewrites the stored transcript from the bubbles on

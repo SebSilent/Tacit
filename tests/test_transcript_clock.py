@@ -2,7 +2,7 @@
 
 PLAN item 5's "Done when": *a message with no `ts` shows nothing; the times line up as a
 column; a test asserts `ts` is present in `registry()` output and absent from the
-provider payload* — and, in both modes, a correct local time **without hovering**.
+provider payload*, and, in both modes, a correct local time **without hovering**.
 
 Both halves matter and they pull in opposite directions. The browser cannot draw a time
 it never receives, so `ts` has to survive `store.registry()`'s projection. A provider

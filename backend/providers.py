@@ -83,7 +83,7 @@ _BUILTIN = [
        summary="Docker or Podman. The only backend that enforces real isolation on "
                "Windows: a network namespace, a read-only project bind, memory and "
                "CPU ceilings, a PID limit, a private /tmp and no privilege "
-               "escalation — all applied by the runtime, not approximated. The "
+               "escalation; all applied by the runtime, not approximated. The "
                "project is bind-mounted, so the change report and snapshots "
                "describe your real files. Nothing is downloaded for you.",
        network=False, disk="write", trust="verified", permissions=["subprocess"],

@@ -1,6 +1,6 @@
 """Item 4: one launch path, and a stop step that can only touch what it can prove.
 
-The bug these tests exist for was not that restarting failed — it was that the
+The bug these tests exist for was not that restarting failed; it was that the
 Restart button and a person at a console used two different mechanisms, so the
 path you could read was not the path that ran, and the stop step that came with
 the readable path (`restart.ps1`) selected processes by executable name and then
@@ -8,8 +8,8 @@ narrowed that list with a substring test against the command line. Every Python
 on the machine was a candidate.
 
 The replacement rule: a process is touchable only when its *current* command line
-carries one of Tacit's own argv markers — the same proof `proctools.sweep()`
-already uses — and a launcher that cannot free the port says so with a nonzero
+carries one of Tacit's own argv markers (the same proof `proctools.sweep()`
+already uses), and a launcher that cannot free the port says so with a nonzero
 exit instead of starting a second server that loses the bind race and vanishes.
 
 Two shapes of test here. Behavioural ones drive the real functions against a fake
@@ -84,7 +84,7 @@ class Home(unittest.TestCase):
         """The OS process list, as far as the launcher can know it.
 
         `_pid_alive` and `_pid_cmdline` are the module's only two senses, so
-        replacing them replaces every fact it can act on — including the one that
+        replacing them replaces every fact it can act on; including the one that
         matters most: a registered pid that has been reused and now reports a
         command line belonging to somebody else's program.
         """
@@ -181,7 +181,7 @@ class TestFindRunning(Home):
 
     def test_an_unreadable_command_line_is_not_found(self):
         # Alive, registered, unknowable. "Could not read" must never become
-        # "assume it is ours" — that assumption is a tree kill on a stranger.
+        # "assume it is ours", that assumption is a tree kill on a stranger.
         pid = 4007
         self.process_table(alive=[pid], cmdlines={})
         self.register(proctools.ROLE_SERVER, pid)
@@ -341,7 +341,7 @@ class TestStartCommand(Home):
     def test_both_paths_end_up_with_exactly_one_marker(self):
         # The script puts the token on its own start line; the fallback puts it in
         # the argv it hands the watcher. Either way the running server carries it
-        # once — once is what the stop step looks for, and twice is what the
+        # once; once is what the stop step looks for, and twice is what the
         # watcher used to produce.
         self.platform("Windows")
         self.touch("run.bat")
@@ -419,8 +419,8 @@ class TestWatcherRunsTheChosenPath(Home):
 
     def test_a_launcher_spawn_runs_the_handshake_command_untouched(self):
         # `proctools._marked_argv` inserts the token after `-m backend.main`.
-        # There is no such slot in `cmd.exe /c run.bat` — an injected argument
-        # becomes a batch parameter — so the launcher path spawns exactly the
+        # There is no such slot in `cmd.exe /c run.bat` (an injected argument
+        # becomes a batch parameter), so the launcher path spawns exactly the
         # argv it was given.
         script = self.touch("run.bat")
         self.platform("Windows")
@@ -454,7 +454,7 @@ class TestWatcherRunsTheChosenPath(Home):
 
     def test_an_unmarked_command_still_gets_the_marker(self):
         # The stop step can only protect what it can see, so `mark=False` is for
-        # commands that already carry the token — not a blanket. A handshake
+        # commands that already carry the token, not a blanket. A handshake
         # without one gets it added rather than starting an invisible server.
         self.platform("Windows")
         cmd = [sys.executable, "-m", "backend.main"]
@@ -503,7 +503,7 @@ class TestLaunchScripts(unittest.TestCase):
 
         This is the check that was missing. Every launcher said `-m backend.launch`
         while the module is `backend.launcher`, and `assertIn("backend.launch", text)`
-        could not see it because the wrong name is a prefix of the right one — so
+        could not see it because the wrong name is a prefix of the right one, so
         `run.sh` refused to start Tacit at all (its preflight exits nonzero, and the
         script treats that as "a server still holds the port") with this file green.
         Parse the invocation instead of grepping for a word, then prove the module
@@ -572,7 +572,7 @@ class TestRestartState(Home):
     surface in Settings > Server status, not only in a log file nobody opens. The
     difficulty is *who* reports it. The detached watcher is the only process that
     learns the truth, and when it learns it there is often no server left to
-    report through — so the fact is written to `~/.tacit/restart_state.json` and
+    report through, so the fact is written to `~/.tacit/restart_state.json` and
     handed to whichever server comes back next, including one a person started by
     hand after the failure.
 
@@ -632,7 +632,7 @@ class TestRestartState(Home):
         self.assertEqual(got["port"], 8756)
         self.assertEqual(got["watcher"], os.getpid())
         # Written through a temp file and renamed, so a reader never sees half a
-        # restart — and the temp file must not be left beside it.
+        # restart, and the temp file must not be left beside it.
         self.assertFalse((config.HOME / (extras.RESTART_STATE_FILE + ".tmp")).exists())
 
     def test_nothing_recorded_reads_as_nothing(self):
@@ -658,7 +658,7 @@ class TestRestartState(Home):
         self.assertEqual(self.state(), {})
 
     def test_an_old_outcome_stops_being_news(self):
-        # A failure is reported for minutes, not for ever — after that it belongs
+        # A failure is reported for minutes, not for ever; after that it belongs
         # in the audit log, not in the panel someone opens to check a port.
         extras.record_restart_state("failed", stage="bind")
         self.aged(extras.RESTART_STATE_TTL + 60)
@@ -709,7 +709,7 @@ class TestRestartState(Home):
         self.assertEqual(got["via"], "interpreter")
 
     def test_a_server_that_binds_then_crashes_is_not_reported_as_ok(self):
-        # It got as far as listening, so the bind branch said `ok` — and then died.
+        # It got as far as listening, so the bind branch said `ok`, and then died.
         # Reporting ok after that would be a lie by the time anyone reads it.
         crasher = lambda *a, **k: types.SimpleNamespace(
             pid=9002, wait=lambda: 1, returncode=1)
@@ -738,7 +738,7 @@ class TestRestartState(Home):
         self.assertIn("no such interpreter", got["detail"])
 
     def test_a_port_that_never_frees_is_recorded(self):
-        # Nothing was started, so there is no pid and no console — the only trace
+        # Nothing was started, so there is no pid and no console; the only trace
         # that this restart happened at all would be a log line.
         self.watch(hold=True)
         got = self.state()

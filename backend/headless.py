@@ -283,7 +283,7 @@ def _utf8_streams():
     ``UnicodeEncodeError`` *after* the JSON row was already written correctly: the cell
     succeeded and still exited 1, which an adapter faithfully reports as an incomplete
     harness. That is a silent, platform-shaped scoring bug, so the stream is fixed rather
-    than the print being skipped — the transcript belongs on the console too.
+    than the print being skipped; the transcript belongs on the console too.
     """
     for stream in (sys.stdout, sys.stderr):
         try:

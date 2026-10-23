@@ -141,7 +141,7 @@ async def no_cache_api(request, call_next):
 # Added after the @app.middleware("http") decorator above, which puts it on the
 # OUTERMOST layer: it compresses whatever the inner stack produces, including the
 # `Cache-Control` that middleware sets. min_size 1024 so a 200-byte ack is not
-# spent CPU on. Nothing here is a streaming HTTP response — the live transcript
+# spent CPU on. Nothing here is a streaming HTTP response; the live transcript
 # travels over the WebSocket, which this middleware passes through untouched
 # (it only wraps `scope["type"] == "http"`), so gzip cannot stall a token stream.
 app.add_middleware(GZipMiddleware, minimum_size=1024)

@@ -1,7 +1,7 @@
 """One card per turn, live. Pinned in source, because the browser is not.
 
 The symptom was: chat to the agent and the answer continues in the *previous*
-card. It only looked right after a reload, which is the tell — `renderTranscript()`
+card. It only looked right after a reload, which is the tell; `renderTranscript()`
 draws the stored rows and the stored rows are correct, so the transcript was
 never wrong; the live view was.
 
@@ -16,14 +16,14 @@ the new turn landed there. `case 'user_message'` then called
 The fix is a second record, `openCard`: the card the turn in flight owns, set by
 `send()` and by `renderTranscript()` for a session that is mid-turn, released by
 `endStream()`, and re-armed only through `heldCard()`. `streaming` alone cannot
-carry this — `endStreamQuiet()` clears it on any idle report, on a session switch,
+carry this; `endStreamQuiet()` clears it on any idle report, on a session switch,
 and on a reconnect, none of which end a turn.
 
 These assertions are on source text, in the style of `test_transcript_structure.py`
 and `test_md_escapes.py`: the repo's suite stays offline and installs nothing, so a
 headless browser is not available here. What is pinned is the structure that makes
-the behaviour what it is. The visual result — one card per answer, no stray empty
-bubble — is still a browser call, recorded at the bottom of
+the behaviour what it is. The visual result (one card per answer, no stray empty
+bubble) is still a browser call, recorded at the bottom of
 `docs/interface.md`'s sibling work and repeated in the report.
 """
 import re
@@ -78,7 +78,7 @@ class OneCardPerTurn(unittest.TestCase):
                       "resumeLiveStream() no longer asks which card this view holds")
         self.assertNotIn("rendered[rendered.length - 1].querySelector", b,
                          "resumeLiveStream() is adopting 'the last assistant bubble on "
-                         "screen' again — that is the previous turn's card")
+                         "screen' again, that is the previous turn's card")
 
     def test_held_card_checks_all_three_conditions(self):
         """Session, position, and still in the document. Drop any one and a stale

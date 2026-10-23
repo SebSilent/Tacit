@@ -760,7 +760,7 @@ async def get_thinking(ref: str = "", ensure: int = 0):
         import threading as _threading
 
         # The picker polls every few seconds while a probe runs, and each poll
-        # would start another probe here — several threads of paid requests against
+        # would start another probe here; several threads of paid requests against
         # the same endpoint, all racing to cache the same answer. One at a time per
         # model; the pollers keep asking and pick the result up when it lands.
         detected = True

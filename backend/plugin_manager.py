@@ -326,7 +326,7 @@ def token_impact() -> dict:
 
     Measured from the schemas a plugin actually contributes, not from the budget it
     declares. Both bundled plugins declare zero, so the panel reported a false zero
-    for an enabled plugin that was really adding 132 or 419 tokens — and the whole
+    for an enabled plugin that was really adding 132 or 419 tokens, and the whole
     point of showing the number is that you see it before you switch it on.
     Disabled plugins are priced too, since that is the figure you need in order to
     decide.

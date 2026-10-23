@@ -163,7 +163,7 @@ def system_prompt(project: str | None = None, readonly: bool = False,
     elif session and not chat:
         # No usable project, but a session that has its own scratch folder: name it,
         # because "I wrote notes.md" means something different there than in a project.
-        # `create=False` — describing the root must not leave a folder on disk, and
+        # `create=False`; describing the root must not leave a folder on disk, and
         # callers with no session id (the prompt-size estimates) get no block at all.
         parts.append(WORKSPACE.format(root=config.workspace_dir(session, create=False)))
     elif project:

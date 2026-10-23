@@ -1,7 +1,7 @@
 """`prefers-reduced-motion` must switch everything off, in one place.
 
 the deleted plan item 5: "Respect `prefers-reduced-motion`: every animation has an off state."
-The way that fails is the per-selector `@media` block — someone adds a pulse,
+The way that fails is the per-selector `@media` block; someone adds a pulse,
 forgets the off switch, and nothing notices. `static/style.css` had exactly that
 bug: the session dot's pulse was covered and `tokPulse`, `dgPulse` and every
 width/opacity/transform transition were not.
@@ -13,7 +13,7 @@ So the file carries ONE blanket rule, and these tests keep it that way:
   come back alongside it);
 * it sits after every animated declaration, so the cascade reads in one direction;
 * every `animation` name resolves to a `@keyframes` that exists, and every
-  `@keyframes` is used — a typo'd name animates nothing and looks like a working
+  `@keyframes` is used; a typo'd name animates nothing and looks like a working
   pulse that simply never pulses;
 * no transition runs longer than 600ms (a tripwire against slow-motion chrome).
 """
@@ -45,7 +45,7 @@ MAX_TRANSITION = 0.6  # seconds
 
 
 def stripped(css=CSS):
-    """The stylesheet with comments removed — comments quote the very strings
+    """The stylesheet with comments removed; comments quote the very strings
     these tests count, so leaving them in would make every count wrong."""
     return COMMENT.sub("", css)
 
@@ -101,7 +101,7 @@ def durations(css):
     Resolves `var(--dur-N)` against the bare `:root` rather than skipping it. The
     motion grammar moved onto a duration token ladder, and a guard that only reads
     literal `150ms` would have measured nothing at all after that move while still
-    reporting success — the quiet failure this suite names elsewhere. An unresolvable
+    reporting success; the quiet failure this suite names elsewhere. An unresolvable
     token is raised as a duration far over the ceiling so the caller names it.
     """
     toks = duration_tokens(css)
@@ -144,7 +144,7 @@ class TestReducedMotion(unittest.TestCase):
         the animations somebody remembered.
         """
         self.assertEqual(self.css.count("prefers-reduced-motion"), 1,
-                         "more than one prefers-reduced-motion block — collapse "
+                         "more than one prefers-reduced-motion block; collapse "
                          "them into the blanket at the end of the file")
 
     def test_the_blanket_is_top_level_and_last(self):
@@ -160,7 +160,7 @@ class TestReducedMotion(unittest.TestCase):
     def test_every_animation_names_a_keyframes_that_exists(self):
         declared = set(n.lower() for n in KEYFRAMES.findall(self.css))
         used = animation_names(self.css)
-        self.assertTrue(used, "no animations parsed — this test is reading nothing")
+        self.assertTrue(used, "no animations parsed, this test is reading nothing")
         ghost = sorted(set(used) - declared)
         self.assertEqual(ghost, [], f"animated but not defined: {ghost}")
 
@@ -175,7 +175,7 @@ class TestReducedMotion(unittest.TestCase):
         self.assertEqual(long, [], f"transitions over {MAX_TRANSITION}s: {long}")
 
     def test_the_guards_can_fail(self):
-        """Mutated COPY only — the shipped file must stay as the tests found it."""
+        """Mutated COPY only; the shipped file must stay as the tests found it."""
         # the per-selector form creeping back next to the blanket
         two = self.css + "\n@media (prefers-reduced-motion: reduce) {\n  .x { animation: none; }\n}\n"
         self.assertEqual(two.count("prefers-reduced-motion"), 2,

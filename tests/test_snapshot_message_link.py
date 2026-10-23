@@ -108,7 +108,7 @@ class TestRewindDropsStaleLinks(Isolated):
 
     PLAN item 4's "Done when" asks what happens when the message a snapshot points
     at is deleted afterwards. `truncate_from` deletes stored rows (edit-and-resend),
-    so every marker at or past the cut counts rows that are gone — and the
+    so every marker at or past the cut counts rows that are gone, and the
     transcript then grows back, landing that index on a *different* message. The
     control would open compare against a snapshot from a discarded branch and look
     entirely credible. Dropping the marker keeps the undo point and removes only
@@ -176,7 +176,7 @@ class TestRewindDropsStaleLinks(Isolated):
 
     def test_the_truncate_handler_drops_before_acking(self):
         # Source-level: this suite has no websocket harness for this branch. The
-        # ordering is the substance — app.js redraws and re-fetches /api/snapshots
+        # ordering is the substance; app.js redraws and re-fetches /api/snapshots
         # when it sees `truncated`, so dropping after the send races the redraw.
         call = CHAT.index('extras.drop_message_links(rec["id"], cut)')
         ack = CHAT.index('"type": "truncated"')

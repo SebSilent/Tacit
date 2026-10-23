@@ -120,7 +120,7 @@ class TestEditAndContinue(unittest.TestCase):
     # /api/sessions/registry now ships each session as a PREVIEW TAIL (the
     # `REGISTRY_PREVIEW` bound in backend/store.py), and the rewind handler above
     # adopts whatever the browser sends. A tail left in an old tab would therefore
-    # replace 300 stored rows with their last 24 — and `userTurnIndex` is counted
+    # replace 300 stored rows with their last 24, and `userTurnIndex` is counted
     # from that same fragment, so the cut would land on a turn nobody named and
     # the request would look like it succeeded. Adoption is conditional, and the
     # condition is a pure function: testable without a socket.
@@ -159,7 +159,7 @@ class TestForkAdoption(unittest.TestCase):
     A fork copies the transcript server-side, where a turn is one assistant row
     per step with its tool calls attached and often no text at all. The client
     used to rebuild each row as {role, content}, which stripped tools and reason
-    and rendered every one of those steps as an empty "Tacit" bubble — a fork of
+    and rendered every one of those steps as an empty "Tacit" bubble; a fork of
     a tool-heavy turn looked like the model had sent dozens of blank messages.
     """
 
@@ -395,7 +395,7 @@ class TestWorkspaceDiscovery(unittest.TestCase):
         orig_env = os.environ.pop("TACIT_PROJECTS_ROOTS", None)
         config.prefs = lambda: {}
         try:
-            # no ~/Projects, ~/Dev, ~/Code guessing any more — just the home dir
+            # no ~/Projects, ~/Dev, ~/Code guessing any more; just the home dir
             self.assertEqual(config.project_roots(), [str(config.USER_HOME)])
         finally:
             config.prefs = orig_prefs

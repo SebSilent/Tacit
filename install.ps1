@@ -5,8 +5,8 @@
 # Clones the source, builds a private virtualenv, and writes a `tacit` launcher.
 # Safe to re-run: it updates the checkout instead of replacing it.
 #
-# NOTE: this script never calls `exit` — piped into iex, that would close your
-# shell. Failures throw instead.
+# NOTE: this script never calls `exit` (piped into iex, that would close your
+# shell). Failures throw instead.
 
 $ErrorActionPreference = 'Stop'
 
@@ -61,7 +61,7 @@ if (-not $IsWindows -and $PSVersionTable.PSVersion.Major -ge 6) {
 # ── Python ────────────────────────────────────────────────────────────────
 # The interpreter must be a real base Python, not another project's virtualenv.
 # `python` on PATH is whichever venv was activated last, and a venv created by it
-# records that interpreter in pyvenv.cfg and inherits its layout — so Tacit ends
+# records that interpreter in pyvenv.cfg and inherits its layout, so Tacit ends
 # up entangled with a tool the user did not choose and may later uninstall. The
 # probe rejects any candidate whose prefix differs from its base_prefix.
 $Python = $null

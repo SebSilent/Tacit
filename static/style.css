@@ -2292,8 +2292,8 @@ body.compacting #sendBtn { opacity: .55; cursor: progress; }
   flex: 1;
   min-width: 120px;
 }
-/* .ps-ok / .ps-warn used to live here. The approval wrote two files — the plan
-   record and the project's PLAN.md — and either could fail alone, so the strip
+/* .ps-ok / .ps-warn used to live here. The approval wrote two files (the plan
+   record and the project's PLAN.md), and either could fail alone, so the strip
    needed a colour per copy and a refused PLAN.md had not to read like a success.
    One file is written now and it either exists or the approval threw, so the
    markup that needed them is gone and the rules went with it. */

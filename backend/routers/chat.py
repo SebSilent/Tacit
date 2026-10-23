@@ -93,7 +93,7 @@ def _meta(rec: dict) -> dict:
         # every hello and every get_state. Reading the disk here re-reads a record
         # the caller is already holding, and for a caller that synthesized one
         # (tests, and any future internal use) it reaches whatever store the
-        # process currently points at — which is how a contract test that never
+        # process currently points at, which is how a contract test that never
         # redirects the store ended up opening a real session file.
         "plan": plan_runtime.snapshot(rec["id"], rec),
         "usage": _usage_snapshot(rec),
@@ -128,7 +128,7 @@ def _adoptable(prior: list, incoming: list) -> bool:
     the first persist, gets rescued. But /api/sessions/registry now ships each
     session as a PREVIEW TAIL (see `REGISTRY_PREVIEW` in backend/store.py), and a
     tail is the END of a conversation. Adopting one would replace 300 stored rows
-    with their last 24 — and the rewind index below is counted from the same
+    with their last 24, and the rewind index below is counted from the same
     fragment, so "edit this old turn" would then cut an unrelated message and
     delete real history while looking like it worked.
 
@@ -272,7 +272,7 @@ async def ws_session(ws: WebSocket, sid: str):
         """One channel's live events to this socket, for the life of the socket.
 
         The stream does not end when a turn does, the next turn's events
-        arrive on the same queue — so the only exits are the socket dying or
+        arrive on the same queue, so the only exits are the socket dying or
         the handler closing. Either way this viewer's subscription is dropped;
         the stream itself is untouched.
         """
@@ -296,7 +296,7 @@ async def ws_session(ws: WebSocket, sid: str):
 
         The transcript and the title stay here because this socket owns the
         conversation those belong to: a plan request is a user message first and
-        a plan second. Everything after that — the thread, the events, whether a
+        a plan second. Everything after that; the thread, the events, whether a
         second plan may start, is the session's business, so it goes to
         ``plan_runtime``, which returns as soon as the run exists rather than
         driving it to the end. This handler does not await a plan.
@@ -531,7 +531,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 incoming = msg.get("messages")
                 if isinstance(incoming, list) and incoming:
                     if not _adoptable(rec.get("messages") or [], incoming):
-                        # A fragment that does not start this conversation — a
+                        # A fragment that does not start this conversation; a
                         # preview tail left in an old tab. Its `userTurnIndex` was
                         # counted from the same fragment, so the cut below would
                         # rewind to the wrong turn and delete rows the user never
@@ -610,7 +610,7 @@ async def ws_session(ws: WebSocket, sid: str):
             elif kind == "plan_approve":
                 # Approving is where a plan stops being conversation and becomes
                 # a file: the approved text is saved under ~/.tacit/plans, which
-                # is now the only copy — the project is never written into. What
+                # is now the only copy; the project is never written into. What
                 # reaches the implementing agent is a pointer to that path in its
                 # standing prefix, so the plan survives compaction without being
                 # pasted back into context. The result is forwarded unchanged so

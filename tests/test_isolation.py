@@ -3,7 +3,7 @@
 Two things are being pinned down here.
 
 The container backend existed in the README's isolation table and in the capability
-registry as ``implemented=False`` — an option the interface offered and then refused.
+registry as ``implemented=False``; an option the interface offered and then refused.
 These tests hold the real adapter to what the table claimed: network off, read-only
 bind, resource ceilings, a PID limit, no privilege escalation, and nothing downloaded
 on the user's behalf.
@@ -277,7 +277,7 @@ class TestRegistryHonesty(StubbedSandbox):
         # Must hold even on a machine that really does have Docker installed: the
         # registry asks the executor and nothing else. A ``shutil.which`` fallback
         # here once reported the backend available when the executor's own probe
-        # had said no — an offered backend that then refuses at runtime.
+        # had said no; an offered backend that then refuses at runtime.
         orig = sandbox._container_runtime
         sandbox._container_runtime = lambda: ""
         self.addCleanup(setattr, sandbox, "_container_runtime", orig)
@@ -340,7 +340,7 @@ class TestTimeoutIsReal(unittest.TestCase):
         elapsed = time.time() - started
         self.assertTrue(timed_out)
         self.assertEqual(code, 124)
-        # Timeout plus the bounded grace read, with margin — not the child's own
+        # Timeout plus the bounded grace read, with margin, not the child's own
         # lifetime, which is what it used to wait for.
         self.assertLess(elapsed, 2 + sandbox.GRACE_SECONDS + 5,
                         f"took {elapsed:.1f}s, the timeout was not enforced promptly")

@@ -1,4 +1,4 @@
-/* Tacit Web — the chat client, spoken to over a WebSocket */
+/* Tacit Web; the chat client, spoken to over a WebSocket */
 (() => {
 'use strict';
 
@@ -38,14 +38,14 @@ let activeId = localStorage.getItem('tacit.active') || null;
 // attached to one session and stays attached: switching sessions opens a
 // different socket, and a busy session keeps streaming into its own socket
 // while you sit in another one. `ws` below is always the ACTIVE session's
-// socket — every send path reads it, so the rest of this file keeps working.
+// socket; every send path reads it, so the rest of this file keeps working.
 let ws = null;
 let sockets = new Map();   // sid -> WebSocket, one per session
 let streaming = null;   // {msg, el} current assistant message being streamed
 // Which card the turn in flight owns: {sid, msg, el} where `el` is the `.msg`
 // wrap. `streaming` is the live writer and it is cleared by a session switch,
 // by a reconnect, and by any idle report the server makes, so it cannot answer
-// "which bubble is this turn's" once it is null — and the answer was being taken
+// "which bubble is this turn's" once it is null, and the answer was being taken
 // from "the last assistant bubble on screen", which at the moment the server
 // marks a session busy is the bubble the PREVIOUS turn finished in. That is the
 // whole card-flow corruption: the new turn's deltas were written into the old
@@ -146,7 +146,7 @@ function applyTheme(id) {
   localStorage.setItem('tacit.theme', id);
 }
 // Hover-preview: the Appearance panel can show a theme before you choose it.
-// Deliberately NOT `applyTheme` — a browse through eight palettes is not a
+// Deliberately NOT `applyTheme`; a browse through eight palettes is not a
 // decision, and `localStorage` is the decision. `theme` stays the committed one,
 // so `current()` keeps answering "which theme do I actually have" while a preview
 // is on screen (the panel's "Active" label must not follow the cursor), and
@@ -167,7 +167,7 @@ window.TacitTheme = {
 // here. newSession() -> renderTokMeter() touches `const tokMeter`, declared
 // further down (~line 1164), so calling it at this point threw a TDZ
 // ReferenceError that aborted the ENTIRE module: no event listeners, no
-// boot(), no WebSocket — the UI sat on the static "connecting..." forever.
+// boot(), no WebSocket; the UI sat on the static "connecting..." forever.
 // It only ever fired on a browser with no stored sessions.
 // It now runs just before boot() below, once every const is initialised.
 
@@ -180,7 +180,7 @@ function persist(opts) {
     }))));
     localStorage.setItem('tacit.active', activeId);
   } catch (e) {
-    // quota exceeded — the server registry sync below still carries the data
+    // quota exceeded; the server registry sync below still carries the data
   }
   if (!localOnly) scheduleServerSync();
 }
@@ -272,13 +272,13 @@ async function loadServerRegistry() {
         if (ls.messages && ls.messages.length) { byId.set(ls.id, ls); changed = true; }
       } else if ((ls.messages || []).length > (ss.messageCount ?? (ss.messages || []).length)) {
         // local holds a longer transcript (offline edits, or the server was
-        // restarted before the first persist) — keep the richer copy.
+        // restarted before the first persist); keep the richer copy.
         // The comparison counts the server's HISTORY, not its rows: a registry
         // row is a preview tail, so a 300-message session arrives with 24 rows
         // and `messageCount: 300`. Comparing raw lengths made every trimmed row
         // look poorer than a local copy and pushed a truncated transcript over the
         // full one. When the server row is the richer one we simply leave it in
-        // `byId` — and ensureFull() pulls the rest when the session opens.
+        // `byId`, and ensureFull() pulls the rest when the session opens.
         byId.set(ls.id, ls);
         changed = true;
       }
@@ -317,7 +317,7 @@ async function syncSessionMetadata(s) {
 }
 
 // The registry sends a preview tail per session (backend/store.py
-// REGISTRY_PREVIEW): boot used to download every transcript in the home — 1.2 MB
+// REGISTRY_PREVIEW): boot used to download every transcript in the home; 1.2 MB
 // measured, and it grows with the *longest* conversation rather than the number
 // of them. Drawing the drawer only needs the tail. Opening a session needs the
 // whole thing, so the tail is upgraded here, on the one path that has to have it:
@@ -358,7 +358,7 @@ async function initSessions() {
   }
   renderSessionList();
   // The socket is already open by now (boot connects before this runs), so the
-  // transcript upgrade cannot delay it — this await only delays the first paint
+  // transcript upgrade cannot delay it, this await only delays the first paint
   // of history, which would otherwise paint 24 rows and then jump.
   await ensureFull(cur());
   renderTranscript(cur());
@@ -366,7 +366,7 @@ async function initSessions() {
   renderTokMeter();
   // The assistant panel learns which session is active only here. Without
   // this call its sid stays empty at boot and the panel shows nothing until
-  // the user switches away and back — which is the only other place
+  // the user switches away and back, which is the only other place
   // attachCurrent runs.
   attachCurrent();
 }
@@ -557,7 +557,7 @@ function connectSession(s) {
       // The state verifier, ask side: a socket that stayed open while you
       // were in another session never re-sends hello, so the only way to
       // learn whether a turn is running here is to ask. The server answers
-      // from the session registry — the same truth the indicator dots read.
+      // from the session registry; the same truth the indicator dots read.
       try { existing.send(JSON.stringify({ type: 'get_state' })); } catch (e) {}
     }
     return;                                        // transport already live
@@ -566,7 +566,7 @@ function connectSession(s) {
   if (s.id === activeId) {
     // The previous session's socket is NOT closed here: it stays in the map
     // and keeps streaming if a turn is running there. Idle sockets are
-    // closed by the reaper. Only `ws` — the pointer the send paths read —
+    // closed by the reaper. Only `ws`, the pointer the send paths read
     // moves to the new session's socket below.
     setConn('connecting…');
   }
@@ -650,8 +650,8 @@ function attachCurrent() {
 // background stream events for a non-active session, arriving on that
 // session's own socket: keep its transcript alive without touching the
 // active session's view. The socket is a subscriber of the session's stream
-// for as long as it is open, so a turn started anywhere — this tab, another
-// tab, another device — streams here too.
+// for as long as it is open, so a turn started anywhere (this tab, another
+// tab, another device) streams here too.
 function handleBackground(m, s) {
   if (m.type === 'state_delta') {
     // The busy mark is the server's truth about this session; keeping it
@@ -834,7 +834,7 @@ function handle(m) {
       // The state verifier, client side: a busy delta is the session's live
       // state, not a suggestion. It re-arms the composer when a turn is
       // running (switch-back, reconnect), and an explicit not-busy delta
-      // clears it — this is the "off" that used to be invisible.
+      // clears it, this is the "off" that used to be invisible.
       if (m.busy != null) {
         if (m.busy) {
           if (!streaming) resumeLiveStream();
@@ -856,7 +856,7 @@ function handle(m) {
     case 'respawned':
       break;
     case 'truncated': {
-      // server rewound the transcript — mirror it locally and continue from
+      // server rewound the transcript; mirror it locally and continue from
       // the edited message
       const pe = pendingEdit;
       clearTimeout(editAckTimer);
@@ -886,7 +886,7 @@ function handle(m) {
       // Stage 3.6: a hello that landed mid-turn carried the turn's events so
       // far. The model's last assistant message may already hold text that
       // handleBackground accumulated from the other socket, so the bubble is
-      // rebuilt from the replay itself — the replay is authoritative, and the
+      // rebuilt from the replay itself; the replay is authoritative, and the
       // result is idempotent no matter what the background path had added.
       {
         const s = cur();
@@ -937,8 +937,8 @@ function handle(m) {
         if (m.allowed_tools != null) s.allowed_tools = m.allowed_tools;
         if (m.excluded_tools != null) s.excluded_tools = m.excluded_tools;
         if (m.permission_mode != null) s.permission_mode = m.permission_mode;
-        // The state verifier, viewer side: a turn started anywhere — this
-        // tab, another tab, another device — arms this view's streaming, and
+        // The state verifier, viewer side: a turn started anywhere (this
+        // tab, another tab, another device) arms this view's streaming, and
         // its end quiets it. The stream was always the session's; the view
         // just follows it now.
         if (m.busy != null) {
@@ -950,7 +950,7 @@ function handle(m) {
     case 'user_message': {
       // A row the server appended to the transcript. This window draws the
       // person's own prompt the instant they press Enter, so that one is
-      // matched against the local echo and dropped rather than drawn twice —
+      // matched against the local echo and dropped rather than drawn twice,
       // and every other origin (the Send button, the autonomous loop) gets a
       // real row here, which is what stops the turn's deltas being absorbed by
       // the previous assistant bubble.
@@ -963,7 +963,7 @@ function handle(m) {
       // this window's clock, so a prompt typed in another tab shows when it was
       // actually sent.
       // A user row always starts a new agent card. Whatever was open belongs to
-      // the turn this prompt follows — the server marks the session busy before
+      // the turn this prompt follows; the server marks the session busy before
       // the prompt reaches the transcript, so a view that armed itself on that
       // signal is holding the previous turn's card, not this one's.
       rebaseOnUserRow(s, streaming);
@@ -994,8 +994,8 @@ function handle(m) {
       // a tasks call can add items, so the strip is scheduled on the start
       // as well as refreshed on the end
       if (m.name === 'tasks') scheduleTaskStrip();
-      // A delegation launch is invisible in the transcript — the sub-agent's
-      // calls never reach it — so the panel that shows the work in flight
+      // A delegation launch is invisible in the transcript (the sub-agent's
+      // calls never reach it), so the panel that shows the work in flight
       // opens itself here, before the first delegation_activity arrives.
       if (window.TacitDelegation && window.TacitDelegation.maybeLaunch) {
         window.TacitDelegation.maybeLaunch(m.name);
@@ -1005,7 +1005,7 @@ function handle(m) {
       // Live tail of a command that is still running. Deliberately NOT pushed
       // into streaming.msg.tools: that array is the transcript's tool list, and
       // a progress chunk is not a result the model ever saw. Nothing here is
-      // saved — reload the session and the card shows the finished result.
+      // saved; reload the session and the card shows the finished result.
       progressToolCard(m);
       break;
     case 'tool_end':
@@ -1077,12 +1077,12 @@ function handle(m) {
 
     case 'autonomy_cycle':
       // A launched autonomous cycle. Deliberately no toast: the loop can run for
-      // hours, and a banner every cycle is noise the tick does not need — the
+      // hours, and a banner every cycle is noise the tick does not need; the
       // point of the sound is that you hear it without looking at the tab.
       chime('tick');
       break;
     case 'log':
-      // raw agent stderr — surface only when clearly an error
+      // raw agent stderr; surface only when clearly an error
       if (/error|failed|refused|not found/i.test(m.line) && !streaming) toast(m.line, true);
       break;
     case 'error':
@@ -1119,8 +1119,8 @@ function handle(m) {
 
 // ── sending ──────────────────────────────────────────────────────────
 // The prompt this window has already echoed into its own transcript. The
-// server publishes every row it appends — including the ones this window
-// typed — so the echo is matched and skipped instead of drawn twice. A Map
+// server publishes every row it appends (including the ones this window
+// typed), so the echo is matched and skipped instead of drawn twice. A Map
 // rather than a field on the session, because sessions go to localStorage.
 const localEchoes = new Map();   // sid -> text
 
@@ -1202,7 +1202,7 @@ function drainAttachments() {
 function setBusy(b) {
   busy = b;
   if (b) turnFailed = false;   // a fresh turn, a clean slate for the chime
-  // the send button stays available while the agent runs — sending then
+  // the send button stays available while the agent runs; sending then
   // steers/interrupts the running turn instead of starting a new one.
   stopBtn.hidden = !b;
   sendBtn.classList.toggle('steer', b);
@@ -1251,14 +1251,14 @@ function ensureStreamingBubble() {
 // ── turn sounds ────────────────────────────────────────────────────
 // Synthesised rather than an asset file: nothing to ship, nothing to
 // download, no codec, and it is quiet by construction. Two short notes say
-// "the work finished" without demanding to be looked at — the case the sound
+// "the work finished" without demanding to be looked at; the case the sound
 // exists for is the tab in the background. Gated on a server preference, so
 // every device pointed at this install agrees about whether it makes a noise.
 //
 // Two switches, because the two kinds of sound make different promises.
 // `turnSound` is the end of work someone is waiting for, so it can be on by
-// default. `alertSound` covers things that fire *while* work runs — a budget
-// warning, one tick per cycle of a loop that can run for hours unattended —
+// default. `alertSound` covers things that fire *while* work runs; a budget
+// warning, one tick per cycle of a loop that can run for hours unattended,
 // and starts silent: a sound that repeats by itself is the kind a person
 // reaches for the mute on.
 let turnSoundOn = true;
@@ -1271,7 +1271,7 @@ let turnFailed = false;   // set by an error/fatal event, read by the chime
 // each other, a single note for the tick, and each pair landing in a different
 // register, so a chime is identifiable without seeing the tab.
 //
-// They were written blind — this environment has no ears — and they stay unverified
+// They were written blind, this environment has no ears, and they stay unverified
 // until someone listens. Settings > Tools now has an audition button that plays all
 // four past both switches for exactly that reason, so the person who can hear them
 // is the one who decides, not the person who read the source.
@@ -1335,7 +1335,7 @@ function chime(kind) {
 }
 
 // Play all four, in order, spaced so four chimes do not arrive as one smear.
-// Deliberately ignores both switches — this is the listening pass the table above
+// Deliberately ignores both switches, this is the listening pass the table above
 // has been waiting for. Returns the count so the panel can say what it played.
 function previewChimes() {
   ['done', 'error', 'warn', 'tick'].forEach((kind, i) => {
@@ -1360,7 +1360,7 @@ function endStream() {
         blk.classList.remove('open');   // collapsed again: the trace must not bury the answer
         blk.querySelector('.reason-toggle').textContent = 'thought process';
       } else {
-        blk.remove();   // nothing was ever thought — drop the empty pill
+        blk.remove();   // nothing was ever thought; drop the empty pill
       }
     }
     if (!streaming.msg.content && !streaming.msg.tools.length) {
@@ -1396,7 +1396,7 @@ function stop() {
 
 // ── rendering ────────────────────────────────────────────────────────
 // Who was actually at the keyboard. The agent sees a plain user row either
-// way — these tags exist so the person can tell their own words from one the
+// way, these tags exist so the person can tell their own words from one the
 // Assistant sent, and never mistake an autonomous prompt for something they
 // typed and forgot.
 const MSG_TAGS = { assistant: 'Assistant', autonomous: 'Autonomous-Mode' };
@@ -1435,7 +1435,7 @@ function nowTs() { return Date.now() / 1000; }
 // beside the copy (extras.py's `.message` marker, set by agent._auto_snapshot
 // through _turn_msg_index). It is metadata *about* the message, never content in
 // it: the transcript sent to the model and the saved markdown export are
-// unchanged. That is the constraint this feature is specified under — a snapshot
+// unchanged. That is the constraint this feature is specified under; a snapshot
 // marker must never reach what the model reads or what the person exports.
 let snapRows = [];   // this session's snapshots, as /api/snapshots returns them
 let snapSeq = 0;     // a slow response must not decorate a newer session
@@ -1746,7 +1746,7 @@ function renderTranscript(s, midTurn) {
   // A registry row is a tail: what is on screen is the END of the conversation.
   // ensureFull normally replaces it within a moment, but if that fetch fails, or
   // the session was deleted mid-flight, the person must not read 24 rows as the
-  // whole transcript — and the edit guard below depends on `trimmed` being a
+  // whole transcript, and the edit guard below depends on `trimmed` being a
   // state the interface admits to rather than hides.
   if (s.trimmed && s.messages.length) {
     const gap = document.createElement('div');
@@ -1754,7 +1754,7 @@ function renderTranscript(s, midTurn) {
     gap.textContent = `${s.messageCount - s.messages.length} earlier message(s) not loaded`;
     inner.appendChild(gap);
   }
-  // The transcript stores one assistant row per step — every model round that ran
+  // The transcript stores one assistant row per step; every model round that ran
   // tools gets its own row, often with no text at all. The live view streams a
   // whole turn into ONE bubble (all events land in `streaming`), so drawing a
   // bubble per stored row made a fork or reload of a tool-heavy turn read as the
@@ -1826,7 +1826,7 @@ function renderTranscript(s, midTurn) {
   // A session that is mid-turn has exactly one card still open: the trailing
   // assistant group, the row the turn in flight is writing into. Recording it
   // here is what lets a reload, a switch-back or a reconnect re-arm that bubble
-  // instead of opening an empty one beside it — and a card that is not the last
+  // instead of opening an empty one beside it, and a card that is not the last
   // group can never be adopted, which is the other half of the fix.
   // `midTurn` is the caller's own knowledge, and the replay path needs it: a
   // viewer that arrives mid-turn is handed the turn's buffered events, which is
@@ -1947,7 +1947,7 @@ function renderSessionList() {
   }
 }
 
-// Stop a session's turn from its row — possibly a session you are not
+// Stop a session's turn from its row; possibly a session you are not
 // looking at. Its own socket carries the abort; nothing else is touched.
 function stopSession(id) {
   const sock = sockets.get(id);
@@ -1957,7 +1957,7 @@ function stopSession(id) {
   } else {
     // No live socket: the session cannot be mid-turn in this tab. The
     // registry may still say busy (a turn running from another tab), and
-    // that turn is not this tab's to stop — say so rather than pretending.
+    // that turn is not this tab's to stop; say so rather than pretending.
     toast(sessionStates[id] && sessionStates[id].busy
       ? 'That turn is running in another window'
       : 'That session is not running anything', true);
@@ -2018,7 +2018,7 @@ function endStreamQuiet() {
     const el = streaming.el.closest('.msg');
     if (el) el.classList.remove('streaming');
     // A card that received anything is a finished turn. Some turns never
-    // publish `done` — a worker that dies, an error path that ends on `error` —
+    // publish `done` (a worker that dies, an error path that ends on `error`),
     // and an idle report is the only end they get, so holding that card is
     // exactly how the next turn lands inside the previous answer.
     // An empty card is a send still in flight: a reconnect or a stale idle
@@ -2076,7 +2076,7 @@ async function deleteSession(id) {
 // ── edit a past user message: rewind the session to it (ChatGPT-style) ──
 // Server drops that turn and everything after, respawns the agent with only
 // the prefix as restored context, and the edited text is re-sent as the next
-// prompt — the session continues from the edit point.
+// prompt; the session continues from the edit point.
 let pendingEdit = null;
 let editAckTimer = null;
 
@@ -2093,9 +2093,9 @@ function editUserMessage(wrap) {
   if (s.trimmed) {
     // The index counted below comes from the bubbles on screen. On a preview tail
     // that count begins partway through the conversation, while the server reads
-    // it as an offset into the FULL transcript — so the rewind would cut at the
+    // it as an offset into the FULL transcript, so the rewind would cut at the
     // wrong turn. Upgrade the copy first; the next click edits. (The server
-    // refuses a fragment too, via _adoptable in routers/chat.py — but refusing is
+    // refuses a fragment too, via _adoptable in routers/chat.py, but refusing is
     // not editing, so the client must not offer it in the first place.)
     ensureFull(s);
     toast('Loading the full history of this session: try the edit again in a moment', true);
@@ -2133,7 +2133,7 @@ function editUserMessage(wrap) {
     const text = ta.value.trim();
     if (!text) return;
     pendingEdit = { sid: s.id, userTurnIndex, text };
-    // the client view is the authority for the rewind — send the full copy so
+    // the client view is the authority for the rewind; send the full copy so
     // the server can adopt it even if its own transcript is shorter/absent
     ws.send(JSON.stringify({ type: 'truncate_from', userTurnIndex,
                              messages: s.messages, created: s.created }));
@@ -2151,12 +2151,12 @@ function editUserMessage(wrap) {
 // `"` is load-bearing here, not decoration: the renderers interpolate esc()
 // inside double-quoted attributes (data-path, title, data-opt), so a value
 // carrying a bare quote escapes its attribute and lands new attributes on a
-// live element — no `<` needed, so escaping `<`/`>` does not cover it. The
+// live element; no `<` needed, so escaping `<`/`>` does not cover it. The
 // other five modules' esc all replace it; this one was the odd one out.
 // The leading String() is the other five's other difference: eight call sites
 // in the workspace and file-browser renderers already write
 // esc(String(p.path)) by hand, because a bare esc(0) used to throw inside
-// md()/a renderer and the surrounding try/catch swallows it — the pane just
+// md()/a renderer and the surrounding try/catch swallows it; the pane just
 // silently loses its content. Latent rather than live (nothing passes a
 // non-string statically), which is why those eight coercions exist at all.
 // The renderer itself lives in static/markdown.js, because a second copy of a renderer
@@ -2167,7 +2167,7 @@ function inlineMd(t) { return window.TacitMarkdown.inlineMd(t); }
 function md(src) { return window.TacitMarkdown.md(src); }
 
 // delegated: the ONE click handler for the transcript surface. Rows built by
-// appendMsg() carry no listeners of their own — anything clickable inside a
+// appendMsg() carry no listeners of their own; anything clickable inside a
 // message is routed here by class, so a 2,000-message transcript costs one
 // listener instead of thousands. Add a branch, not an addEventListener.
 messagesEl.addEventListener('click', e => {
@@ -2181,7 +2181,7 @@ messagesEl.addEventListener('click', e => {
   }
   const toggle = e.target.closest('.reason-toggle');
   if (toggle) { toggle.closest('.reason-block').classList.toggle('open'); return; }
-  // Tool cards are the most numerous node in the transcript — one turn can make
+  // Tool cards are the most numerous node in the transcript; one turn can make
   // dozens, and every one of them used to carry its own click listener.
   const head = e.target.closest('.tool-head');
   if (head) { head.closest('.tool-card').classList.toggle('open'); return; }
@@ -2201,7 +2201,7 @@ messagesEl.addEventListener('click', e => {
   if (edit) {
     // Kept from the per-node listener, for a reason I can name: the file has two
     // document-level click handlers (1787, 2521) that close menus on an outside
-    // click. Stopping here still works the same way — this branch runs at
+    // click. Stopping here still works the same way, this branch runs at
     // messagesEl, which is below document, so the click never reaches them.
     e.stopPropagation();
     editUserMessage(edit.closest('.msg'));
@@ -2227,7 +2227,7 @@ function renderModelChip() {
 }
 
 // ── working project picker ────────────────────────────────
-// The agent operates inside a real project you pick — there is no bundled
+// The agent operates inside a real project you pick; there is no bundled
 // sandbox directory. The choice is per-session, and it is the only thing that
 // decides where tools read and write.
 function wdBase(p) {
@@ -2300,7 +2300,7 @@ async function openWdMenu() {
 function chooseWorkdir(p) {
   const clearing = !p;
   // Per-session, not global: the choice lands on the active session only. The
-  // localStorage write is gone — a global default is what made a new session
+  // localStorage write is gone; a global default is what made a new session
   // inherit the previous one's folder before anyone chose anything.
   const s = cur();
   if (s && (!s.messages || !s.messages.length)) {
@@ -2335,7 +2335,7 @@ document.addEventListener('click', (e) => {
 // We browse the real filesystem ourselves instead of raising a native dialog,
 // which would look and behave differently on Windows, macOS and Linux.
 //
-// Each *purpose* gets its own independent instance — its own element, its own
+// Each *purpose* gets its own independent instance; its own element, its own
 // ids, its own cursor and selection. The workspace picker and the "clone into"
 // picker answer different questions, so they must not share one modal.
 const fsPickers = new Map();
@@ -2509,7 +2509,7 @@ async function refreshTaskStrip() {
     $('#taskStripCount').textContent = `${r.open}/${r.count}`;
     const list = $('#taskStripList');
     if (list.hidden && strip._lastCount !== undefined && strip._lastCount !== r.count) {
-      list.hidden = false;   // something changed — show it
+      list.hidden = false;   // something changed; show it
     }
     strip._lastCount = r.count;
     list.innerHTML = tasks.map((t, i) => `
@@ -2565,7 +2565,7 @@ function renderTokMeter() {
   ].join('\n');
 }
 
-// model ids are "provider/model:tag" — the sidebar picks in two levels
+// model ids are "provider/model:tag"; the sidebar picks in two levels
 function splitModelId(id) {
   const i = (id || '').indexOf('/');
   return i === -1 ? { provider: '', model: id || '' }
@@ -2573,7 +2573,7 @@ function splitModelId(id) {
 }
 function modelsByProvider() {
   const map = new Map();
-  // providers exist even before any model is discovered — registry order first
+  // providers exist even before any model is discovered; registry order first
   for (const p of (info.providers || [])) if (!map.has(p)) map.set(p, []);
   for (const m of info.models) {
     const p = splitModelId(m.id).provider || 'local';
@@ -2633,7 +2633,7 @@ function renderModelPickers() { renderProviderSelect(); renderModelSelect(); }
 // what this replaced. Entries carry the time they were filled, because a bare
 // fallback cached while the server-side probe was still running must not outlive
 // it: that staleness is what left this picker at "model default" for a model whose
-// ladder had since been measured. The TTL only guards the fallback — a real ladder
+// ladder had since been measured. The TTL only guards the fallback; a real ladder
 // is a measured fact and does not expire.
 const thinkCache = {};
 const THINK_FALLBACK_TTL = 10000;
@@ -2701,13 +2701,13 @@ async function loadInfo() {
     info = await r.json();
   } catch (e) { /* keep defaults */ }
   // The brand slot states which checkout this is. It used to hold a hardcoded
-  // "Default Harness" — a claim about the active profile that no code ever
+  // "Default Harness"; a claim about the active profile that no code ever
   // wrote, and that stopped being true the moment a second profile existed.
   const brand = document.getElementById('brandVersion');
   if (brand) {
     // `hidden` is the pre-fetch state, not the resting one. style.css pins
     // `[hidden] { display: none !important }`, so writing text into the span is
-    // not enough — the attribute has to be cleared here or the version sits in
+    // not enough; the attribute has to be cleared here or the version sits in
     // the DOM invisible forever, while every source-level assertion about this
     // element keeps passing.
     brand.textContent = info.version || 'version unknown';
@@ -2715,7 +2715,7 @@ async function loadInfo() {
   }
   renderModelPickers();
   renderThinkSelect();
-  // no permanent status widget — surface problems only, once per outage
+  // no permanent status widget; surface problems only, once per outage
   if (!info.llm_online && !llmWarned) {
     llmWarned = true;
     toast(`LLM unreachable · ${(info.llm_url || '').replace(/^https?:\/\//, '')}`, true);
@@ -2781,7 +2781,7 @@ thinkSelect.addEventListener('change', () => {
   toast(`Thinking level: ${s.thinking} (applies live)`);
 });
 
-// bridge for harness.js — it edits the registry, then asks us to refresh
+// bridge for harness.js; it edits the registry, then asks us to refresh
 window.Tacit = {
   refreshInfo: async () => { await loadInfo(); renderModelChip(); },
   toast: (t, e) => toast(t, e),
@@ -2977,7 +2977,7 @@ function planBody(text) {
   // scrolls instead of pushing the composer off the bottom of the screen.
   if (!text) return '';
   // .msg-content is not decoration: every markdown rule in the stylesheet is
-  // scoped to it, so a plan drawn without that class gets browser defaults —
+  // scoped to it, so a plan drawn without that class gets browser defaults:
   // full-size headings and unstyled code. The plan is the agent's own prose
   // about the codebase, so it is rendered the way the agent's prose is rendered.
   return `<div class="msg-content pr-body">${md(text)}</div>`;
@@ -3011,7 +3011,7 @@ function renderPlanApproved(info) {
   // write the project's PLAN.md and to refuse to overwrite a PLAN.md the person
   // had written themselves, which is why this line had to name two files and say
   // which one did not happen. It names the one file that always lands, and the
-  // server's own sentence — what Implement will do with it — rides in the tooltip.
+  // server's own sentence (what Implement will do with it) rides in the tooltip.
   planStrip.hidden = false;
   planStrip.innerHTML = `
     <div class="ps-head"><span class="ps-icon ok"></span>
@@ -3025,7 +3025,7 @@ function renderPlanApproved(info) {
   $('#plImplement').addEventListener('click', () => {
     // Stage 1b: the server creates the fresh session and returns its
     // id; the rpc_response handler adopts it and opens its socket.
-    // No streaming bubble here — this session's turn is over.
+    // No streaming bubble here, this session's turn is over.
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'plan_implement' }));
     hidePlanStrip();
   });
@@ -3036,14 +3036,14 @@ function restorePlanStrip(p) {
   // hello carries the plan the session is actually on. The strip is drawn from
   // events, and events that streamed past are gone for good, so without this a
   // reload or a switch-back showed an empty strip over a plan that was still
-  // running — or still waiting for answers — on the server. The snapshot is the
+  // running, or still waiting for answers; on the server. The snapshot is the
   // same state those events drew, so each phase maps back onto its renderer.
   // Null means no plan, which must clear a strip left from the session this
   // socket replaced.
   if (!p || p.cancelled) { planLive = false; hidePlanStrip(); return; }
   // The phase is not the whole story, so the data decides. A finished plan is
-  // still phase 'synthesizing' — plan_ready carries the text and never moves the
-  // phase — and an approved one is indistinguishable from it by phase alone;
+  // still phase 'synthesizing' (plan_ready carries the text and never moves the
+  // phase), and an approved one is indistinguishable from it by phase alone;
   // saved and text say what actually exists. `running` is the server's answer to
   // a question the client cannot ask: a snapshot whose thread died with the last
   // server must not come back as a live strip holding the composer shut.
@@ -3124,7 +3124,7 @@ sessMenu.addEventListener('click', e => {
 $('#topTitle').addEventListener('dblclick', () => startRenameTop());
 
 
-// one renderer for session stats — used by the stats RPC and by any
+// one renderer for session stats; used by the stats RPC and by any
 // queue_update carrying the same fields, so the two cannot drift apart
 function applySessionStats(d) {
   if (!d) return;

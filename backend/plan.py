@@ -266,7 +266,7 @@ def save(plan: "Plan") -> dict:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body(plan), encoding="utf-8")
-    except Exception as e:  # noqa: BLE001 — reported to the person, not raised at the socket
+    except Exception as e:  # noqa: BLE001; reported to the person, not raised at the socket
         return {"written": False, "message": f"could not save the plan: {e}"}
     plan.plan_file = str(path)
     return {"written": True, "path": str(path)}
@@ -311,8 +311,8 @@ def pointer(rec: dict) -> str:
 
     This is the part that makes the file worth having. A plan named once in a first
     message is a plan that survives until the transcript is compacted, and then it
-    survives only as a paraphrase. Appended to the system prefix instead — the same
-    place the project's own instructions go, and for the same reason — it costs
+    survives only as a paraphrase. Appended to the system prefix instead (the same
+    place the project's own instructions go, and for the same reason), it costs
     about a hundred tokens every turn and never gets summarised, because the prefix
     is rebuilt each turn rather than carried along.
 

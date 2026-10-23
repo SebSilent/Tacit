@@ -50,7 +50,7 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
     if not cmd:
         return "ERROR: empty command"
     # No explicit `cwd` and no usable project means this session's scratch folder, not
-    # the user's home directory — the same rule `agent._root` uses.
+    # the user's home directory; the same rule `agent._root` uses.
     work = cwd or str(config.work_root(project, session))
     try:
         # Registry-only identity: the user's command must not be corrupted by
@@ -211,15 +211,15 @@ def snapshot(root: str, label: str = "", session: str = "", message=None) -> str
 def drop_message_links(session: str, from_index: int) -> int:
     """Un-link snapshots that pointed at rows a rewind deleted. Returns how many.
 
-    A snapshot is a real undo point and is never deleted here — only its claim
+    A snapshot is a real undo point and is never deleted here, only its claim
     about *which message* caused it. `truncate_from` (routers/chat.py) rewinds a
     session's stored history, so every marker at or past the cut now counts rows
     that no longer exist. The transcript then grows back and a stale index lands
     on an unrelated message: a control that opens compare against a snapshot from
     a discarded branch is worse than no control, because it looks authoritative.
 
-    With the marker gone the snapshot drops out of the per-message decoration —
-    `snapshot_index` reads `None`, the renderer skips it — and still appears in
+    With the marker gone the snapshot drops out of the per-message decoration:
+    `snapshot_index` reads `None`, the renderer skips it, and still appears in
     the Snapshots panel. That is the honest state: we know it belongs to this
     session, we no longer know which turn made it.
     """
@@ -463,7 +463,7 @@ def _server_command() -> list[str] | None:
 
 
 def _start_command() -> tuple[list[str] | None, str]:
-    """(command, which path) — the launcher script if there is one, else this interpreter.
+    """(command, which path); the launcher script if there is one, else this interpreter.
 
     Decided when the button is pressed and written into the handshake, so the
     watcher runs the path the response reported instead of re-picking one after
@@ -573,7 +573,7 @@ def _can_bind(host: str, port: int) -> bool:
     """True if a fresh listener could take host:port right now.
 
     Probed by binding, not connecting. A connect against a live listener fills
-    its backlog — nothing accepts it — and the next connect is refused, which
+    its backlog (nothing accepts it) and the next connect is refused, which
     reads as a free port that is not free; measured here against a real
     listener. Binding is the exact test the new server will face. On POSIX the
     probe carries SO_REUSEADDR, which is what asyncio's create_server sets by

@@ -219,7 +219,7 @@ class TestPlumbingStaysPut(unittest.TestCase):
         # The tail is `, **_card}` because the sandbox backend and the changed-file
         # count ride the same two lines: a card fact goes onto the stored record AND
         # the live event, exactly like the duration. Pin the prefix, not the closing
-        # brace — the moment a card stops being one field, a `}` here is noise.
+        # brace; the moment a card stops being one field, a `}` here is noise.
         self.assertEqual(src.count('"type": "tool_end", "name": c["name"], "result": result,\n'
                                    '                   "id": c["id"], "is_error": failed, '
                                    '"elapsed_ms": _ms, **_card}'), 2,

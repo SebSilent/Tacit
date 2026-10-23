@@ -2,7 +2,7 @@
 
 This replaces the characterisation test that pinned the old behaviour, in which
 `agent._root` fell back to `Path(config.USER_HOME)`. That meant an Agent session with no
-project — and a session whose project had since been deleted or moved — read and wrote in
+project, and a session whose project had since been deleted or moved; read and wrote in
 the user's home folder, with a seven-entry blocklist as the only thing in the way.
 
 The rule now lives in exactly one function, `config.work_root`, because three files used
@@ -13,7 +13,7 @@ them could have drifted back:
   a scratch folder. `ProjectAlwaysWins` exists to defend exactly that.
 * With no usable project the session gets `WORKSPACES_DIR/<session id>`, created on demand.
 * A project that is *named but missing* counts as no project and the turn proceeds in the
-  scratch folder without announcing it — failing a turn over a moved folder is worse than
+  scratch folder without announcing it; failing a turn over a moved folder is worse than
   working somewhere harmless, and stale paths arrive out of stored sessions.
 * The folder is deleted with the session, and the Git panel now answers the same question
   the tools do.
@@ -22,9 +22,9 @@ Two things this does **not** do, asserted so nobody reads more into the change t
 there:
 
 * It is not a sandbox. `_safe` still accepts an absolute path and still has no containment
-  check — "you are not walled in" is the standing prompt's own words. The *default* moved.
-* A caller with neither a project nor a session id — `run_terminal` called directly, the
-  legacy two-argument `run_turn`, the prompt-size estimates — lands in one shared
+  check; "you are not walled in" is the standing prompt's own words. The *default* moved.
+* A caller with neither a project nor a session id (`run_terminal` called directly, the
+  legacy two-argument `run_turn`, the prompt-size estimates) lands in one shared
   `workspaces/default`. Still not the home directory, but not isolated either.
 
 `gateways.py:159` also falls back to `USER_HOME`, and deliberately stays that way: that is
@@ -107,7 +107,7 @@ class ScratchFolderWhenThereIsNoProject(Isolated):
                                 f"{project!r}/{session!r} still roots at home")
 
     def test_a_project_that_was_deleted_counts_as_no_project_and_says_nothing(self):
-        """Proceed in the scratch folder rather than fail the turn — quietly, by choice."""
+        """Proceed in the scratch folder rather than fail the turn; quietly, by choice."""
         gone = self.base / "moved-project"
         gone.mkdir()
         before = agent._root(str(gone), "s-abc")

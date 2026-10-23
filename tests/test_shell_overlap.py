@@ -55,7 +55,7 @@ class TestSwitchSurface(Isolated):
     """
 
     def _body(self, res):
-        """`_ok` answers a plain dict, `_fail` a JSONResponse — both are what the
+        """`_ok` answers a plain dict, `_fail` a JSONResponse; both are what the
         browser reads. Normalise, or a test passes by asserting on the wrong object."""
         return res if isinstance(res, dict) else json.loads(res.body.decode())
 
@@ -149,7 +149,7 @@ class TestOverlapTable(Isolated):
 
     def test_a_pipe_is_the_shell_doing_something_no_tool_does(self):
         # Found by dogfooding: this very test run, filtered through findstr, was
-        # advised to use grep_files. findstr here reads *stdin* — refusing it would
+        # advised to use grep_files. findstr here reads *stdin*; refusing it would
         # have destroyed the test run to save one spawn.
         for cmd in ("python -m unittest 2>&1 | findstr OK",
                     "cat interp.py | grep def",
@@ -211,7 +211,7 @@ class TestRunShellWiring(Isolated):
         self.ran = []
 
         def fake_run(command, project=None, timeout=None, session=None, **kw):
-            # sandbox.run hands back a plain dict — `changed` is a report with a
+            # sandbox.run hands back a plain dict; `changed` is a report with a
             # `count`, and the backend notes are a list, not one string.
             self.ran.append(command)
             return {"ok": True, "backend": "test", "code": 0,

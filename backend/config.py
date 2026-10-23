@@ -312,7 +312,7 @@ def write_json(path: Path, value) -> None:
 
     A plain write_text truncates first and fills after. The turn's driver thread
     saves the session record while the interface reads the same file, and a read
-    that landed in that gap got an empty or partial document — which read_json
+    that landed in that gap got an empty or partial document, which read_json
     reported as "no such session". Tests papered over it by waiting for the bus
     to die before reading; the real fix is the write.
 
@@ -322,7 +322,7 @@ def write_json(path: Path, value) -> None:
     because two threads may save different records from the same directory at
     the same instant, and it leads with a dot with the real extension kept out
     of the tail: a stray file left by a crash must not be read back as a
-    session, a plugin, or — audit.py globs ``audit.json.*`` — a retired ledger.
+    session, a plugin, or (audit.py globs ``audit.json.*``) a retired ledger.
 
     The rename is the part Windows objects to: it is refused with Access denied
     while any reader holds the target open, so it waits for the handle to close
@@ -358,7 +358,7 @@ def delegate_model() -> str:
     """The model delegated work runs on: the pref, else the env var, else ''.
 
     Empty means the session's own model. A sub-agent inherits its parent's model
-    by construction, which is usually right — but a reasoning-heavy session model
+    by construction, which is usually right, but a reasoning-heavy session model
     at thinking=max burns the expensive tokens on fetch-and-grep work a cheap
     model does just as well, and that choice was never reachable.
     """
@@ -395,7 +395,7 @@ def turn_worker_mode() -> str:
     instead of owning the server.
 
     "thread" is the escape hatch: the old in-process path, which the tests
-    that fake the model engine use — a fake engine patched into this
+    that fake the model engine use; a fake engine patched into this
     process is invisible to a worker subprocess.
     """
     raw = os.environ.get("TACIT_TURN_WORKER", "process").strip().lower()
@@ -709,7 +709,7 @@ def _workspace_name(session: str) -> str:
     """A usable directory name for one session id.
 
     Every character that could act as a path separator is replaced, so the result
-    cannot climb out of WORKSPACES_DIR no matter what arrives on the wire — `..`
+    cannot climb out of WORKSPACES_DIR no matter what arrives on the wire; `..`
     collapses to nothing and is replaced by "default". Real ids (`s-<hex>`) pass
     through untouched; this is a guard, not a renaming.
     """
@@ -741,7 +741,7 @@ def remove_workspace(session: str) -> bool:
     in `WORKSPACES_DIR` forever: nothing else ever collects them, and they are the
     thing the model wrote while nobody had chosen a project for it.
 
-    Refuses anything that is not a real per-session folder — an empty id maps to the
+    Refuses anything that is not a real per-session folder; an empty id maps to the
     shared `default`, and a path that does not sit under WORKSPACES_DIR is not ours to
     delete. It returns False rather than raising: a session is already gone by then,
     and a failed cleanup must not make the delete look like it failed.
@@ -770,7 +770,7 @@ def project_usable(project: str | None) -> bool:
 def work_root(project: str | None = "", session: str = "", create: bool = True) -> Path:
     """Where a session's tools operate. One rule, shared by every caller.
 
-    A project that exists always wins — a session with a workdir must never be
+    A project that exists always wins; a session with a workdir must never be
     re-rooted into a scratch folder. Only when there is no usable project does the
     session get its own workspace, and the home directory is not a fallback any
     more: it used to be, which meant a session with no project (or with a project

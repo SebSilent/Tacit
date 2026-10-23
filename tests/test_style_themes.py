@@ -2,7 +2,7 @@
 
 `static/style.css` carries the themes as `[data-theme="…"]` blocks; `static/app.js`
 carries the picker registry (`THEMES`); a `.sw-<id>` rule per theme paints the card
-swatch. Three lists that have to agree, and nothing but this file made them agree —
+swatch. Three lists that have to agree, and nothing but this file made them agree:
 a theme missing from `THEMES` is invisible, a theme missing from CSS falls back to
 the default values one property at a time, and a half-overridden theme is the worst
 outcome: dark text on a light background, or midnight's violet accent on black-on-
@@ -33,8 +33,8 @@ SCALE_NAME = re.compile(r"--(?:fs|sp|rd|tr)-\d+$|^--radius[\w-]*$")
 MIN_TEXT = 4.5
 MIN_MUTED = 4.5
 # The themes whose entire name is a contrast promise get the AAA bar. Both halves
-# of the accessibility pair — `contrast` (white on black) and `contrast-light`
-# (black on white) — because a light high-contrast theme is the one that usually
+# of the accessibility pair, `contrast` (white on black) and `contrast-light`
+# (black on white), because a light high-contrast theme is the one that usually
 # fails: dark-on-light accents picked from a dark palette land at 2:1 on white.
 AAA_THEMES = ("contrast", "contrast-light")
 MIN_AAA = 7.0
@@ -97,7 +97,7 @@ def rgb_triplet(value):
 # `--on-accent` is the foreground of six controls that sit on `--accent`: Send,
 # New chat, the picked option, the primary button, the assistant avatar, the
 # active segment. It was white in bare `:root` with no theme overriding it, so on
-# a light accent it was white on near-white — `contrast` sat at 1.41:1 on *the
+# a light accent it was white on near-white; `contrast` sat at 1.41:1 on *the
 # accessibility theme*, and the debt was carried with no number attached.
 #
 # Every palette re-measures this pair rather than inheriting an answer. Thirteen of
@@ -107,7 +107,7 @@ def rgb_triplet(value):
 #
 # Which side a theme falls on is a property of its accent's luminance and not of its
 # name, so the split is deliberately NOT enumerated here. It was, at eight themes,
-# and it went stale the moment the set grew — a list of names in a comment is a
+# and it went stale the moment the set grew; a list of names in a comment is a
 # second source of truth about a number the test already measures.
 # `test_every_theme_clears_aa_now_that_the_debt_is_paid` is what checks it.
 #
@@ -137,7 +137,7 @@ BG = re.compile(r"\bbackground(?:-color)?\s*:\s*([^;]+?)\s*;")
 
 def strip_comments(text):
     """`/* … */` prose mentions tokens by name; a scan that reads it matches
-    declarations that do not exist. Blank it first — see the note in memory."""
+    declarations that do not exist. Blank it first; see the note in memory."""
     return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
@@ -149,7 +149,7 @@ def on_accent_rules(text):
 
 
 def on_accent_ratios(text):
-    """{theme: (ratio, foreground, background)} — theme override, else bare :root."""
+    """{theme: (ratio, foreground, background)}; theme override, else bare :root."""
     stripped = strip_comments(text)
     root = {}
     for sel, body in RULE.findall(stripped):
@@ -167,19 +167,19 @@ class TestThemeSets(unittest.TestCase):
     def test_every_theme_declares_the_full_token_set(self):
         """No theme may override some tokens and inherit the rest.
 
-        Comparison is against `midnight`, which is the default — and it is compared
+        Comparison is against `midnight`, which is the default, and it is compared
         as a SET, not a fixed list, so the test does not fossilise today's 26 tokens:
         adding a token means adding it to every theme, which is the point.
         """
         t = themes()
         self.assertIn(DEFAULT_THEME, t, "the default theme block is gone")
         base = set(t[DEFAULT_THEME])
-        self.assertTrue(base, "no tokens parsed — the guard is reading nothing")
+        self.assertTrue(base, "no tokens parsed; the guard is reading nothing")
         for ident in sorted(t):
             declared = set(t[ident])
             self.assertEqual(
                 declared, base,
-                f"[{ident}] differs from the default set — "
+                f"[{ident}] differs from the default set: "
                 f"missing {sorted(base - declared)}, "
                 f"extra {sorted(declared - base)}")
 
@@ -197,7 +197,7 @@ class TestThemeSets(unittest.TestCase):
     def test_color_scheme_matches_the_background(self):
         """`color-scheme` decides native widget colours (scrollbars, form controls).
 
-        A light theme declaring `dark` gets dark-native widgets on a light page —
+        A light theme declaring `dark` gets dark-native widgets on a light page:
         the bug is invisible in the app's own chrome and obvious the moment a
         `<select>` or a textarea appears.
         """
@@ -232,19 +232,19 @@ class TestThemeSets(unittest.TestCase):
                 got = contrast(tokens[tok], tokens["--bg"])
                 self.assertGreaterEqual(
                     got, MIN_AAA,
-                    f"[{ident}] {tok} on --bg is {got:.2f}:1 — this theme's whole "
+                    f"[{ident}] {tok} on --bg is {got:.2f}:1, this theme's whole "
                     f"purpose is {MIN_AAA}:1")
 
     def test_the_rgb_companions_match_their_hex(self):
         """`--accent-rgb` must be `--accent`, same for accent2, err and warn.
 
         The `-rgb` forms feed `rgba(var(--accent-rgb), .12)` washes. When they drift
-        the soft background of a chip is a different hue from the chip's own text —
+        the soft background of a chip is a different hue from the chip's own text:
         invisible in a screenshot of one component, obvious across the app.
 
         `--warn-rgb` did not exist until the colour sweep. `--accent`, `--accent-2`
         and `--err` all had companions and `--warn` alone did not, so every warn wash
-        had to be a hard-coded `rgba(232, 163, 61, .12)` — midnight's amber frozen
+        had to be a hard-coded `rgba(232, 163, 61, .12)`; midnight's amber frozen
         into the other seven themes. This list of pairs was pinned to the three that
         existed, so nothing reported the missing fourth: a completeness check written
         against the tokens someone happened to use is not a completeness check.
@@ -269,7 +269,7 @@ class TestThemeSets(unittest.TestCase):
         """Theme blocks are colour tokens; `--shadow` is the one sanctioned length.
 
         Everything else that looks like a length in a theme block means someone put
-        a spacing or type decision in a palette — which is the exact thing that makes
+        a spacing or type decision in a palette, which is the exact thing that makes
         a theme move the layout.
         """
         for ident, body in THEME.findall(CSS):
@@ -348,12 +348,12 @@ class TestOnAccentContrast(unittest.TestCase):
             failing, set(ON_ACCENT_DEBT),
             f"--on-accent on --accent below {MIN_ON_ACCENT}:1 drifted: "
             f"new offenders {sorted(failing - set(ON_ACCENT_DEBT))}, "
-            f"fixed but still listed {sorted(set(ON_ACCENT_DEBT) - failing)} — "
+            f"fixed but still listed {sorted(set(ON_ACCENT_DEBT) - failing)}; "
             "a fixed theme must be removed from ON_ACCENT_DEBT, that is the record "
             "catching up with the palette decision")
         passing = sorted(set(r) - failing)
         self.assertEqual(passing, sorted(r),
-                         "a theme fell below AA — every one of the eight clears it "
+                         "a theme fell below AA; every one of the eight clears it "
                          "since the 2026-10-13 palette call, so a new offender means "
                          "a regression or a new theme that owes an --on-accent row")
 
@@ -363,7 +363,7 @@ class TestOnAccentContrast(unittest.TestCase):
         While the debt was open this test walked `ON_ACCENT_DEBT` and compared each
         theme against its own recorded ratio, which let five themes stay broken as
         long as they did not get worse. The debt is empty now, so that loop would
-        iterate over nothing and report success — a guard that passes because it
+        iterate over nothing and report success; a guard that passes because it
         measures nothing. This is the same check with the exception list removed:
         every theme must clear AA against the accent it actually paints.
         """
@@ -372,7 +372,7 @@ class TestOnAccentContrast(unittest.TestCase):
             self.assertGreaterEqual(
                 got, MIN_ON_ACCENT,
                 f"[{ident}] --on-accent ({fg}) on --accent ({bg}) is {got:.2f}:1, "
-                f"under the {MIN_ON_ACCENT}:1 AA floor — either the accent moved or "
+                f"under the {MIN_ON_ACCENT}:1 AA floor; either the accent moved or "
                 "the override was deleted. If it is deliberate, add the theme to "
                 "ON_ACCENT_DEBT with the measured ratio and say why.")
 
@@ -401,7 +401,7 @@ class TestOnAccentContrast(unittest.TestCase):
 
         # a paid theme re-broken. The old mutation planted `--on-accent: #fff` inside
         # the contrast block, which no longer exists, so it replaced nothing and
-        # passed on a no-op — the quiet failure mode of every string-anchored
+        # passed on a no-op; the quiet failure mode of every string-anchored
         # mutation in this file. Assert the anchor moved first, then the ratio.
         anchor = '--on-accent: #000;\n  --accent-2: #4ad9ff;'
         regressed = CSS.replace(anchor, '--on-accent: #fff;\n  --accent-2: #4ad9ff;', 1)
@@ -412,7 +412,7 @@ class TestOnAccentContrast(unittest.TestCase):
 
         # a declaration the token-set parser cannot read. `themes()` scans the RAW
         # file and `DECL` needs the line to end with `;`, so a trailing comment drops
-        # `--on-accent` from that theme's declared set — the exact trap the 2026-10-13
+        # `--on-accent` from that theme's declared set; the exact trap the 2026-10-13
         # fix walked into, where three overrides were in the file, rendered correctly,
         # and were invisible to `test_every_theme_declares_the_full_token_set`.
         #

@@ -206,7 +206,7 @@ def remove(sid: str) -> bool:
 
 # The registry is the browser's boot payload: every session's transcript in one
 # response. It used to ship the last 200 messages of up to 200 sessions, which on
-# a real home measured 1.2 MB — and that grows with the *longest* conversation,
+# a real home measured 1.2 MB, and that grows with the *longest* conversation,
 # not the number of them, so it never stops getting worse. A drawer row needs the
 # tail (title, count, which copy is richer); the transcript itself is fetched from
 # /api/sessions/<id> when a session is actually opened.
@@ -214,7 +214,7 @@ def remove(sid: str) -> bool:
 # `messageCount` and `trimmed` are the part that makes this safe rather than a
 # silent history loss: they tell the client it is holding a tail, so a tail can
 # never be rendered, edited, or pushed back to the server as if it were the whole
-# conversation. Undo and rollback index into this array by position — cut at the
+# conversation. Undo and rollback index into this array by position; cut at the
 # wrong row and you delete turns the user never asked to delete.
 REGISTRY_PREVIEW = 24
 
@@ -326,9 +326,9 @@ def registry(rows: list[dict] | None = None, preview: int = REGISTRY_PREVIEW,
 # `save()` refuses a record whose two halves are both gone (see :101-118), which
 # closed the resurrection a live socket used to perform. It cannot cover the
 # other one: `create()` writes both halves itself and never reaches that guard,
-# so an id that comes back from a browser still holding it — the interface's own
+# so an id that comes back from a browser still holding it; the interface's own
 # `?create=1` re-attach after a socket answered 4404, or a stale copy of the list
-# — re-materialises the session, transcript and all, and the delete reads as
+#; re-materialises the session, transcript and all, and the delete reads as
 # flaky. So the id is remembered. Bounded, stored beside the index it guards, and
 # handed to the browser with the registry so a local copy of the list stops being
 # a path back to a session a person threw away.

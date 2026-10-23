@@ -381,7 +381,7 @@ MAX_LAUNCH_FAILURES = 2
 CYCLE_PROMPT = ("The agent's turn just ended. Read what happened and say, in a "
                 "line or two, whether it moves the Goal along. Put a fenced "
                 "block with a prompt for the agent only if it needs direction "
-                "it would not otherwise have — if the run is on course, leave "
+                "it would not otherwise have; if the run is on course, leave "
                 "the block out and it carries on. When the Goal is fully met, "
                 "put exactly DONE in the block.")
 
@@ -523,7 +523,7 @@ def goal_block(rec: dict) -> dict:
     goal = goal_of(rec)
     if not goal:
         return {}
-    text = ("Goal for this session — the objective the work is judged against. "
+    text = ("Goal for this session; the objective the work is judged against. "
             "It stays in front of you for every turn and outranks any instruction "
             "to wrap up early.\n\n" + goal)
     return {"text": text, "tokens": tokens.estimate_tokens(text), "chars": len(goal)}

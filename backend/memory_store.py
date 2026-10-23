@@ -365,7 +365,7 @@ def startup_selection(project: str = "") -> dict:
 
     Priority: pinned > confidence > use_count > recency. The *rendered* block is
     measured at every step, so the header and separators can never push the
-    result past the budget — the block never silently expands.
+    result past the budget; the block never silently expands.
     """
     limit = budget()
     if limit <= 0:

@@ -1,4 +1,4 @@
-"""A running command reports while it runs — and the model's view is unchanged.
+"""A running command reports while it runs, and the model's view is unchanged.
 
 The bug this pins is invisible to every existing test, including the one that
 pinned the hang itself. `test_goal_turn_completes` asserts the turn *finishes*,
@@ -11,7 +11,7 @@ that it arrived.
 
 Three layers, because the failure could live in any of them:
 
-  sandbox    lines must reach the callback before the child exits — a buffered
+  sandbox    lines must reach the callback before the child exits; a buffered
              read would satisfy every assertion about the finished output and
              still show nothing while a build ran.
   _stream_tool  the rate limiter: coalesced, capped per event, alive when silent,
@@ -120,7 +120,7 @@ class SandboxStreamTests(unittest.TestCase):
         # ~the total runtime. Streaming puts it in the first third.
         self.assertLess(marks[0][0], whole * 0.6,
                         "the first line was reported only after the command "
-                        f"finished ({marks[0][0]:.2f}s of {whole:.2f}s) — that is "
+                        f"finished ({marks[0][0]:.2f}s of {whole:.2f}s), that is "
                         "communicate(), not streaming")
         self.assertGreaterEqual(len([m for m in marks if m[1] == "stdout"]), 2)
 
@@ -231,7 +231,7 @@ class StreamToolTests(unittest.TestCase):
                                 "a 20KB burst should not wait for the window")
         for e in events:
             self.assertLessEqual(len(e["chunk"]), agent.PROGRESS_MAX_CHUNK,
-                                 "one event grew past the cap — the final flush "
+                                 "one event grew past the cap; the final flush "
                                  "was leaking an unbounded chunk")
         self.assertEqual("".join(e["chunk"] for e in events), blob,
                          "capping an event must trim the window, not the output")
@@ -254,7 +254,7 @@ class StreamToolTests(unittest.TestCase):
     def test_the_worker_thread_sees_the_callers_context(self):
         """The tool runs on another thread, and contextvars do not cross threads
         on their own. Without copy_context a streamed tool would read defaults
-        where the inline call read the turn's state — a tool that behaves
+        where the inline call read the turn's state; a tool that behaves
         differently because someone is watching."""
         probe = contextvars.ContextVar("tacit_stream_probe", default="unset")
         seen = {}
@@ -333,7 +333,7 @@ class StreamToolTests(unittest.TestCase):
         t0 = time.time()
         gen.close()
         self.assertLess(time.time() - t0, 1.0,
-                        "close() waited on the running command — that is the "
+                        "close() waited on the running command, that is the "
                         "hang this feature exists to remove, one layer later")
         self.assertTrue(all(t.daemon for t in workers),
                         "a non-daemon worker would keep the process alive after "
@@ -435,8 +435,8 @@ class CallToolGateTests(unittest.TestCase):
             os.remove(path)
         self.assertIsNotNone(first, "a printing command streamed nothing")
         self.assertLess(first, whole * 0.6,
-                        f"the first output arrived at {first:.2f}s of {whole:.2f}s "
-                        "— streamed after the fact, which is what the card could "
+                        f"the first output arrived at {first:.2f}s of {whole:.2f}s: "
+                        "streamed after the fact, which is what the card could "
                         "already do with tool_end")
         self.assertIn("first", out["result"])
         self.assertIn("second", out["result"])
@@ -474,14 +474,14 @@ class BoundaryTests(unittest.TestCase):
             for bad in ("tool_progress", "chunk", "on_output"):
                 self.assertNotIn(bad, call,
                                  f"a transcript step now mentions {bad!r}: {call[:160]}")
-        self.assertGreater(found, 0, "no trace.append found — the guard went blind")
+        self.assertGreater(found, 0, "no trace.append found; the guard went blind")
 
     def test_the_store_has_never_heard_of_a_progress_event(self):
         self.assertNotIn("tool_progress", self._src("backend/store.py"))
 
     def test_a_sub_agents_tail_never_reaches_the_parents_card(self):
-        """Delegated shells stream too — `_run_parallel` hands each sub-agent a
-        call id — so a `tool_progress` from inside one would be attributed to the
+        """Delegated shells stream too (`_run_parallel` hands each sub-agent a
+        call id), so a `tool_progress` from inside one would be attributed to the
         parent's card by tool *name*, interleaving two commands' output. Checked
         by running the forwarder over a fake stream, because the drop is a
         property of which kinds it enumerates, not of a list someone must
@@ -504,7 +504,7 @@ class BoundaryTests(unittest.TestCase):
         finally:
             agent.run_turn = saved
         kinds = [e.get("type") for e in events]
-        self.assertIn("text", kinds, "the forwarder never ran — guard is blind")
+        self.assertIn("text", kinds, "the forwarder never ran; guard is blind")
         self.assertIn("tool_start", kinds)
         self.assertNotIn("tool_progress", kinds,
                          "a sub-agent's live tail would interleave into the "
@@ -544,8 +544,8 @@ class ShellCardFacts(unittest.TestCase):
 
     """The plan wants a tool card to answer two questions it could not: which
     sandbox backend ran a command, and what changed on disk. Both were already
-    computed — `sandbox.run` returns `backend` on every path and keeps a `changed`
-    diff — and then dropped, because the loop forwarded only the result *string*
+    computed (`sandbox.run` returns `backend` on every path and keeps a `changed`
+    diff), and then dropped, because the loop forwarded only the result *string*
     the model reads.
     """
 
@@ -613,11 +613,11 @@ class ShellCardFacts(unittest.TestCase):
         self.assertIn("function toolCardMeta(m)", self.js)
         self.assertIn("'sandbox: ' + m.backend", self.js)
         self.assertIn("files changed", self.js)
-        # One builder, two call sites — the live card and the rebuilt transcript
+        # One builder, two call sites; the live card and the rebuilt transcript
         # card used to assemble this slot separately.
         self.assertEqual(self.js.count("toolCardMeta("), 3)
         # The duration formatting survives in exactly one place: inside the builder.
-        # Asserting it is gone outright would be wrong — and asserting the call site
+        # Asserting it is gone outright would be wrong, and asserting the call site
         # by name is what let the old per-site pin pass off this very body.
         self.assertEqual(self.js.count("setToolMeta(card, meta)"), 2)
         self.assertEqual(self.js.count("fmtMs(m.elapsed_ms)"), 1)

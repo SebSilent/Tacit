@@ -246,7 +246,7 @@ class TurnWorker:
         The thread path hands `run_turn` the socket's steer list directly;
         across a process boundary the list cannot be shared, so the same
         line protocol that carries the cancel carries the steer. False when
-        there is no live worker — the caller then leaves the steer in the
+        there is no live worker; the caller then leaves the steer in the
         socket's list, which the thread path still reads.
         """
         proc = self.proc
@@ -264,7 +264,7 @@ class TurnWorker:
         """Two-stage stop: cooperative cancel, then the tree kill.
 
         Returns what actually happened, because the interface says which one
-        ran — the same honesty the sandbox layer applies to isolation.
+        ran; the same honesty the sandbox layer applies to isolation.
         """
         proc = self.proc
         if proc is None or proc.poll() is not None:
@@ -449,7 +449,7 @@ def _run_assistant_worker(argv: list[str]) -> int:
 
     Same shape as the agent's: one process, events as JSON lines on stdout,
     a cooperative cancel on stdin. It reads nothing from the session record
-    while it runs — the handshake carried everything — and it writes nothing
+    while it runs (the handshake carried everything) and it writes nothing
     to the transcript store: the parent's driver owns both ends, so a worker
     that dies mid-reply loses nothing the parent has not already got.
     """

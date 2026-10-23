@@ -1,8 +1,8 @@
 """An approved plan is the session's file, not the project's.
 
 PLAN item 4 (the plan-mode rewrite) turns the two copies inside out. Approving a
-plan used to write the project's PLAN.md as the *live* copy — the one injected as
-an instruction, the one Implement was told to keep updated — while the harness's
+plan used to write the project's PLAN.md as the *live* copy (the one injected as
+an instruction, the one Implement was told to keep updated), while the harness's
 own record under ``~/.tacit/plans`` was a note nothing read. Now the session file
 is the plan of record, nothing is written into the project, and what keeps the plan
 alive across compaction is a ~100-token pointer rebuilt into the standing system
@@ -12,7 +12,7 @@ This file checks four things: that approval writes exactly one file in the right
 place and nothing in the project; that the pointer exists for a session that has a
 plan and says nothing for one that does not; that ``planFile`` survives the record
 rewrites a socket performs; and that a project's own PLAN.md is now a document to
-be found rather than an instruction to be obeyed — including when it still carries
+be found rather than an instruction to be obeyed; including when it still carries
 the marker stamp the old writer used to promote it.
 """
 
@@ -146,7 +146,7 @@ class TestPlanFileSurvivesARewrite(Isolated):
         store.save(stale)
         again = store.get(rec["id"])
         self.assertTrue(again.get("planFile"),
-                        "planFile dropped by a record rewrite — the pointer dies")
+                        "planFile dropped by a record rewrite; the pointer dies")
 
 
 class TestTheProjectFileIsADocumentNow(Isolated):

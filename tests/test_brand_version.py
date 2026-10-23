@@ -2,7 +2,7 @@
 
 `static/index.html` used to hardcode `<span class="brand-sub">Default Harness</span>`.
 Nothing in `app.js` or `platform.js` ever wrote that element, so it was not the
-active profile — it was a fixed string that reads like a claim about one, and it
+active profile; it was a fixed string that reads like a claim about one, and it
 was false for every install using a profile other than "default". The version, by
 contrast, is a fact the server already knows: `VERSION` sits at the repo root and
 `autoupdater._local_version()` reads it, because the updater has to compare it
@@ -12,10 +12,10 @@ What this pins:
 
 * `/api/info` carries `version`, and it is the *same string the updater compares*,
   not a second reader of the file. Two readers drift; one reader cannot.
-* A checkout with no `VERSION` yields `""` — the client then says "version
+* A checkout with no `VERSION` yields `""`; the client then says "version
   unknown" instead of showing a blank that looks like a broken page.
-* Settings > Server shows both sides of the update comparison. "Up to date —
-  version X" used to name only the remote, so a person could not tell which
+* Settings > Server shows both sides of the update comparison. The old "Up to
+  date" label named only the remote version, so a person could not tell which
   checkout had been checked.
 * The markup no longer contains the old claim.
 
@@ -125,7 +125,7 @@ class TestBrandSlot(unittest.TestCase):
     def test_the_slot_is_actually_made_visible(self):
         # The span ships `hidden`, and style.css:787 makes `[hidden]`
         # `display: none !important`. A writer that only sets textContent puts
-        # the version in the DOM where nobody can ever see it — and nothing in
+        # the version in the DOM where nobody can ever see it, and nothing in
         # this file would notice, because these assertions read source text.
         # That is the shape of bug this pins: the feature is written, tested and
         # permanently invisible.

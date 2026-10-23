@@ -1,17 +1,17 @@
 """the deleted plan item 5, the "Lightweight" slice: what the browser loads, and how little of it.
 
-The plan's rule is precise — *"one delegated listener per surface, no per-message
-listeners"* — because the transcript is the one surface that grows without bound.
+The plan's rule is precise: *"one delegated listener per surface, no per-message
+listeners"*, because the transcript is the one surface that grows without bound.
 A listener built into a row is not one listener; it is one listener multiplied by
 every message in the longest session you ever open, attached at render time, on the
 hot path.
 
 Before this slice, `appendMsg()` attached a click listener to every assistant row
 (`.reason-toggle`) and every user row (`.msg-edit`), and each tool card attached one
-to its `.tool-head` — at both build sites. Tool cards are the worst of them: a single
+to its `.tool-head`; at both build sites. Tool cards are the worst of them: a single
 turn can produce dozens, so the transcript's most numerous node carried its own
 listener. Meanwhile the surface already had a delegated click handler for
-`.copy-btn`, so both patterns were live at once — which is how "no per-message
+`.copy-btn`, so both patterns were live at once, which is how "no per-message
 listeners" survives for months: nothing checked it, and the one place that did check
 (copy buttons) looked like the rule was followed.
 
@@ -20,12 +20,12 @@ listener and that one handler routes the four clickable classes a row can produc
 That a click still opens the right card is a browser question (see the recorded deviation below).
 
 Scope line, deliberately drawn: the rule is about what the *renderer* multiplies.
-Nodes built when you act — the edit dialog's Save/Cancel, a rename input, a toast —
+Nodes built when you act; the edit dialog's Save/Cancel, a rename input, a toast:
 keep their own listeners and are checked by nothing here. They exist one at a time
 and die when the interaction ends; a tool card exists per tool call per turn for the
 life of the session. That is the difference the deleted plan is protecting, so the guards
 cover `appendMsg()` and the card builders and leave the dialogs alone. Panel rows
-(`platform.js`, `harness.js`, `git.js`) still attach one listener per row — bounded,
+(`platform.js`, `harness.js`, `git.js`) still attach one listener per row; bounded,
 rebuilt on open, and rewriting ~30 of them is a browser-verification task, recorded
 as a deviation rather than done blind.
 
@@ -41,7 +41,7 @@ Re-measured 2026-10-13, raw / gzip: app.js 125,418 / 37,871 · style.css
 git.js 29,327 / 8,570 · harness.js 24,181 / 7,117 · assistant.js 21,614 / 6,684 ·
 delegation.js 15,817 / 5,163. **Total 422,318 raw / 107,357 gzip.**
 Two things moved, and only one of them is this change:
-* +16,431 raw happened before it — the 2026-10-12 baseline was already stale, and
+* +16,431 raw happened before it; the 2026-10-12 baseline was already stale, and
   the budget had 101 bytes of headroom left when this started. A budget that is
   nearly spent reads as a passing test, not as a warning; that is the real finding
   here, and it is why the number is re-measured rather than nudged.
@@ -63,7 +63,7 @@ STATIC = ROOT / "static"
 RAW_BASELINE = 450_542
 GZIP_BASELINE = 115_372
 # Re-measured at twenty themes: style.css 120,906 / 23,042, every other file
-# unchanged. The ten added theme blocks cost 11,207 raw and 2,696 gzip — about
+# unchanged. The ten added theme blocks cost 11,207 raw and 2,696 gzip; about
 # 1.1 KB each, which is 29 tokens plus the comment saying what the world is and
 # why its hues sit where they do.
 # baseline + ~4%, the same margin the 2026-10-12 numbers were set with.
@@ -84,7 +84,7 @@ GZIP_BASELINE = 115_372
 # The gzip side is the one that moved past its line: the old budget had 8,076 B of
 # raw headroom and looked comfortable, but gzip headroom was down to a few hundred
 # bytes, and prose comments compress far less than the code they describe. Same
-# lesson the 2026-10-13 note records — a budget that is nearly spent reads as a
+# lesson the 2026-10-13 note records; a budget that is nearly spent reads as a
 # passing test rather than a warning, so both numbers are re-measured here rather
 # than nudged.
 # Re-measured 2026-10-14, after the phone page and its script left static/.
@@ -95,7 +95,7 @@ GZIP_BASELINE = 115_372
 # 460,789 raw / 121,871 gzip; union 484,724 raw / 127,322 gzip. Each budget is that
 # plus ~4%, the margin every note above was set with.
 #
-# The previous numbers were 2% and 1.7% of headroom away from the page's real load —
+# The previous numbers were 2% and 1.7% of headroom away from the page's real load:
 # spent, not warning, which is the failure this file's own notes keep naming.
 #
 # Raised again for the Settings fallback-model picker: `platform.js` grew by about
@@ -118,7 +118,7 @@ SHIPPED_GZIP_BUDGET = 144_500
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
-# Reviewed as the guard intends — it is built by appendMsg() with no listener of its
+# Reviewed as the guard intends; it is built by appendMsg() with no listener of its
 # own, routed by the one handler, and it opens the overlay's existing compare rather
 # than growing a second snapshot surface. The set stays closed against new clickables.
 ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit", ".msg-snap"}
@@ -132,7 +132,7 @@ def _code(src):
     """`src` with comments blanked out, strings intact.
 
     Searching raw source finds the word `addEventListener` in a comment explaining
-    why it is gone — which reads as a pass or a failure depending on prose.
+    why it is gone, which reads as a pass or a failure depending on prose.
     """
     out, i, n = [], 0, len(src)
     while i < n:
@@ -192,7 +192,7 @@ def _block(src, brace_idx):
             if depth == 0:
                 return src[brace_idx:i + 1]
         i += 1
-    raise AssertionError("unbalanced braces — the extractor needs a look")
+    raise AssertionError("unbalanced braces; the extractor needs a look")
 
 
 def _function_body(src, name):
@@ -257,7 +257,7 @@ class ServedBundleTests(TestCase):
         """
         body = _function_body((STATIC / "app.js").read_text(encoding="utf-8"), "appendMsg")
         self.assertNotIn("addEventListener", body,
-                         "appendMsg() attaches a listener to a row — that is a "
+                         "appendMsg() attaches a listener to a row, that is a "
                          "listener per message. Route it through the delegated "
                          "handler on messagesEl instead.")
 
@@ -272,7 +272,7 @@ class ServedBundleTests(TestCase):
         app = (STATIC / "app.js").read_text(encoding="utf-8")
         hits, handler = _delegated_handler(app)
         self.assertEqual(len(hits), 1,
-                         f"{len(hits)} click listeners on messagesEl — the surface "
+                         f"{len(hits)} click listeners on messagesEl; the surface "
                          "is meant to have one")
         self.assertIn("closest", handler,
                       "the handler on the surface is not delegating (no closest())")
@@ -281,11 +281,11 @@ class ServedBundleTests(TestCase):
         """The routed set is pinned both ways: nothing missing, nothing unaccounted.
 
         A new clickable inside a row that nobody added a branch for is a silent
-        dead button — the same class of failure as a `<script>` that 404s.
+        dead button; the same class of failure as a `<script>` that 404s.
 
         Only `e.target.closest(...)` counts as routing. The handler also calls
         `closest()` on the element it just matched, to find the container to act
-        on (`.code-block`, `.reason-block`, `.tool-card`, `.msg`) — pinning those
+        on (`.code-block`, `.reason-block`, `.tool-card`, `.msg`); pinning those
         too was my first draft and it failed immediately, because they are not
         clickables, they are the same target's ancestry.
         """
@@ -365,7 +365,7 @@ class PageWeightTests(TestCase):
                          "loaded by either page - dead weight, or a missing reference")
 
     def test_the_bundle_needs_no_build_step(self):
-        """"No new dependencies, no build step, no framework" — checked, not assumed.
+        """"No new dependencies, no build step, no framework"; checked, not assumed.
 
         `package.json` at the repo root does NOT contradict this: it is the optional
         Playwright driver for the browser tool and the frontend never reads it. An
@@ -376,7 +376,7 @@ class PageWeightTests(TestCase):
             code = _code(f.read_text(encoding="utf-8"))
             self.assertNotIn("require(", code, f"{f.name} expects a module loader")
             self.assertIsNone(re.search(r"^\s*import[\s(*]", code, re.M),
-                              f"{f.name} uses import — it is loaded as a classic script")
+                              f"{f.name} uses import; it is loaded as a classic script")
         pkg = ROOT / "package.json"
         if pkg.is_file():
             data = pkg.read_text(encoding="utf-8")
@@ -396,7 +396,7 @@ class BundleParsesTests(TestCase):
     def test_every_served_script_parses(self):
         node = shutil.which("node")
         if not node:
-            self.skipTest("node not on PATH — syntax check unavailable")
+            self.skipTest("node not on PATH; syntax check unavailable")
         _, refs = _served_files()
         for r in refs:
             if not r.endswith(".js"):

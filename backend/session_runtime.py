@@ -54,7 +54,7 @@ _assistants: dict[str, dict] = {}
 # the autonomy chain and the last store write follow the pop), so a thread
 # looked up by session id is already unreachable while it is still running.
 # `shutdown()` needs the handle that lives as long as the thread does, or a
-# turn's final write outruns whatever the caller has already given back —
+# turn's final write outruns whatever the caller has already given back,
 # which is how a redirected test home leaks a session into the real one.
 _drivers: set[threading.Thread] = set()
 
@@ -126,7 +126,7 @@ def _autonomy_launch(sid: str, *, ok: bool) -> dict:
     """Say whether this cycle's launch worked, and return the state after it.
 
     Separate from ``_autonomy_bump`` because a launch that never happened
-    charges no cycle — the budget pays for work, not for attempts — but it does
+    charges no cycle (the budget pays for work, not for attempts) but it does
     pay attention, so the consecutive count has to move on its own.
     """
     try:
@@ -185,8 +185,8 @@ def _autonomy_note(sid: str, reason: str) -> dict:
 
 def goal_set(sid: str, text: str) -> str:
     """Pin (or clear) the Goal. Written through patch, so it lands the same
-    second whether it came from the panel or the socket, and the next turn —
-    including a turn already in flight, since the block is read from disk —
+    second whether it came from the panel or the socket, and the next turn (
+    including a turn already in flight, since the block is read from disk)
     sees it."""
     goal = str(text or "").strip()[:20000]
     store.patch(sid, assistantGoal=goal)
@@ -637,7 +637,7 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
 
     This thread belongs to the runtime, not to the socket that asked for the
     turn: it was started before :func:`start_turn` returned, so no browser
-    event can prevent it from existing, and its ``finally`` — the epilogue —
+    event can prevent it from existing, and its ``finally`` (the epilogue)
     is the only writer of the transcript.
     """
     stop = run["stop"]
@@ -747,7 +747,7 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
             store.append(rec, "assistant", step.get("text") or "", extra or None)
         # A compaction inside the turn only becomes real here. The worker folded
         # its own wire list to stay under the window, the parent writes the record
-        # from `trace` — every step verbatim — and unless the note crosses that
+        # from `trace` (every step verbatim) and unless the note crosses that
         # boundary the session keeps the whole transcript while the meter, and
         # `should_compact` reading it, describe the shrunken request. That is the
         # pair of facts that let a session sit at 99% for sixteen turns with
@@ -928,8 +928,8 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # this by opening a fresh socket, whose URL re-read the record; switching
         # in place exposes it, so the turn asks the disk which mode it is in.
         # One read, two consumers: the mode, and the plan pointer below. Neither is
-        # owned by this socket — the mode by the metadata POST, the plan by plan
-        # mode's driver thread — so both come off disk.
+        # owned by this socket (the mode by the metadata POST, the plan by plan
+        # mode's driver thread), so both come off disk.
         disk = store.get(sid) or {}
         if disk.get("mode"):
             rec["mode"] = disk["mode"]

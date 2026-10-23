@@ -2,12 +2,12 @@
 theme cannot move it.
 
 `static/style.css` used to carry 23 distinct raw `font-size` px values and 23
-distinct spacing px values across ~500 rules — 11.8px, 12.8px, 15.5px, i.e. sizes
+distinct spacing px values across ~500 rules; 11.8px, 12.8px, 15.5px, i.e. sizes
 tuned by eye per rule rather than chosen from a scale. They are now `--fs-N` /
 `--sp-N` tokens declared in the first `:root` block.
 
 The second slice folded in the other two length properties: `margin` (18 distinct
-values, mapped onto the SAME `--sp-N` steps rather than a parallel family — two
+values, mapped onto the SAME `--sp-N` steps rather than a parallel family; two
 names for one 8px is two truths about it) and `border-radius` (`--rd-N` for the
 values that had no token, reusing `--radius` 12px / `--radius-sm` 8px /
 `--radius-pill` 999px where they already existed).
@@ -20,7 +20,7 @@ Two invariants, both cheap to break by accident:
      silently changes spacing.
   2. **Every `var(--fs-N)` / `var(--sp-N)` reference must resolve.** An undefined
      custom property makes the declaration invalid at computed-value time, so the
-     property falls back to its inherited/initial value — the rule does not look
+     property falls back to its inherited/initial value; the rule does not look
      broken, it just quietly loses its size.
 
 The migration that created the tokens was 1:1 with the values already in use, so it
@@ -39,7 +39,7 @@ CSS_RAW = (Path(__file__).resolve().parents[1] / "static" / "style.css").read_te
 )
 
 # Strip comments BEFORE parsing. The banner at the top of the file says
-# "5 themes via [data-theme] on <html>" in prose — without this, the first rule's
+# "5 themes via [data-theme] on <html>" in prose; without this, the first rule's
 # "selector" is that comment plus `:root`, so a substring test for `data-theme`
 # flags the scale's own home block as a theme. The failure looks exactly like a real
 # violation and is not one; a CSS parser that reads comments as selectors is the bug.
@@ -58,7 +58,7 @@ RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
 
 # Length properties that went through the migration. Percentages and calc() stay
 # literal: `border-radius: 50%` and `margin-left: calc(var(--sidebar-w) * -1)` are
-# not lengths you would name on a scale. `border` widths are out too — a 1px
+# not lengths you would name on a scale. `border` widths are out too; a 1px
 # hairline is not a spacing decision.
 PX_DECL = re.compile(
     r"(?<![\w-])(font-size|gap|row-gap|column-gap|padding|padding-[\w-]+"
@@ -80,7 +80,7 @@ def ladder(prefix):
     """A scale family's declared values, in step order, as floats.
 
     Reads the numbers rather than counting the names, because the property that matters
-    is how far apart the steps are — not how many there are.
+    is how far apart the steps are, not how many there are.
     """
     out = []
     for sel, body in rules():
@@ -124,7 +124,7 @@ class TestScaleIsDeclared(unittest.TestCase):
         self.assertLessEqual(max(ratios), 1.35, f"type ladder has a jump, not a step: {max(ratios)}")
 
     def test_scale_is_declared_only_in_the_bare_root_block(self):
-        """`:root` and only `:root` — not a theme, not a component rule."""
+        """`:root` and only `:root`, not a theme, not a component rule."""
         offenders = []
         for sel, body in rules():
             defs = scale_defs(body)
@@ -139,7 +139,7 @@ class TestScaleIsDeclared(unittest.TestCase):
     def test_themes_never_redefine_the_scale(self):
         """The test the task asks for: a theme block must not set any scale token.
 
-        Colour tokens *are* allowed here — that is the point of a theme. Spacing and
+        Colour tokens *are* allowed here, that is the point of a theme. Spacing and
         type are not: they are theme-independent by design.
         """
         for sel, body in rules():
@@ -148,7 +148,7 @@ class TestScaleIsDeclared(unittest.TestCase):
             defs = scale_defs(body)
             self.assertFalse(
                 defs,
-                f'theme block "{sel}" redefines scale tokens {sorted(defs)} — '
+                f'theme block "{sel}" redefines scale tokens {sorted(defs)}; '
                 f"themes may recolour but never re-space",
             )
 
@@ -174,7 +174,7 @@ class TestScaleIsUsed(unittest.TestCase):
         self.assertEqual(sorted(refs - defined), [],
                          "var() references to undefined scale tokens (these silently "
                          "fall back to the initial value)")
-        self.assertTrue(refs, "no scale references at all — migration reverted?")
+        self.assertTrue(refs, "no scale references at all; migration reverted?")
 
     def test_no_raw_px_left_in_the_migrated_properties(self):
         """Every length property that went through the migration stays on the scale.
@@ -182,11 +182,11 @@ class TestScaleIsUsed(unittest.TestCase):
         Scope is font-size, gap, padding, margin and border-radius. What is NOT
         covered, and is not an oversight: `border` widths (a 1px hairline is not a
         spacing decision), percentages (`border-radius: 50%` on avatars), and
-        `calc()` offsets like `margin-left: calc(var(--sidebar-w) * -1)` — none of
+        `calc()` offsets like `margin-left: calc(var(--sidebar-w) * -1)`; none of
         those are lengths you would name on a scale.
         """
         # Skip the :root/theme region: the scale's own px values live there by
-        # design. The last token declaration line ends that region — nothing after
+        # design. The last token declaration line ends that region; nothing after
         # it may hard-code a migrated property.
         last_decl = max(m.start() for m in re.finditer(r"^\s*--[\w-]+\s*:", CSS, re.M))
         rest = CSS[CSS.index("\n", last_decl) + 1:]

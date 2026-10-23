@@ -2,14 +2,14 @@
 markup?  (the deleted plan item 5, "Lightweight" / the `innerHTML` audit)
 
 the deleted plan filed "the `innerHTML` sites' XSS audit" under *needs a browser*. That is the
-wrong tool. Clicking a page cannot prove an escaper — a click-through shows you the one
-input you thought to try — and it says nothing about the rest of the assignment sites.
+wrong tool. Clicking a page cannot prove an escaper (a click-through shows you the one
+input you thought to try), and it says nothing about the rest of the assignment sites.
 What settles the question is **executing the renderer**, node is available here, so this
 file lifts the real `esc` / `inlineMd` / `md` out of `static/app.js`, runs them under
 node, and asserts on the HTML that comes back.
 
 Measured before writing any of it: `md()` escapes at `app.js:1667` **and** at both
-re-insertion sites — fenced code at `:1690`, table cells at `:1695` — and it autolinks
+re-insertion sites (fenced code at `:1690`, table cells at `:1695`) and it autolinks
 only `https?:`, so `[x](javascript:…)` never becomes an `<a href>`. The renderer is
 sound today. Nothing in this repo proved that, and the property is exactly one dropped
 `esc()` away from being false, because code blocks and tables are extracted **before**
@@ -18,7 +18,7 @@ escaping: re-inserting them unescaped puts raw model text into `innerHTML` at `:
 rendering something an agent wrote.
 
 Tool results and reasoning are the other two untrusted sinks. They never pass through
-`md()` — they are written with `textContent`, which cannot parse markup at all. That is
+`md()`; they are written with `textContent`, which cannot parse markup at all. That is
 a claim about source text, so it is guarded statically rather than executed.
 """
 
@@ -79,16 +79,16 @@ def _js(cases, src):
 
 # ─────────────────────── the static half of the audit ───────────────────────
 # Literal markup is stripped before matching. The first draft matched the bare word
-# `reason` against any line containing innerHTML and flagged app.js:1135 — a skeleton
+# `reason` against any line containing innerHTML and flagged app.js:1135; a skeleton
 # write whose only "payload" was the class name `reason-block`. A class name is not
 # text an agent wrote; it is a name the front-end chose.
 _LITERAL = re.compile(r"`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 # Which names carry agent-written text, measured against app.js rather than guessed:
-# `m.result` / `t.result` / `.reason` / `.content` / `.reasoning`, plus — at the four
-# re-render sinks — `_raw` (the streaming buffer) and `text` (the argument at :1333).
+# `m.result` / `t.result` / `.reason` / `.content` / `.reasoning`, plus (at the four
+# re-render sinks) `_raw` (the streaming buffer) and `text` (the argument at :1333).
 # `_raw` and `text` were missing from the first draft, which left **4 of the 5 audited
 # sinks unexamined**: deleting `md()` from `c.innerHTML = md(text)` passed the guard.
-# Widening is free — measured 2026-10-13, the wider list matches 4 live sink lines and
+# Widening is free; measured 2026-10-13, the wider list matches 4 live sink lines and
 # 0 non-md() lines, so it adds coverage without inventing false positives.
 _PAYLOAD = re.compile(r"\b(?:m|t)\.result\b|\.reason\b|\.content\b|\.reasoning\b"
                       r"|_raw\b|\btext\b")
@@ -124,7 +124,7 @@ CASES = {
 }
 
 
-@unittest.skipUnless(shutil.which("node"), "node not on PATH — renderer cannot be run")
+@unittest.skipUnless(shutil.which("node"), "node not on PATH; renderer cannot be run")
 class RendererEscapes(unittest.TestCase):
     """Behavioural: these are strings `md()` actually returned."""
 
@@ -134,7 +134,7 @@ class RendererEscapes(unittest.TestCase):
 
     def test_the_extraction_is_the_real_renderer(self):
         """Anti-vacuity. A slice that grabbed a comment would make every case below
-        fail in the *harness*, not in the assertion — so name the parts."""
+        fail in the *harness*, not in the assertion, so name the parts."""
         src = renderer_source()
         for needed in ("function esc(t)", "function inlineMd(t)", "function md(src)",
                        "const TBL_SEP", "splitTableRow"):
@@ -181,7 +181,7 @@ class RendererEscapes(unittest.TestCase):
 
         The scheme itself is *supposed* to survive: it comes back as inert text inside a
         paragraph, which is what the first draft of this test wrongly forbade. What must
-        never appear is an anchor carrying it — that is the actual execution vector.
+        never appear is an anchor carrying it, that is the actual execution vector.
         """
         out = self.out["js_url"]
         self.assertNotIn("<a", out)
@@ -215,7 +215,7 @@ class TheGuardHasTeeth(unittest.TestCase):
     def test_widening_the_link_matcher_is_caught(self):
         """The `javascript:` case means nothing unless a real change to the link rule
         turns it red. `inlineMd` links `https?:` only (`app.js:1629`); generalise the
-        target and the scheme becomes a live href — the hole the deleted plan filed under
+        target and the scheme becomes a live href; the hole the deleted plan filed under
         *needs a browser*, closed without one."""
         src = renderer_source()
         line = next(l for l in src.splitlines() if "https?" in l and "replace" in l)
@@ -242,7 +242,7 @@ class TheGuardHasTeeth(unittest.TestCase):
 
     def test_dropping_md_at_any_audited_sink_is_caught(self):
         """Teeth for the *static* guard, on every sink that carries model text. Each
-        plant is the realistic regression — the escaper deleted, the render still
+        plant is the realistic regression; the escaper deleted, the render still
         working. The first draft's pattern saw only `last.content`, so the other three
         could regress with the suite green."""
         plants = [
@@ -263,7 +263,7 @@ class TheGuardHasTeeth(unittest.TestCase):
 class UntrustedSinksStayOnTextContent(unittest.TestCase):
     """Tool results and reasoning are the other model-authored text in the transcript.
     They bypass `md()` entirely and are assigned with `textContent`, which cannot parse
-    markup — so the guarantee does not depend on an escaper at all."""
+    markup, so the guarantee does not depend on an escaper at all."""
 
     def test_no_untrusted_payload_is_written_as_html(self):
         self.assertEqual([], payload_violations(APP),
@@ -272,7 +272,7 @@ class UntrustedSinksStayOnTextContent(unittest.TestCase):
     def test_the_guard_is_not_looking_at_nothing(self):
         """Anti-vacuity for the guard above: an empty `bad` list is also what you get
         when the payload regex matches no line at all. The audited sinks must actually
-        be inside the pattern's view — 3 of the 4 carry model text through a name in
+        be inside the pattern's view; 3 of the 4 carry model text through a name in
         `_PAYLOAD` (the 4th is the literal `'(empty response)'`, which has no payload).
 
         It was 4 of 5 until the live-bubble rework: `resumeLiveStream()` used to paint
@@ -284,7 +284,7 @@ class UntrustedSinksStayOnTextContent(unittest.TestCase):
                 and _PAYLOAD.search(_LITERAL.sub(" ", s.strip()))]
         self.assertEqual(3, len(seen),
                          f"the payload pattern reaches {len(seen)} innerHTML lines; "
-                         "the audited sinks are 3 payload-carrying + 1 literal — if this "
+                         "the audited sinks are 3 payload-carrying + 1 literal; if this "
                          "drops, the guard has stopped looking at the things it guards")
 
     def test_the_three_known_sinks_are_textContent(self):

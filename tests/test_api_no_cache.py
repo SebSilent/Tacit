@@ -9,7 +9,7 @@ Checked, and it was not covered: `/api/sessions/registry` came back with no
 Cache-Control, no ETag, no Last-Modified. A response with no freshness information
 at all is the one a browser is freest to keep. `app.js:197` reads exactly that
 endpoint with a bare `fetch()` to build the session list, so after a delete the
-page could repaint a session the disk no longer has — the reported symptom, with
+page could repaint a session the disk no longer has; the reported symptom, with
 `store.remove()` behaving perfectly the whole time. `transport.js`'s `getJSON`
 sends a request-side `Cache-Control: no-cache`, which is a hint to proxies and is
 not what governs a browser's cache; the response header is.
@@ -65,7 +65,7 @@ class TheListTheBrowserKeeps(IsolatedStore):
     """The endpoints the session list is built from."""
 
     def test_registry_is_not_cacheable(self):
-        # app.js:197 — the payload that decides which sessions the sidebar shows.
+        # app.js:197; the payload that decides which sessions the sidebar shows.
         # This is the one that reappeared.
         r = self.client.get("/api/sessions/registry")
         self.assertEqual(r.status_code, 200, r.text[:200])
@@ -99,14 +99,14 @@ class WhatStaysCacheable(IsolatedStore):
     """The page is already covered; the assets are covered a different way."""
 
     def test_the_page_is_no_cache(self):
-        # PLAN:156 — nothing in the suite pinned this before, so a refactor of the
+        # PLAN:156; nothing in the suite pinned this before, so a refactor of the
         # FileResponse call could drop it silently.
         self.assertEqual(self.header("/"), "no-cache")
 
     def test_static_assets_keep_the_version_query_mechanism(self):
         """/static is deliberately outside the rule: `?v=NN` + ETag revalidation is
         how a restart swaps app.js without a hard refresh (restart.ps1's premise).
-        Asserting the absence here is a plant — if someone widens the middleware to
+        Asserting the absence here is a plant; if someone widens the middleware to
         /static, every page load re-downloads ~450 KB and this says so."""
         r = self.client.get("/static/transport.js")
         self.assertEqual(r.status_code, 200)

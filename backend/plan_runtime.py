@@ -160,7 +160,7 @@ def _launch(sid: str, p, gen, loop: asyncio.AbstractEventLoop | None) -> None:
                         (ev.get("type") == "plan_status" and phase != last):
                     _persist(p)
                     last = phase
-        except Exception as exc:  # noqa: BLE001 — a plan that dies says why
+        except Exception as exc:  # noqa: BLE001; a plan that dies says why
             turn_bus.publish(sid, {"type": "plan_status", "phase": "failed",
                                    "detail": str(exc), "explorers": [], "sid": sid},
                              channel=CHANNEL)
@@ -298,7 +298,7 @@ def implement(sid: str, rec: dict) -> dict:
 
     The fresh session is created here rather than by the viewer because the plan
     is no longer the viewer's to carry: which session implements the work is a
-    fact about the work. Planning chatter stays behind on purpose — the context
+    fact about the work. Planning chatter stays behind on purpose; the context
     that produced a plan is the worst place to implement it.
     """
     sid = str(rec.get("id") or sid or "")
@@ -318,12 +318,12 @@ def implement(sid: str, rec: dict) -> dict:
     # path onto its record is what lets `pointer()` name it on every turn: the copy
     # inlined in `prompt` is real but temporary, and a long implementation is exactly
     # the case where it gets summarised into a paraphrase of a paraphrase. Only the
-    # path travels, not the plan state — a fresh session that restored an
+    # path travels, not the plan state; a fresh session that restored an
     # approved-plan strip would offer Implement again and spawn a sibling doing the
     # same work.
     try:
         store.patch(fresh["id"], planFile=p.plan_file or None)
-    except Exception:  # noqa: BLE001 — the first message already names the path
+    except Exception:  # noqa: BLE001; the first message already names the path
         pass
     return {"ok": True, "data": {"sid": fresh["id"], "name": fresh["title"],
                                  "prompt": prompt, "plan_file": p.plan_file}}

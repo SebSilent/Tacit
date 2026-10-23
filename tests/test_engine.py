@@ -1,9 +1,9 @@
 """Tests for the provider wire protocol and the WebSocket contract.
 
 These are the two layers that had no coverage at all. `ai/engine.py` is the only
-code that touches a provider's actual bytes, and every quirk it absorbs — reasoning
+code that touches a provider's actual bytes, and every quirk it absorbs; reasoning
 under three different keys, tool-call arguments arriving in fragments, a usage
-chunk that comes after [DONE] — was untested, so any of them could regress
+chunk that comes after [DONE]; was untested, so any of them could regress
 silently. The WebSocket is the only path the interface has into a turn.
 
 Both are driven against fakes: no test here reaches a network or a real model.
@@ -796,7 +796,7 @@ class TurnBusReplayTest(unittest.TestCase):
                 self.assertNotIn("read alpha.py and tell me", str(e.get("delta", "")))
             gate.set()
             # The starting socket is the viewer under test: it stays open
-            # until the turn is over — closing it early cancels its pump.
+            # until the turn is over; closing it early cancels its pump.
             self._drain(ws)
         # The worker's finally saves the transcript before it releases the
         # bus, so a dead bus means the store already holds the turn.

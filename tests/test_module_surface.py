@@ -6,7 +6,7 @@ namespaces (`window.Tacit`, `window.TacitTheme`, `window.TacitAssistant`,
 `window.TacitDelegation`, `window.TacitGit`, `window.TacitHarness`,
 `window.TacitPlatform`). Nothing in the suite looked at that surface before this file:
 a rename on one side, or a key dropped from an object literal, turns a settings panel or
-a git panel into a silent no-op in the browser — the JS twin of `var(--danger, #e5534b)`,
+a git panel into a silent no-op in the browser; the JS twin of `var(--danger, #e5534b)`,
 the token that does not exist and so always fell back, which `test_color_tokens.py`
 catches on the CSS side.
 
@@ -20,21 +20,21 @@ each would have produced a *false defect report* against correct code:
     `window.Tacit || {}` *argument*, not the literal. Brace-matching from there yields an
     empty body and silently loses all eight `window.Tacit` members.
 
-Reads are collected in all four forms they appear in — `N.k`, `window.N.k`,
-`N['k']`, and through a local alias (`const T = window.TacitTheme` in `harness.js`) —
+Reads are collected in all four forms they appear in; `N.k`, `window.N.k`,
+`N['k']`, and through a local alias (`const T = window.TacitTheme` in `harness.js`),
 and the alias only counts inside the file that declares it, or a one-letter name like
 `T` would invent reads elsewhere.
 
 The dead exports (`apply`, `load`, `togglePanel`, `clear`, `open`, `close`, `refresh`,
 `run`, `openSnapshots`) are *not* treated as orphans: they are deliberate public surface
-for the panel buttons and for `index.html`. The invariant is one-directional — every read
-resolves — and the export set is pinned so the surface changes by review, not by accident.
+for the panel buttons and for `index.html`. The invariant is one-directional (every read
+resolves), and the export set is pinned so the surface changes by review, not by accident.
 
 **There is deliberately no load-order test.** `index.html` loads `app.js` first, then
 `git`/`harness`/`platform`/`assistant`/`delegation`, and it is tempting to guard "the
 owner loads before its readers". Measured, that is false of the code as it works:
 `app.js` reads `window.TacitAssistant` and `window.TacitDelegation`, whose owners load
-*later*, at `:464`, `:467`, `:646`, `:780`, `:880`, `:888` — every one inside a function
+*later*, at `:464`, `:467`, `:646`, `:780`, `:880`, `:888`; every one inside a function
 and every one feature-detected as `window.N && window.N.k`, so it resolves at call time,
 not load time. `harness.js:79`'s `const T = window.TacitTheme` is likewise inside
 `renderAppearancePanel()`. No read here captures at evaluation, so script order is not the
@@ -88,7 +88,7 @@ EXPECTED_READS = {
               "previewChimes", "refreshSoundPref", "sendMessage", "setDensity", "toast"},
     # `preview`/`endPreview` reviewed in the hover-preview change: the Appearance
     # panel reads them through the `const T =` alias. `apply` is exported but never
-    # shows up here — the detector subtracts call/apply/bind as Function.prototype
+    # shows up here; the detector subtracts call/apply/bind as Function.prototype
     # names, so `T.apply(...)` is invisible to it. Known blind spot, not a missing read.
     "TacitTheme": {"current", "endPreview", "preview", "themes"},
     "TacitAssistant": {"handle", "sessionChanged", "setExternalBusy"},
@@ -199,7 +199,7 @@ def aliased(text, name):
 
 
 def _reads_off(t, base):
-    """`base.k` and `base['k']` — bracket form included, or a rename written in one of
+    """`base.k` and `base['k']`; bracket form included, or a rename written in one of
     the two styles is invisible to the scan."""
     keys = set()
     for m in re.finditer(r"\b%s\.(\w+)" % base, t):
@@ -289,7 +289,7 @@ class TestModuleSurface(unittest.TestCase):
         self.assertIn("refreshSoundPref2", surface({"p.js": typo})["Tacit"][1]
                       - surface({"p.js": typo})["Tacit"][0])
 
-        # 2. the export dropped — the read survives, the panel does not
+        # 2. the export dropped; the read survives, the panel does not
         dropped = app.replace("  refreshSoundPref: () => loadSoundPref(),\n", "", 1)
         self.assertNotEqual(dropped, app, "the export anchor moved")
         s = surface({"a.js": dropped, "p.js": plat})

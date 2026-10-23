@@ -1,4 +1,4 @@
-"""The launch path — the same one for the Restart button and for a person.
+"""The launch path; the same one for the Restart button and for a person.
 
 Item 4's complaint in one line: the button started the server *itself*
 (`python -m backend.main`, inheriting whatever environment the dying process
@@ -102,7 +102,7 @@ def port_free(host: str, port: int) -> bool:
     The probe lives in extras (`_can_bind`) and is reused rather than copied:
     binding is the exact test the new server will face, and a connect against a
     live listener would fill its backlog and read as a free port that is not.
-    Importing lazily because extras imports *this* module — a top-level import
+    Importing lazily because extras imports *this* module; a top-level import
     would be a cycle.
     """
     from . import extras

@@ -1,4 +1,4 @@
-"""Stage 7: the autoupdater's transport is two plain GETs — no git, no keys.
+"""Stage 7: the autoupdater's transport is two plain GETs; no git, no keys.
 
 The HTTP seam (`_http_get`) is stubbed per test, so nothing here reaches the
 network. The archive is built in memory with `tarfile` in the GitHub shape
@@ -99,7 +99,7 @@ class AutoupdaterTest(unittest.TestCase):
         self.assertTrue(r["update_available"])
         self.assertEqual(r["current_version"], "1.0.0")
         self.assertEqual(r["latest_version"], "2.0.0")
-        # VERSION itself rides in the archive and differs — it counts.
+        # VERSION itself rides in the archive and differs; it counts.
         self.assertEqual(r["changed_count"], 2)
         self.assertEqual(r["new_count"], 1)
         self.assertEqual({e["path"] for e in r["changed_files"]},
@@ -139,7 +139,7 @@ class AutoupdaterTest(unittest.TestCase):
         # User state untouched.
         self.assertEqual((config.ROOT / "models.json").read_text(encoding="utf-8"),
                          '{"user": "state"}\n')
-        # A file upstream no longer has is reported, never deleted — the
+        # A file upstream no longer has is reported, never deleted; the
         # archive cannot tell "upstream removed this" from "the user added it".
         self.assertIn("backend/old.py", r["removed_upstream"])
         self.assertTrue((config.ROOT / "backend" / "old.py").exists())

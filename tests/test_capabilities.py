@@ -809,7 +809,7 @@ class TestStandalone(Isolated):
             self.assertFalse(got["satisfied"])
         # The other direction belongs to the probe: binaries present but the
         # dependency not working (docker.exe present, daemon down) is still
-        # not satisfied — and must say what is wrong and what would fix it.
+        # not satisfied, and must say what is wrong and what would fix it.
         # The old `satisfied == not missing` broke on exactly that third
         # state, and only on machines where the daemon happened to be down.
         if not got["satisfied"] and not got["missing"]:

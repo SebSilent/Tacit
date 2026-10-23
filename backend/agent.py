@@ -29,7 +29,7 @@ class ToolError(RuntimeError):
 
 
 def _root(project: str | None, session: str = "") -> Path:
-    """Where this turn's tools work. `config.work_root` owns the rule — see there.
+    """Where this turn's tools work. `config.work_root` owns the rule; see there.
 
     `session` is what makes a project-less turn land in its own scratch folder
     instead of the user's home directory. It is optional only so the call sites that
@@ -73,8 +73,8 @@ def _clip(text: str, limit: int | None = None) -> str:
 # can disagree: `cat`/`type` arrive from it, while head/tail/less/more/sed are added by
 # hand because no tool returns "the last N lines" and `sed` maps to edit_file there
 # (printing a range is the one shape where it is a dump). Absorbing the old hint this
-# way also fixes a gap: `type` — the file printer on Windows, which this platform runs
-# on — was never covered at all.
+# way also fixes a gap: `type` (the file printer on Windows, which this platform runs
+# on) was never covered at all.
 _DUMPERS = tuple(v for v, (tool, _) in guidance.SHELL_OVERLAP.items()
                  if tool == "read_file") + ("head", "tail", "less", "more", "sed")
 _FILE_TOKEN = re.compile(r"[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,6}")
@@ -260,7 +260,7 @@ def t_grep_files(pattern: str, path: str = ".", project: str | None = None,
             break
     body = "\n".join(rows) or "(no matches)"
     if full:
-        body += ("\n…(more matches; the list is capped — narrow the pattern or pass a "
+        body += ("\n…(more matches; the list is capped; narrow the pattern or pass a "
                  "subdirectory)")
     return _clip(body)
 
@@ -273,7 +273,7 @@ def _blocked_shell(command: str) -> bool:
 
     Checks every command position (the start of the line and of each `&&`,
     `||`, `;`, `|` segment, after wrappers like sudo/env), so `<vcs>`, `x &&
-    <vcs>`, pipes, subshells and absolute paths are all caught — while ordinary
+    <vcs>`, pipes, subshells and absolute paths are all caught, while ordinary
     arguments that merely mention the word (e.g. `grep foo .`) are not.
     A guardrail that keeps the model out of version control, not a jail.
     """
@@ -309,7 +309,7 @@ def _audit_overlap(cmd: str, hit: dict, mode: str, chars: int, session: str) -> 
 def t_run_shell(command: str, project: str | None = None, timeout: int | None = None,
                 session: str = "", on_output=None) -> str:
     """Run one shell command. `on_output` is injected by `call_tool`, never by the
-    model — it is not in the tool schema, so no argument list can bring one in. It
+    model; it is not in the tool schema, so no argument list can bring one in. It
     exists only so a person watching the card sees the run while it is happening;
     the string returned below, which is the model's entire view, is identical with
     or without it.
@@ -338,11 +338,11 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
         err = (res.get("stderr") or "ERROR: the command did not run").strip()
         if "timed out" in err:
             # A killed command may already have done something, and the obvious
-            # next move — run it again — is the one that hangs again. Say so here,
+            # next move (run it again) is the one that hangs again. Say so here,
             # where the model is reading it, rather than only in the step guidance.
             err += ("\nIt was killed, not finished: it may have partial side effects, and "
                     "re-running the same command will usually hang the same way. On Windows a "
-                    "piped find/findstr/more can block on a full pipe buffer — use a different "
+                    "piped find/findstr/more can block on a full pipe buffer; use a different "
                     "command shape, or pass a longer timeout if the work is genuinely slow.")
         return err
     out = res.get("stdout") or ""
@@ -423,13 +423,13 @@ def t_evidence(action: str, source: str = "", note: str = "", snippet: str = "",
 
 def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
                     session: str = "") -> str:
-    """Search durable memory on request — the retrieval half of jit and full.
+    """Search durable memory on request; the retrieval half of jit and full.
 
     ``memory_modes.recall_for`` is what the mode was designed to route this
     through, and nothing called it: a session in jit mode promised per-turn
     retrieval and had none, because retrieval needs the question, which only
     the model has. So the tool is the missing caller, and it goes through the
-    mode rather than around it — which is what makes a hit count as used and
+    mode rather than around it, which is what makes a hit count as used and
     push its expiry out.
     """
     res = memory_modes.recall_for(query, project=project or "",
@@ -439,7 +439,7 @@ def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
         # explicit and off retrieve nothing by design; say which rule applied
         # rather than reporting an empty search the model reads as "no memory".
         if memory_modes.mode() in ("explicit", "off"):
-            return ("memory retrieval is not enabled for this mode — only the notes "
+            return ("memory retrieval is not enabled for this mode, only the notes "
                     "injected at startup are available")
         return "No matching memories."
     audit.record("memory_retrieval", session=session, backend="memory", status="ok",
@@ -457,7 +457,7 @@ def t_memory_add(content: str, type: str = "other", scope: str = "global",
     This is the same rule the learning system applies to a rule worth keeping:
     Tacit may notice something, it may not decide on its own what the person
     will carry into every future session. An approved memory then goes through
-    the same startup budget as everything else — Settings > Memory is where it
+    the same startup budget as everything else; Settings > Memory is where it
     is read, approved and measured.
     """
     res = memory_store.add(content, type=type, scope=scope, confidence=confidence,
@@ -469,7 +469,7 @@ def t_memory_add(content: str, type: str = "other", scope: str = "global",
     audit.record("memory_proposed", session=session, backend="memory", status="ok",
                  memory_id=m["id"], tokens=int(m.get("token_estimate") or 0),
                  type=m.get("type"), scope=m.get("scope"))
-    return (f"proposed memory #{m['id']} (~{m['token_estimate']} tokens), pending review — "
+    return (f"proposed memory #{m['id']} (~{m['token_estimate']} tokens), pending review; "
             f"it is not injected anywhere until you approve it in Settings > Memory.")
 
 
@@ -483,13 +483,13 @@ def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     """The research tool, driven like a sub-agent: events stream, result lands.
 
     The old version ran the whole investigation and returned one string, which
-    meant the interface saw nothing until the report was finished — minutes of
+    meant the interface saw nothing until the report was finished; minutes of
     tool calls with no tool_start, no notify, nothing. This yields the aspects'
     events as they happen, tagged `research: True`, and puts the report in
     ``out["result"]`` at the end, exactly as `run_subagent` does for `task`.
 
     `parent_call_id` doubles as the research call's own card id, which is what
-    the heartbeats inside `research()` tick on — the one event type that stays on
+    the heartbeats inside `research()` tick on; the one event type that stays on
     the main transcript rather than becoming `delegation_activity`, because
     `session_runtime` only redirects text/reason/tool_start/tool_end/notify.
     ``ctx["stop"]`` is handed down too: a Stop press now abandons the call at the
@@ -698,20 +698,20 @@ TOOLS = [
         ["action"]),
     # Re-scoped on purpose. "Investigate a question across several sources" sold
     # this as deep research, and the only cost hint offered was "slower than a
-    # plain fetch" — which is true of almost everything. It is a bounded sweep
+    # plain fetch", which is true of almost everything. It is a bounded sweep
     # with a stated budget, so the budget goes in the description, read from
     # config so the sentence cannot drift away from the caps.
     _fn("research", f"Bounded multi-source check: up to {config.RESEARCH_ASPECTS} read-only "
                     f"sub-agents sweep in parallel ({config.research_steps()} steps each, "
                     f"{config.RESEARCH_TIMEOUT_S}s wall clock), then one cited report with an "
-                    "Uncertainties section. Costs far more than `fetch` — use it when the "
+                    "Uncertainties section. Costs far more than `fetch`; use it when the "
                     "question needs several sources, not one.",
         {"question": _S}, ["question"]),
     _fn("evidence", "Record a citable fact (action=add with source/note/snippet), read one back "
                     "(get, by id) or list what is recorded.",
         {"action": _S, "source": _S, "note": _S, "snippet": _S, "id": _S}, ["action"]),
     _fn("task", "Delegate a focused investigation to a sub-agent with its own fresh context. "
-                "Use it to map or search a codebase without filling your own context — only "
+                "Use it to map or search a codebase without filling your own context, only "
                 "its report comes back, so ask one narrow question per delegation.",
         {"prompt": _S}, ["prompt"]),
     _fn("mcp_list_servers", "List configured MCP servers: state, tool count and what their "
@@ -722,14 +722,14 @@ TOOLS = [
     _fn("mcp_activate_tools", "Make MCP tools callable for a few turns by injecting their "
         "schemas. Pass keys from mcp_search_tools. They deactivate on their own.",
         {"tool_keys": {"type": "array", "items": _S}, "ttl_turns": _I}, ["tool_keys"]),
-    _fn("mcp_call", "Call an MCP tool. Prefer this when you already know what you need — it "
+    _fn("mcp_call", "Call an MCP tool. Prefer this when you already know what you need; it "
         "costs no schema tokens. Destructive tools require confirm=true.",
         {"server_id": _S, "tool_name": _S,
          "arguments": {"type": "object"}, "confirm": {"type": "boolean"}},
         ["server_id", "tool_name"]),
     # Memory is one system, gated on its own mode (Settings > Memory). These two
     # schemas appear only while that mode is on, so an install with memory off
-    # pays nothing for a feature it is not using — the same rule the MCP helpers
+    # pays nothing for a feature it is not using; the same rule the MCP helpers
     # follow. There is no Memory Vault plugin: the store, the budget and the
     # review live in the backend.
     _fn("memory_recall", "Search durable memory for things the user chose to keep. Use it "
@@ -758,7 +758,7 @@ WRITE_TOOLS = ("write_file", "edit_file")
 
 # Tools the repeat guard never caches: a repeated write may be a recovery, and
 # silently skipping a mutation that was asked for would make the harness lie
-# about what it did to the project. `run_shell` is deliberately NOT exempt —
+# about what it did to the project. `run_shell` is deliberately NOT exempt:
 # the guard exists because a cell spent 26 of 29 shell calls on refused
 # repeats, so an identical command is a loop, not a recovery. Kept separate
 # from MUTATING because "triggers a snapshot" is not "may loop freely".
@@ -873,7 +873,7 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
 
     # The MCP helper tools only earn their schemas when an MCP server is
     # configured: with none in mcp.json they are four dead ends that cost
-    # tokens and invite calls that can only fail. Presence is the gate — a
+    # tokens and invite calls that can only fail. Presence is the gate; a
     # configured-but-stopped server still gets them, because listing and
     # searching are how the model learns what it could start.
     try:
@@ -890,7 +890,7 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
     #
     # `memory_recall` has a second gate. In `explicit` mode the startup block
     # carries every approved note and retrieval is refused by design, so the
-    # tool could only ever answer "retrieval is not enabled" — a dead end with
+    # tool could only ever answer "retrieval is not enabled"; a dead end with
     # a schema attached, which is the thing the MCP helpers are hidden to
     # avoid. Offer it only where retrieval works.
     try:
@@ -928,7 +928,7 @@ def _pinned(messages: list[dict]) -> list[dict]:
 
     Pinning only ``messages[0]`` is what lost a sub-agent its instructions. For a
     sub-agent [0] is the system prompt and [1] is the task, so elision kept the
-    persona and dropped the question — the report that came back said in terms
+    persona and dropped the question; the report that came back said in terms
     that it no longer knew what it had been asked. A compaction summary lands in
     the same prefix and is kept for the same reason: it is the only surviving
     record of the work the elision just removed.
@@ -1072,8 +1072,8 @@ def _chars(msgs: list[dict]) -> int:
 
     A stored row carries its tool results and its reasoning alongside the text,
     and both are replayed next turn. Counting only ``content`` measured about a
-    twentieth of the real size — on one session, 13,784 characters counted
-    against 307,088 actually sent — so compaction never fired and the window cap
+    twentieth of the real size (on one session, 13,784 characters counted
+    against 307,088 actually sent), so compaction never fired and the window cap
     silently elided the work instead of summarising it.
     """
     total = 0
@@ -1198,7 +1198,7 @@ def _tail_split(rest: list[dict], budget: int | None = None,
     split = len(rest) - keep
     # A tail may not open on an orphaned tool result: it has no call to answer.
     # Step back to include the assistant message that made the call rather than
-    # dropping results — on a tool-heavy transcript dropping them walks the split
+    # dropping results; on a tool-heavy transcript dropping them walks the split
     # to the end and empties the tail, which loses more than it saves.
     while 0 < split < len(rest) and rest[split].get("role") == "tool":
         split -= 1
@@ -1260,7 +1260,7 @@ def _fallback_summary(digest: str, error: str = "") -> str:
     can be extracted without a model, and they are the part worth keeping.
     """
     paths = sorted(set(_PATH_RE.findall(digest or "")))[:40]
-    lines = ["[automatic digest — the summariser was unavailable"
+    lines = ["[automatic digest; the summariser was unavailable"
              + (f": {error[:120]}" if error else "") + "]"]
     if paths:
         lines.append("Files and paths touched: " + ", ".join(paths))
@@ -1454,7 +1454,7 @@ def compact_messages(messages: list[dict], ref: str | None = None,
 
     :func:`compact_history` does this between turns, on the stored record. Nothing
     did it *during* one, so a long turn grew until the window cap started silently
-    eliding instead — losing information a summary would have kept. This is the
+    eliding instead; losing information a summary would have kept. This is the
     same discipline applied mid-turn, and it mutates ``messages`` in place because
     the caller's loop holds that list.
     """
@@ -1490,7 +1490,7 @@ def _clip_report(text: str, limit: int) -> str:
     """Trim a sub-agent report without losing its ending.
 
     A hard cut at the front-only limit threw away the conclusion, which is the
-    part the parent acts on — the parent then re-read the files itself and paid
+    part the parent acts on; the parent then re-read the files itself and paid
     for the work twice. Keeping head and tail preserves the opening findings and
     the summary, and says plainly how much went missing in between.
     """
@@ -1572,14 +1572,14 @@ PROGRESS_HEARTBEAT_S = 1.0       # a silent run still has to look alive
 def _stream_tool(fn, args: dict, name: str, out: dict, call_id: str):
     """Run one tool in a worker thread, yielding its output as it lands.
 
-    Reached only for a tool whose signature declares `on_output` — today
-    `run_shell` alone — so every other tool keeps the inline call in `call_tool`.
+    Reached only for a tool whose signature declares `on_output` (today
+    `run_shell` alone), so every other tool keeps the inline call in `call_tool`.
 
     The thread is not a refinement, it is the whole idea: output has to be read
     *while* the command runs, and a generator that stays empty until the command
     is finished is precisely the hang the card exists to disprove. The work runs
     under `copy_context().run` so the thread sees the same contextvars the inline
-    call would — a tool must not behave differently because someone is watching.
+    call would; a tool must not behave differently because someone is watching.
 
     The events go to the bus and nowhere near the transcript. `trace.append`
     happens at step boundaries out of text/reason/tools, and the parent's loop
@@ -1593,7 +1593,7 @@ def _stream_tool(fn, args: dict, name: str, out: dict, call_id: str):
 
     def on_output(kind: str, text: str) -> None:
         # Called from the sandbox's reader threads. A full queue can never
-        # happen — this queue is unbounded — but a callback that raised into a
+        # happen, this queue is unbounded, but a callback that raised into a
         # reader would silently stop the stream, so it swallows.
         try:
             q.put((kind, text))
@@ -1603,7 +1603,7 @@ def _stream_tool(fn, args: dict, name: str, out: dict, call_id: str):
     def work():
         try:
             done["result"] = str(fn(**args, on_output=on_output))
-        except BaseException as exc:  # noqa: BLE001 — mapped by the caller, as inline
+        except BaseException as exc:  # noqa: BLE001; mapped by the caller, as inline
             done["error"] = exc
         finally:
             q.put(None)
@@ -1676,7 +1676,7 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
     if name.startswith("mcp__"):
         entry = next((e for e in mcp_registry.all_tools() if e["fn_name"] == name), None)
         if entry is None:
-            out["result"] = f"ERROR: unknown MCP tool '{name}' — it may have deactivated"
+            out["result"] = f"ERROR: unknown MCP tool '{name}'; it may have deactivated"
             return
         res = mcp_registry.call(entry["server_id"], entry["name"], args or {})
         out["result"] = res.get("result") if res.get("ok") else f"ERROR: {res.get('error')}"
@@ -1703,7 +1703,7 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
             # schema, so the model cannot pass one, and a `**kwargs` tool never
             # matches this test. The streaming call sits *inside* the try, because
             # a tool that fails while threaded has to produce the same `ERROR:`
-            # string the model already knows rather than escape and end the turn —
+            # string the model already knows rather than escape and end the turn:
             # GeneratorExit is a BaseException, so abandoning the tail still
             # unwinds straight past this block instead of waiting on the command.
             yield from _stream_tool(fn, args, name, out, str(parent_call_id))
@@ -1804,7 +1804,7 @@ def _shell_card_fields(name: str, result) -> dict:
     command, and how many files it changed on disk.
 
     Both were already computed. `sandbox.run` returns `backend` on every path and
-    keeps a `changed` diff of the project — and the loop forwarded only the result
+    keeps a `changed` diff of the project, and the loop forwarded only the result
     *string* the model reads, so the answer sat in a dict one level up and never
     reached the card. The plan asks the card to answer "which sandbox backend ran
     this command, and what changed on disk"; this is that, not a new measurement.
@@ -1847,7 +1847,7 @@ def model_reasons(ref: str | None = None) -> bool:
 # reasoning about the task: "There is no previous thinking to reproduce. This is
 # the start of our conversation...". One such block is a harmless bad sample;
 # replayed back, it becomes the example the next step imitates, and a turn can
-# spend its whole step budget on it — one session logged 188 consecutive rows.
+# spend its whole step budget on it; one session logged 188 consecutive rows.
 # The opening sentence is stable across sessions and providers (188 of 188 spam
 # rows in that session opened with it), so replay swaps it for a neutral note.
 # Replaced rather than dropped because DeepSeek returns 400 for a tools request
@@ -1857,7 +1857,7 @@ REASON_ELIDED = "(reasoning elided)"
 
 # Neutralising the exact disclaimer bred a milder family: the same loop now
 # produces a block that misreads the conversation as "system setup, no task,
-# previous turn was a bare acknowledgement" — 23 rows across six sessions after
+# previous turn was a bare acknowledgement"; 23 rows across six sessions after
 # the first fix, whole for short reasons and interleaved between real blocks
 # for long ones. It is caught the same way, sentence by sentence, with the same
 # replacement. A sentence that QUOTES one of the exact phrases is left alone:
@@ -1933,7 +1933,7 @@ def clean_reason(text) -> str:
     """Neutralise attractor text in a chain of thought before it is replayed.
 
     A block that OPENS with the disclaimer is replaced whole. Any other run of
-    confusion sentences — the milder family that replaced it — is replaced by
+    confusion sentences (the milder family that replaced it) is replaced by
     the same note, sentence by sentence, so real reasoning between two runs
     survives. A sentence that quotes one of the exact phrases stays untouched,
     and an empty reason stays empty so rows that never reasoned still carry no
@@ -2021,7 +2021,7 @@ def _live_task_block(session: str) -> str:
     """The session's task list as it stands on this step, or '' when there is none.
 
     Read here rather than passed in because the turn may be running in the worker
-    process, which cannot receive a callable from the parent — and both paths must
+    process, which cannot receive a callable from the parent, and both paths must
     inject the same thing. The plugin's own budget bounds the block, so this is a
     small, fixed cost per step, not a growing one.
     """
@@ -2334,8 +2334,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # The task list is the one standing block that changes *during* a turn.
             # It lives outside the transcript on purpose, which means a snapshot
             # taken at turn start is stale by step three: the model has already
-            # finished items it can no longer see, and the remaining work — the
-            # only part worth showing — vanishes exactly when compaction would
+            # finished items it can no longer see, and the remaining work (the
+            # only part worth showing) vanishes exactly when compaction would
             # summarise what is left into prose. So it is re-read per step and
             # appended at the point of use, like the project block: the cached
             # prefix stays intact, an empty list costs nothing, and a turn that
@@ -2390,7 +2390,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     model_used = ev.get("model")
                     finish = ev.get("finish") or finish
                 elif ev["type"] == "error":
-                    # Engine yielded an error event (e.g., encoding warning) —
+                    # Engine yielded an error event (e.g., encoding warning);
                     # treat as non-fatal: notify and continue the turn
                     msg = ev.get("message", "")
                     if "utf-8" in msg.lower() and "decode" in msg.lower():
@@ -2439,8 +2439,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
 
         narration = "".join(step_text).strip()
         # Sanitised here, at the single point the step's thinking is finalised, so
-        # every downstream use — the trace the pane renders and the
-        # reasoning_content the next step reads back — sees the neutral note
+        # every downstream use (the trace the pane renders and the
+        # reasoning_content the next step reads back) sees the neutral note
         # instead of attractor text. Without this, one spammy step teaches the
         # next one, and the turn burns its step budget on the disclaimer.
         thinking = clean_reason("".join(step_reason))
@@ -2464,8 +2464,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # Ending the turn on its own with a write still unfinished is the most
             # common hard-set failure there is: the model thinks out loud, says something
             # sensible, and leaves nothing for a checker to read. Waiting for the step cap
-            # never reaches these cells — the ones that stopped at 13 turns had 45,000
-            # output tokens and no artifact — so the deliverable phase runs here too.
+            # never reaches these cells (the ones that stopped at 13 turns had 45,000
+            # output tokens and no artifact), so the deliverable phase runs here too.
             # What starts it is a write this turn aimed at and missed, never a filename the
             # harness read out of the prompt: a turn that wrote nothing and attempted nothing
             # owed nothing as far as this loop can tell, and it gets the closing summary only.
@@ -2663,13 +2663,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     pct = fraction * 100
                     yield {"type": "notify", "level": "warn",
                            "message": (f"this turn has billed {token_mod.label(turn_tokens)} "
-                                       f"tokens — {pct:g}% of the "
+                                       f"tokens; {pct:g}% of the "
                                        f"{token_mod.format_token_count(window)} window")}
         turn_cap = config.turn_token_budget()
         if turn_cap and turn_tokens >= turn_cap:
             yield {"type": "notify", "level": "warn",
                    "message": (f"turn budget reached ({token_mod.label(turn_tokens)} of "
-                               f"{token_mod.label(turn_cap)} tokens) — "
+                               f"{token_mod.label(turn_cap)} tokens), "
                                "stopping and reporting")}
             # This step's calls are already in messages; record them before the
             # closing report so the transcript does not lose the work just done.

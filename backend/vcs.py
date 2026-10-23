@@ -36,7 +36,7 @@ def resolve_workdir(workdir: str | None = None, sid: str | None = None) -> str:
     Given a session, this is now the same answer `config.work_root` gives the tools.
     It used to be a different one: for a session with no project the panel would borrow
     whichever folder some other session happened to use, or fall back to the first
-    configured root, while the turn worked somewhere else entirely — so the Git panel
+    configured root, while the turn worked somewhere else entirely, so the Git panel
     could name a directory and the user read that as "your edits are there".
 
     With no session at all (`hosting.py` asking which repo holds these credentials) the

@@ -3,7 +3,7 @@
 `/api/sessions/registry` is the boot payload: one response holding every session,
 and the frontend used to wait for all of it before painting anything. Counting
 messages is not enough to know whether that is small, because one message can
-carry a 48,000-character `read_file` result — so this counts bytes, which is the
+carry a 48,000-character `read_file` result, so this counts bytes, which is the
 unit the wire and the parser actually pay.
 
     python scripts/measure_registry.py [TACIT_HOME]

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Tacit — start the web host.
+# Tacit: start the web host.
 set -e
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 VENVPY="$PWD/.venv/bin/python"

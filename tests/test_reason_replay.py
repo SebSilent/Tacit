@@ -1,7 +1,7 @@
 """The thinking attractor: spam reasoning replayed back until it filled the turn.
 
 A thinking model sometimes answers a replayed chain of thought with a disclaimer
-about the replay instead of reasoning about the task — "There is no previous
+about the replay instead of reasoning about the task; "There is no previous
 thinking to reproduce. This is the start of our conversation, and I have not yet
 engaged in any internal reasoning about a user query." One such block is a
 harmless bad sample; sent back as `reasoning_content` on the next step it becomes
@@ -9,19 +9,19 @@ the example the next step imitates, and the turn spends its step budget writing
 variations of the disclaimer. One real session logged 188 consecutive rows of it
 (343 messages, 124 transcript rows) and produced no answer.
 
-The opening sentence is stable across that whole family — 188 of 188 spam rows in
+The opening sentence is stable across that whole family; 188 of 188 spam rows in
 the logged session opened with it, and a sweep of 35 variants across other
-sessions shared it — so `clean_reason` replaces any block that OPENS with the
+sessions shared it, so `clean_reason` replaces any block that OPENS with the
 phrase by a neutral note before the text is stored or replayed. Replaced rather
 than dropped because DeepSeek returns 400 for a tools request whose assistant
 turns omit `reasoning_content` entirely.
 
 Four places had to agree, and each is pinned here:
-  * `clean_reason` — the gate itself, with the cases that must NOT fire (real
+  * `clean_reason`; the gate itself, with the cases that must NOT fire (real
     reasoning, a mere quotation, an empty reason).
-  * `transcript_messages(reasoning=True)` — what the next turn actually reads
+  * `transcript_messages(reasoning=True)`; what the next turn actually reads
     back; this is the link that turned one bad sample into an attractor.
-  * the turn loop — a step's reasoning reaches the trace, the trace reaches the
+  * the turn loop; a step's reasoning reaches the trace, the trace reaches the
     store, and the store reaches the next request, so the end-to-end assertion
     runs a turn with a fake engine and inspects what the next turn would send.
   * compaction: the tail kept through a compaction must still contain the
@@ -104,7 +104,7 @@ class TestCleanReason(unittest.TestCase):
         # 'there is no previous thinking to reproduce', which was wrong") is
         # reasoning about the transcript, not spamming the disclaimer. Only a
         # block that OPENS with it is replaced.
-        quoted = f"The last block said: {SPAM!r} — that was wrong, because ..."
+        quoted = f"The last block said: {SPAM!r}, that was wrong, because ..."
         self.assertEqual(agent.clean_reason(quoted), quoted)
 
     def test_an_empty_reason_stays_empty(self):
@@ -117,7 +117,7 @@ class TestCleanReason(unittest.TestCase):
 
 
 class TestTranscriptReplay(unittest.TestCase):
-    """What the next turn reads back — the link that made one bad sample an
+    """What the next turn reads back; the link that made one bad sample an
     attractor."""
 
     def _rows(self, *reasons):
@@ -255,7 +255,7 @@ class TestTheTurnLoop(Isolated):
         self.assertNotIn(agent.REASON_ATTRACTOR, blob.lower(),
                          "the disclaimer came back to the model verbatim")
         self.assertIn(agent.REASON_ELIDED, blob)
-        # And the answer itself is still there — the gate must not eat the turn.
+        # And the answer itself is still there; the gate must not eat the turn.
         self.assertIn("Done.", "".join(m.get("content") or "" for m in nxt))
 
     def test_a_real_reasoning_step_is_stored_whole(self):
@@ -274,7 +274,7 @@ class TestTheTurnLoop(Isolated):
 
 
 class TestGuardHasTeeth(unittest.TestCase):
-    """Each check fails when its own property is broken — and the untouched
+    """Each check fails when its own property is broken, and the untouched
     source still passes it in the same breath."""
 
     def test_a_gate_that_dropped_instead_of_replaced_is_caught(self):
@@ -295,6 +295,6 @@ class TestGuardHasTeeth(unittest.TestCase):
         self.assertNotIn(agent.REASON_ATTRACTOR,
                          agent.transcript_messages(rows, reasoning=True)[0]
                          .get("reasoning_content", "").lower())
-        # Without the gate the attractor rides back verbatim — the bug itself.
+        # Without the gate the attractor rides back verbatim; the bug itself.
         raw = rows[0]["reason"]
         self.assertIn(agent.REASON_ATTRACTOR, raw.lower())

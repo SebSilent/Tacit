@@ -1,5 +1,5 @@
 """The panel-card requirement: "Panels (assistant, delegation, git, settings) share one
-card language — same paddings, same headers, same controls." (The plan file this was
+card language; same paddings, same headers, same controls." (The plan file this was
 item 5 of has since been deleted; the requirement it recorded still stands.)
 
 Before this slice there was no card language, only eight cards that each re-declared
@@ -18,7 +18,7 @@ What converged here is the part that moves no pixel:
   `.prov-actions` were *identical* to the base and are gone.
 * Controls: every button inside a card is `ho-btn …`, except the pinned `dg-toggle`.
 
-What is **not** decided here — because it moves pixels and needs a browser — is which
+What is **not** decided here, because it moves pixels and needs a browser; is which
 padding pair and which radius the eight cards should share. That is still an open
 deviation; the count test pins how many dialects exist so the gap cannot widen quietly
 while it waits. It is pinned in pixels rather than token names precisely so that a
@@ -53,7 +53,7 @@ HEAD_EXCEPTIONS = {
     ".skill-head": {"gap"},
     ".mcp-head": {"flex-wrap"},
 }
-# Five padding pairs across seven cards. Pinned, not endorsed — see the deviation.
+# Five padding pairs across seven cards. Pinned, not endorsed; see the deviation.
 #
 # Pinned in PIXELS, not token names, and re-pinned on 2026-10-19 when the spacing ladder
 # collapsed 24 steps -> 12 on a 4-unit base. That renumbering moved the cards that sat on
@@ -66,7 +66,7 @@ PADDINGS = {
     ".prov-card": "14px 16px",             # was 13px 15px
     ".skill-card": "12px 14px",            # was 11px 13px
     ".theme-card": "12px 14px",            # was 11px 13px
-    ".mcp-card, .plug-card": "10px 12px",  # unchanged — already on the grid
+    ".mcp-card, .plug-card": "10px 12px",  # unchanged; already on the grid
     ".snap-card": "10px 12px",             # unchanged
     ".dg-card": "8px 10px",                # was 7px 9px
 }
@@ -123,7 +123,7 @@ def px(value, scale=None):
     These guards exist to catch a card drifting away from the shared language. They used
     to compare token NAMES, which cannot tell drift from a renumbering: when the spacing
     ladder collapsed from 24 steps to 12, `.msg-tag`'s `var(--sp-7)` became `var(--sp-4)`
-    — 6px both before and after, nothing moved, and the guard screamed anyway. Comparing
+    (6px both before and after, nothing moved, and the guard screamed anyway). Comparing
     resolved pixels makes a pure rename invisible and a real move still fire, which is
     the thing the test was always trying to detect.
     """
@@ -174,7 +174,7 @@ def markup():
 
 def card_template(cls):
     """The markup a panel renders for one card: from its opening tag to the end of
-    that template literal — enough to see its head and its buttons."""
+    that template literal; enough to see its head and its buttons."""
     for f in PANEL_JS:
         t = (ROOT / f).read_text(encoding="utf-8")
         i = t.find('class="card %s' % cls)
@@ -224,7 +224,7 @@ class PanelCardLanguage(unittest.TestCase):
 
     def test_every_card_head_carries_the_shared_head(self):
         heads = [c for f, c in markup() if re.search(r"\b(?:prov|skill|mcp)-head\b", c)]
-        self.assertTrue(heads, "the head dialects vanished — that is not convergence")
+        self.assertTrue(heads, "the head dialects vanished, that is not convergence")
         for c in heads:
             self.assertIn("card-head", c.split(), "head without the shared base: %r" % c)
         self.assertIn('class="card-head"',
@@ -244,7 +244,7 @@ class PanelCardLanguage(unittest.TestCase):
                 if props(body) & {"gap", "flex-wrap", "justify-content"}:
                     got[sel] = props(body)
         self.assertEqual(got, HEAD_EXCEPTIONS,
-                         "head dialects changed shape: %s — update the deviation note, "
+                         "head dialects changed shape: %s; update the deviation note, "
                          "not just this test" % got)
 
     def test_card_controls_use_one_button_idiom(self):

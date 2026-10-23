@@ -1,6 +1,6 @@
 """
 Stage 3.5: steering a turn that runs in its own process. The socket's steer
-list is dead storage in process mode — the worker owns the turn — so the
+list is dead storage in process mode (the worker owns the turn) so the
 steer must ride the worker's stdin, the same line protocol that carries the
 cancel. These tests drive a REAL subprocess and a REAL HTTP fake of the
 provider, because the whole point is that the steer crosses a process
@@ -10,7 +10,7 @@ The scripted turn: step 1 calls `list_files` (a tool call keeps the turn
 alive into a second step, where the steer drains); step 2 answers with text
 that quotes the steer verbatim. If the steer never reached the worker's
 `run_turn` steer list, step 2's request never contains it, and the echoed
-text is missing — the assertion fails.
+text is missing; the assertion fails.
 """
 
 import json

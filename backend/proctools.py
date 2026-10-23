@@ -194,7 +194,7 @@ def unregister(pid: int) -> None:
 def rows() -> list[dict]:
     """The live rows, pruned of the provably dead.
 
-    unregister() is the normal exit — reap() calls it — but a process that
+    unregister() is the normal exit (reap() calls it) but a process that
     dies without its parent reaping it (a crash, a kill from outside) would
     otherwise haunt every listing until the next server restart. A read is
     the one moment someone is actually looking, so the dead are dropped

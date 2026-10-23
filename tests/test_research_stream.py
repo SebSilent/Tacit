@@ -6,7 +6,7 @@ about how it was produced for up to five minutes: `run_research` collected the
 generator into a list and returned one string, so no event could reach the
 transcript until the whole investigation was over. Even after that was fixed,
 the aspect phase still queued its events into a list and drained it *after the
-join* — so the fix that mattered was not "yield instead of return" but "poll the
+join*, so the fix that mattered was not "yield instead of return" but "poll the
 queue while the workers are still running".
 
 That distinction is why the first test here is causal rather than about content.
@@ -21,10 +21,10 @@ Also pinned, because each was a decision made while rewriting rather than a
 property of the old code:
 
   the wall-clock cap is honoured instead of waiting for the slowest aspect, and
-    produces a partial report rather than an error — the caller is waiting;
+    produces a partial report rather than an error; the caller is waiting;
   a Stop press abandons the call at the next heartbeat, and before any aspect
     thread has been started at all;
-  an aspect's inner `tool_progress` is not forwarded — it carries the inner
+  an aspect's inner `tool_progress` is not forwarded; it carries the inner
     tool's id, which has no card in the main transcript and no renderer in the
     panel;
   the report is still one string in `out["result"]`, because that string is the
@@ -108,7 +108,7 @@ class ResearchCase(unittest.TestCase):
     def _collect(self, call_id="card1", stop=None, watch=None):
         """Run the generator the way `run_research` does, recording every event
         with the time it arrived. `watch` sees each event *as it arrives*, which
-        is what makes the causal test below causal — a consumer that only looks
+        is what makes the causal test below causal; a consumer that only looks
         after the run has finished cannot tell streaming from a burst.
         Returns (strings, dicts, elapsed)."""
         strings, dicts = [], []
@@ -126,7 +126,7 @@ class ResearchCase(unittest.TestCase):
     @staticmethod
     def _notes(events, level):
         """Phase notes, filtered the way the panel does it. The shape is
-        `{type:'notify', level, message, aspect?}` — `message` because
+        `{type:'notify', level, message, aspect?}`; `message` because
         `delegation.js:106` renders `ev.message`, and a note that renamed it
         would render as an empty row."""
         return [e for e in events if e.get("type") == "notify"
@@ -138,7 +138,7 @@ class TestAspectPhaseStreams(ResearchCase):
         """The discriminator. `fast` emits a tool pair; `slow` refuses to emit
         its own until the *caller* has received a tool_end. Under the old
         drain-after-join the caller receives nothing until both threads return,
-        so `slow` would time out waiting and this test would fail — while every
+        so `slow` would time out waiting and this test would fail, while every
         assertion about the finished report still passed."""
         self._decompose([
             {"label": "fast", "question": "FAST: read one page"},
@@ -180,7 +180,7 @@ class TestAspectPhaseStreams(ResearchCase):
 
         self.assertEqual(gave_up, [],
                          "the aspect phase queued its events and drained them after "
-                         "the join — the caller saw nothing while both aspects ran")
+                         "the join; the caller saw nothing while both aspects ran")
         self.assertIn("fast finding", "".join(self.synth_inputs[-1]))
         self.assertIn("slow finding", "".join(self.synth_inputs[-1]))
         self.assertEqual(strings[-1], "## Report\n\nthe synthesised answer")
@@ -206,12 +206,12 @@ class TestAspectPhaseStreams(ResearchCase):
         for e in mine:
             self.assertTrue(e.get("research"), "an aspect event lost its tag")
             self.assertEqual(e.get("aspect"), "alpha",
-                             "no aspect label — the panel cannot group it")
+                             "no aspect label; the panel cannot group it")
 
     def test_an_aspects_inner_live_tail_is_not_forwarded(self):
         """`tool_progress` carries the *inner* tool's call id. Those calls never
         enter the main transcript, so there is no card to attach it to and no
-        renderer in the panel that reads it — and three aspects printing per
+        renderer in the panel that reads it, and three aspects printing per
         command would triple the event volume for a line nobody can see."""
         self._decompose([{"label": "alpha", "question": "read the docs"}])
 
@@ -247,12 +247,12 @@ class TestAspectPhaseStreams(ResearchCase):
                          "a heartbeat claimed output there was none of")
         self.assertFalse(ticks[0]["done"])
         self.assertTrue(ticks[0].get("research"),
-                        "an untagged tick keys its own card in the panel — a "
+                        "an untagged tick keys its own card in the panel; a "
                         "fourth card labelled 'sub-agent' that no sub-agent is behind")
 
     def test_aspect_cards_are_announced_before_any_of_them_has_spoken(self):
         """The panel should show a card per aspect at once rather than only after
-        one of them says something — otherwise two concurrent aspects look like
+        one of them says something; otherwise two concurrent aspects look like
         one."""
         self._decompose([{"label": "one", "question": "q1"},
                          {"label": "two", "question": "q2"}])
@@ -429,7 +429,7 @@ class TestToolContractUnchanged(ResearchCase):
         self.assertIn("daemon=True", src)
         if "t.join()" in src:
             self.assertLess(src.index("live.get(timeout="), src.index("t.join()"),
-                            "the drain moved behind the join — events would arrive "
+                            "the drain moved behind the join; events would arrive "
                             "in one burst again")
 
 

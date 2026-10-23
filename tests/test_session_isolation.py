@@ -42,7 +42,7 @@ class _SlowProvider:
 
     def __call__(self, messages, **kwargs):
         yield {"type": "text", "delta": "working"}
-        # Not the gate — the gate is what the test holds. The worker waits on
+        # Not the gate; the gate is what the test holds. The worker waits on
         # `_released`, which only `release()` sets, so a turn cannot finish
         # behind the test's back.
         self._gate.set()
@@ -170,7 +170,7 @@ class SessionIsolationTest(unittest.TestCase):
         The structural guarantee under test: each socket's `running` dict is
         created inside its own connection, so there is no shared stop event
         left to reach. This test would fail on the old code only if the two
-        sockets shared one — which they did not even then — but it pins the
+        sockets shared one, which they did not even then, but it pins the
         behaviour the deleted plan promises before 1b makes it load-bearing.
         """
         prov = _SlowProvider()
@@ -224,8 +224,8 @@ class SessionIsolationTest(unittest.TestCase):
 
         A socket is born attached to one session and stays attached; switching
         is the client opening a different socket. The command answers with the
-        reason rather than the generic "not supported", and — the invariant
-        that matters — it never rebinds this connection's session record,
+        reason rather than the generic "not supported", and (the invariant
+        that matters) it never rebinds this connection's session record,
         busy or idle.
         """
         other = store.create(title="other", model="p/m", thinking="high")
@@ -243,7 +243,7 @@ class SessionIsolationTest(unittest.TestCase):
             self.assertEqual(hello["sid"], "iso-sw-1")
 
     def test_a_turn_keeps_writing_into_its_own_session_while_the_socket_is_rebound(self):
-        """new_session mid-turn is legal in 1b — and must not steal the turn.
+        """new_session mid-turn is legal in 1b, and must not steal the turn.
 
         The socket rebinds to a fresh record; the running turn's worker
         already closed over the record it was started against. Its events,
@@ -278,7 +278,7 @@ class SessionIsolationTest(unittest.TestCase):
                 self.assertFalse(session_state.busy(new_sid))
                 prov.release()
                 # The turn's completion arrives on this socket tagged with
-                # the session it belongs to — the socket never moved.
+                # the session it belongs to; the socket never moved.
                 deadline = time.time() + 5
                 while time.time() < deadline:
                     m = ws.receive_json()
@@ -287,8 +287,8 @@ class SessionIsolationTest(unittest.TestCase):
                 self.assertEqual(m.get("sid"), "iso-ns-1",
                                  "the turn's events carry the session they belong to")
                 # And its transcript landed in the original record. done is
-                # published before the epilogue saves the store — and a read
-                # racing that write gets None back (read_json's fallback) — so
+                # published before the epilogue saves the store, and a read
+                # racing that write gets None back (read_json's fallback), so
                 # wait for the bus to die first: the save precedes the release.
                 from backend import turn_bus
                 deadline = time.time() + 5
@@ -307,7 +307,7 @@ class SessionIsolationTest(unittest.TestCase):
 
         The old code kept busy on the socket's `running` dict, so a browser
         that closed mid-turn left the flag behind in a dead connection while
-        the turn kept running — and a reconnecting window saw an idle session
+        the turn kept running, and a reconnecting window saw an idle session
         that was in fact mid-turn. The registry is ended by the worker's own
         finally, which is still running here.
         """

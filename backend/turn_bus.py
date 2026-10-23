@@ -66,7 +66,7 @@ class TurnBus:
         """One event into the buffer and out to every live subscriber.
 
         Called from the turn's driver thread, so subscriber queues, asyncio
-        objects — are fed through ``call_soon_threadsafe``. A dead loop drops
+        objects; are fed through ``call_soon_threadsafe``. A dead loop drops
         the event for everyone rather than raising into the turn.
         """
         with _lock:
@@ -179,7 +179,7 @@ def unsubscribe(sid: str, q: asyncio.Queue, channel: str = "turn") -> None:
 
 
 def publish(sid: str, ev: dict, channel: str = "turn") -> None:
-    """One event into the named channel. A no-op when the session has no bus —
+    """One event into the named channel. A no-op when the session has no bus,
     which cannot happen while a turn is running, because start() made one."""
     with _lock:
         bus = _buses.get(_key(sid, channel))

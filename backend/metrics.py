@@ -1,4 +1,4 @@
-"""Per-session token metrics — local only, never transmitted anywhere.
+"""Per-session token metrics; local only, never transmitted anywhere.
 
 The point of these counters is to make the *cost of context discipline* legible:
 what was actually injected, and what was avoided by lazy loading, budgeting,
@@ -46,8 +46,8 @@ def normalize_usage(usage: dict | None) -> dict:
     the server's live meter (``session_runtime._usage_event``), which drives the
     context percentage and the compaction trigger, and the headless benchmark
     runner (``headless._accumulate``), which writes the number a harness comparison
-    is judged on. Providers are inconsistent — ``total`` is often absent, cache
-    figures arrive only on some backends, and a count can be a string — so the
+    is judged on. Providers are inconsistent (``total`` is often absent, cache
+    figures arrive only on some backends, and a count can be a string), so the
     parsing is done once, here.
 
     ``fresh`` is the one that matters for cost: cached reads are re-reads of bytes
@@ -98,7 +98,7 @@ def dashboard(rec: dict, *, base_prompt_tokens: int = 0, tools: int = 0,
     ``full_context_baseline`` is what the prompt would cost if every discovered
     MCP schema and every enabled memory were injected directly. ``actual`` is
     what Tacit really injects. The difference is the saving from context
-    discipline — no competitor numbers are guessed, only these two are compared.
+    discipline; no competitor numbers are guessed, only these two are compared.
     """
     m = get(rec)
     baseline = base_prompt_tokens + tools + mcp_discovered + memory_total

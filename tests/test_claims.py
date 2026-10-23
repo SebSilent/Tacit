@@ -836,7 +836,7 @@ class TestCostGovernor(ProjectFixture):
         self.assertEqual(len([w for w in warns if "25%" in w]), 1)
 
     def test_a_sub_percent_threshold_is_still_legible(self):
-        # int(0.002 * 100) is 0, which read as "0% of the window" — a warning that
+        # int(0.002 * 100) is 0, which read as "0% of the window"; a warning that
         # looks like a rounding error is a warning nobody acts on.
         orig = config.COST_WARN_FRACTIONS
         config.COST_WARN_FRACTIONS = (0.002,)
@@ -973,7 +973,7 @@ class TestReserveTrigger(unittest.TestCase):
 
     def test_a_medium_window_is_not_over_filled(self):
         # Where the reserve is small relative to the window it still binds, and the
-        # free space is exactly the reserve — never less.
+        # free space is exactly the reserve, never less.
         target = config.context_fill_target(40_000)
         self.assertEqual(target, 20_000)      # floored at half
         self.assertEqual(config.context_fill_target(100_000),
@@ -1003,8 +1003,8 @@ class TestContextMeterFollowsTheWindow(Isolated):
     Item 8's defect was a units mismatch: Anthropic reports `input_tokens` as
     only the uncached remainder while an OpenAI-shaped provider reports the whole
     prompt, and the meter was fed the raw Anthropic figure. A session sitting at
-    60% of its window displayed 6%, and `should_compact` — which reads that same
-    field — never fired. These pin what replaced it: the window comes from the
+    60% of its window displayed 6%, and `should_compact`, which reads that same
+    field, never fired. These pin what replaced it: the window comes from the
     session's own model, and the percentage drawn is the percentage that triggers.
     """
 
@@ -1170,8 +1170,8 @@ class TestCompactionReachesTheStore(Isolated):
     its own wire list to stay under the window, the parent rebuilt the record from
     the turn's trace, every step verbatim. So `saved_compaction` climbed into the
     millions while not one session on the machine held a summary row, and
-    `should_compact` — reading the last billed prompt, which that very compaction
-    had shrunk — stayed asleep at 11% over a 640,000-token transcript.
+    `should_compact` (reading the last billed prompt, which that very compaction
+    had shrunk) stayed asleep at 11% over a 640,000-token transcript.
     """
 
     def _rec(self, turns=100, window=262_144, meter=29_393, bulk=12000):
@@ -1876,7 +1876,7 @@ class TestTaskListInjection(ProjectFixture):
 
     What this replaces: the block was appended to the prompt once, before the
     turn began. The model then worked through a list it could no longer read
-    correctly — finished items stayed, items it added during the same turn never
+    correctly; finished items stayed, items it added during the same turn never
     appeared, and the work still owing vanished exactly when compaction
     summarised the transcript. Injection now happens at the point of use, like
     the project block and the wall clock, so the model always sees the list as it
@@ -2027,7 +2027,7 @@ class TestParallelDelegation(Isolated):
         agent.run_subagent = fake_sub
         # Restore the original, not the stub. Handing `fake_sub` to addCleanup
         # left `agent.run_subagent` replaced by a stub that yields nothing for
-        # every test that ran after this one in the same process — invisible
+        # every test that ran after this one in the same process; invisible
         # here, because this test only counts `_run_parallel` calls.
         self.addCleanup(setattr, agent, "run_subagent", orig_sub)
         msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "go"}]
@@ -2386,7 +2386,7 @@ class TestSessionIsolationClaims(Isolated):
         Read straight from the handler source. `switch` must answer with the
         reason and must not rebind the connection's session record. The turn
         worker must read its own captured record, not the socket's current
-        one — the capture is defence in depth, because the server no longer
+        one; the capture is defence in depth, because the server no longer
         rebinds at all.
         """
         src = Path(chat.__file__).read_text(encoding="utf-8")
@@ -2397,7 +2397,7 @@ class TestSessionIsolationClaims(Isolated):
                          "switch must not rebind the connection's session record")
         # Stronger than the old captured record: the runtime re-reads the
         # session's own record from disk by sid, so no surface can persist a
-        # stale in-memory copy over a setting another surface just saved —
+        # stale in-memory copy over a setting another surface just saved,
         # which is exactly how assistant settings used to reset themselves.
         rsrc = Path(session_runtime.__file__).read_text(encoding="utf-8")
         self.assertIn("rec = store.get(sid) or {}", rsrc)
@@ -2423,7 +2423,7 @@ class TestSessionIsolationClaims(Isolated):
                              "the handler must not rebind this connection")
             self.assertNotIn("session_ready", body,
                              "no hello/session_ready: the socket is not moving")
-        # The new session's id still reaches the client — inline for
+        # The new session's id still reaches the client; inline for
         # new_session, built by the plan runtime for plan_implement, whose
         # response the handler forwards whole.
         self.assertIn('"data": {"sid": fresh["id"]', src)
@@ -2455,7 +2455,7 @@ class TestSessionIsolationClaims(Isolated):
 
         The decision the deleted plan records: a thread cannot be killed in Python,
         so a turn runs in its own process by default. Stop is cooperative
-        cancel first, tree kill after a grace — and the interface is told
+        cancel first, tree kill after a grace, and the interface is told
         which one ran, the same honesty the sandbox layer applies.
         """
         src = Path(turn_worker.__file__).read_text(encoding="utf-8")
@@ -2504,8 +2504,8 @@ class TestSessionIsolationClaims(Isolated):
 
         Server-created sessions (new_session, plan_implement) already exist
         by the time the client adopts them: their socket must open without
-        the create flag, or a reconnect would materialise phantom sessions
-        — the exact bug the create=1 discipline exists to prevent.
+        the create flag, or a reconnect would materialise phantom sessions:
+        the exact bug the create=1 discipline exists to prevent.
         """
         src = Path("static/app.js").read_text(encoding="utf-8")
         at = src.index("function adoptSession")
@@ -2554,7 +2554,7 @@ class TestProcessIdentity(Isolated):
         self.assertEqual(row["cmdline"].count("tacit-turn-worker"), 1,
                          "the marker appears exactly once")
         # The regression this pins: the marker as the FIRST argument after the
-        # interpreter — there Python reads it as a script file to run, and the
+        # interpreter; there Python reads it as a script file to run, and the
         # worker died instantly with "can't open file" (measured: 7 suite
         # failures, zero events). It must ride after the interpreter spec
         # (`-m module` / `-c code`), never in the script position.
@@ -2630,13 +2630,13 @@ class TestProcessIdentity(Isolated):
 
 # ── 23. the runtime owns the running turn's stream ────────────────────────
 class TestTurnBusClaims(Isolated):
-    """The worker publishes, the bus fans out, the store is written once — by
+    """The worker publishes, the bus fans out, the store is written once; by
     the turn's epilogue and by nobody else. The socket owns nothing."""
 
     def test_the_worker_never_touches_the_transcript_store(self):
         """Replay is transport-only. The worker's imports name no store, and
         the only store writes in the runtime sit in the driver's own
-        epilogue — a viewer's arrival or death cannot write the transcript."""
+        epilogue; a viewer's arrival or death cannot write the transcript."""
         src = Path(turn_worker.__file__).read_text(encoding="utf-8")
         imports = "\n".join(l for l in src.splitlines()
                             if l.startswith("import ") or l.startswith("from "))
@@ -2662,7 +2662,7 @@ class TestTurnBusClaims(Isolated):
     def test_the_turn_owns_its_bus_from_before_busy_to_the_epilogue(self):
         """The bus opens before the session is marked busy (any viewer that can
         observe busy can subscribe behind it) and is emptied in the driver's
-        finally — the buffer's lifetime is exactly the turn's. The pre-driver
+        finally; the buffer's lifetime is exactly the turn's. The pre-driver
         failure window cleans up its own bus, since the epilogue does not
         exist yet."""
         src = Path(session_runtime.__file__).read_text(encoding="utf-8")
@@ -2682,7 +2682,7 @@ class TestTurnBusClaims(Isolated):
         # The anti-orphan invariant: the driver thread is started before
         # start_turn returns, so no browser event can come between the worker
         # and its reader. The start lives in `_spawn` now, which is also what
-        # keeps the thread in `_drivers` until it exits — the handle shutdown()
+        # keeps the thread in `_drivers` until it exits; the handle shutdown()
         # needs for a turn whose own epilogue has already dropped its session row,
         # and without which a test's teardown let that write land in the real
         # ~/.tacit.
@@ -2765,8 +2765,8 @@ class TestLearningDefaultClaims(Isolated):
         self.assertNotIn("propose", cfg.get("description", ""))
 
     def test_the_startup_gate_is_in_the_lifespan(self):
-        """The worker is started through sync_worker() — the authoritative
-        check — never unconditionally."""
+        """The worker is started through sync_worker() (the authoritative
+        check), never unconditionally."""
         from backend import main
         src = Path(main.__file__).read_text(encoding="utf-8")
         self.assertIn("analyzer.sync_worker()", src)

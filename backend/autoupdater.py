@@ -1,4 +1,4 @@
-"""Autoupdater — plain HTTPS downloads from GitHub. No git, no API keys.
+"""Autoupdater; plain HTTPS downloads from GitHub. No git, no API keys.
 
 Tacit is an open-source project with no releases; every push to the default
 branch is an update. The transport is two plain GETs: the remote VERSION file
@@ -111,7 +111,7 @@ def _file_hash(path: Path) -> str:
 
 def _local_version() -> str:
     """The checkout's VERSION file, stripped. Empty when the install predates
-    version tracking — the check then says so instead of guessing."""
+    version tracking; the check then says so instead of guessing."""
     try:
         return (config.ROOT / "VERSION").read_text(encoding="utf-8").strip()
     except Exception:
@@ -146,7 +146,7 @@ def parse_version(text: str):
     None rather than a guess: a legacy install carries `2026-10-09` in VERSION, and
     a parser that read that as major=2026 would report every real release as
     something the user already has. The same grammar scripts/bump_version.py
-    refuses on — a value that cannot be ordered must not be written.
+    refuses on; a value that cannot be ordered must not be written.
     """
     m = SEMVER.match(str(text or "").strip())
     if not m:
@@ -176,7 +176,7 @@ def compare_versions(local: str, remote: str) -> int:
     "already up to date" to the same date and keeps the one-GET check that makes the
     hourly auto-check cheap.
     Exactly one unparseable: the unparseable one is the older. That is the migration
-    — the first SemVer release IS an update for every install that predates it — and
+    (the first SemVer release IS an update for every install that predates it) and
     it follows the last_commit -> last_version precedent above of carrying the old
     value across instead of rejecting it.
     """
@@ -260,7 +260,7 @@ def _apply_archive(data: bytes, dry_run: bool) -> dict:
 
     One pass enumerates and (unless dry_run) writes: changed files are
     overwritten, new files created, protected paths and untracked extensions
-    skipped, and local files the archive no longer contains are reported —
+    skipped, and local files the archive no longer contains are reported:
     never deleted, because the archive cannot tell "upstream removed this"
     from "the user added this".
     """
@@ -327,7 +327,7 @@ async def check_for_updates() -> dict:
     """Check the remote VERSION against the local one.
 
     Same-version checks cost one small GET. A differing version costs one
-    more GET (the tarball) so the answer can say what would change — the
+    more GET (the tarball) so the answer can say what would change; the
     same shape the git transport reported, sourced from the archive.
     """
     local = _local_version()
