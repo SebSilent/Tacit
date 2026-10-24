@@ -1139,8 +1139,10 @@ def _msg_tokens(m: dict) -> int:
 def _tail_budget(trigger_tokens: int) -> int:
     """Tokens of recent transcript to keep verbatim through a compaction.
 
-    Bounded by an absolute figure and by a share of whatever triggered the
-    compaction, whichever is smaller.
+    A share of the region being folded, under an absolute ceiling.
+    The share is the rule and the ceiling only a backstop: an 8,000-token
+    ceiling bound for every window over 20k tokens and collapsed a 967,000-token
+    transcript to a summary plus 8k rows.
     """
     if trigger_tokens <= 0:
         return config.COMPACT_TAIL_TOKENS
@@ -1288,7 +1290,10 @@ def _summarise(transcript: str, ref: str | None = None) -> tuple[str, str]:
     had chosen. The transcript is capped so this call cannot itself overflow the
     window it is trying to relieve.
     """
-    capped = transcript[:config.SUMMARY_INPUT_MAX_CHARS]
+    # The digest is oldest-first, so a leading slice keeps the oldest rows and
+    # drops the newest — the ones just before the kept tail, usually the most
+    # valuable context in the region. Keep the tail of the region instead.
+    capped = transcript[-config.SUMMARY_INPUT_MAX_CHARS:]
     try:
         res = engine.chat([
             {"role": "system", "content": prompts.COMPACT},
@@ -1305,6 +1310,65 @@ def _summarise(transcript: str, ref: str | None = None) -> tuple[str, str]:
     if not summary:
         return _fallback_summary(capped, "the summariser returned nothing"), "empty summary"
     return summary, ""
+
+
+# A digest wider than one summariser call is folded in parts, each part
+# summarised and the part notes merged into the one note. Past this many parts
+# the oldest are dropped, the same newest-kept rule the single slice had; the
+# bound keeps a pathological region from turning one fold into dozens of calls.
+_SUMMARY_PARTS_MAX = 8
+
+
+def _chunk_digest(transcript: str, cap: int) -> list[str]:
+    """Split a digest into parts of at most `cap` chars, at row boundaries.
+
+    Rows are joined by a blank line, so the cut backs up to the nearest one
+    when that keeps the part at least half full; a single row wider than that
+    is cut anyway, which fragments one row's digest across two parts without
+    dropping any of it.
+    """
+    if len(transcript) <= cap:
+        return [transcript]
+    parts, start, n = [], 0, len(transcript)
+    while start < n:
+        end, skip = min(start + cap, n), 0
+        if end < n:
+            cut = transcript.rfind("\n\n", start, end)
+            if cut > start + cap // 2:
+                end, skip = cut, 2
+        parts.append(transcript[start:end])
+        start = end + skip
+    return parts
+
+
+def _summarise_region(digest: str, ref: str | None = None) -> tuple[str, str]:
+    """Summarise a folded region: one call when it fits, in parts when not.
+
+    A digest wider than one call used to be sliced to its newest end, and
+    everything before the slice was silently absent from the note. Each part
+    is summarised on its own and the part notes are then merged, so the whole
+    region reaches the note. A part that fails contributes its deterministic
+    fallback instead of its note, and the merge still runs if any part
+    answered; when every part failed the fallbacks are returned as they are,
+    since another model call would fail the same way.
+    """
+    cap = config.SUMMARY_INPUT_MAX_CHARS
+    parts = _chunk_digest(digest, cap)
+    if len(parts) > _SUMMARY_PARTS_MAX:
+        parts = parts[-_SUMMARY_PARTS_MAX:]
+    if len(parts) == 1:
+        return _summarise(parts[0], ref)
+    notes, errors = [], []
+    for part in parts:
+        note, err = _summarise(part, ref)
+        if err:
+            errors.append(err)
+        notes.append(note)
+    joined = "\n\n".join(notes)
+    if len(errors) == len(parts):
+        return joined, errors[0]
+    summary, err = _summarise(joined, ref)
+    return summary, err or (errors[0] if errors else "")
 
 
 def _digest_row(m: dict) -> str:
@@ -1357,9 +1421,12 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
     rest = msgs[pin:]
     if len(rest) <= config.COMPACT_TAIL_MIN_MESSAGES:
         return None
-    ctx = (rec.get("usage") or {}).get("context") or {}
-    trigger = config.context_fill_target(ctx.get("window") or 0) or (_chars(msgs) // 4)
-    old, tail = _tail_split(rest, _tail_budget(trigger), keep_reason=model_reasons(ref))
+    # The tail is a share of the region being folded, not of the trigger: a
+    # share of the fill target kept 67k tokens on a 200k window whether the
+    # record held 900k tokens or 9k, and on a small record the tail covered the
+    # whole thing and the fold refused. The ceiling is the only absolute bound.
+    old, tail = _tail_split(rest, _tail_budget(_chars(rest) // 4),
+                            keep_reason=model_reasons(ref))
     if not old:
         return None
     before = _chars(msgs)
@@ -1367,7 +1434,7 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
     # is digested along with everything else and the new note refines it rather
     # than stacking a second summary on top of the first.
     reclaimed = _prune_old_output(old)
-    summary, err = _summarise("\n\n".join(_digest_row(m) for m in old), ref)
+    summary, err = _summarise_region("\n\n".join(_digest_row(m) for m in old), ref)
     rec["messages"] = (list(msgs[:pin])
                        + [{"role": "summary", "content": summary}] + tail)
     return {"compacted": len(old), "kept": len(tail), "chars_before": before,
@@ -1469,7 +1536,7 @@ def compact_messages(messages: list[dict], ref: str | None = None,
         return None
     before = wire_chars(messages)
     reclaimed = _prune_old_output(old)
-    summary, err = _summarise("\n\n".join(_digest_wire(m) for m in old), ref)
+    summary, err = _summarise_region("\n\n".join(_digest_wire(m) for m in old), ref)
     messages[:] = (pin
                    + [{"role": "system",
                        "content": f"{prompts.SUMMARISED}\n{summary}"}]

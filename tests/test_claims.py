@@ -1161,6 +1161,76 @@ class TestCompactionMechanics(Isolated):
         agent._summarise("digest", ref="p/m")
         self.assertEqual(seen[0], "p/m")
 
+    def test_a_digest_wider_than_one_call_is_summarised_in_parts(self):
+        # A digest wider than the input cap used to be sliced to its newest
+        # end, and everything before the slice was silently absent from the
+        # note. Each part is summarised and the part notes are merged, so the
+        # whole region reaches the one note.
+        orig = agent.engine.chat
+        seen = []
+        agent.engine.chat = lambda m, **kw: (
+            seen.append(m[1]["content"]),
+            {"content": "note: " + m[1]["content"][:400]})[1]
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        rows = [f"user: part {i} " + "x" * 6000 for i in range(30)]
+        summary, err = agent._summarise_region("\n\n".join(rows), ref="p/m")
+        self.assertEqual(err, "")
+        self.assertEqual(len(seen), 3)          # two parts plus the merge call
+        self.assertLessEqual(len(seen[0]), config.SUMMARY_INPUT_MAX_CHARS)
+        self.assertIn("part 0", seen[0])        # the oldest part is summarised
+        self.assertIn("part 26", seen[1])       # and so is the newest one
+        self.assertTrue(seen[2].startswith("note: "),
+                        "the merge is called on the part notes, not the raw rows")
+        self.assertIn("part 0", seen[2])        # the merge sees every part note
+        self.assertIn("part 26", seen[2])
+        self.assertTrue(summary)
+
+    def test_the_part_count_is_bounded(self):
+        # Without a bound, a pathological region turns one fold into dozens of
+        # summariser calls. Past the bound the oldest parts are dropped, the
+        # same newest-kept rule the single slice had.
+        orig_cap = config.SUMMARY_INPUT_MAX_CHARS
+        config.SUMMARY_INPUT_MAX_CHARS = 500
+        self.addCleanup(setattr, config, "SUMMARY_INPUT_MAX_CHARS", orig_cap)
+        orig = agent.engine.chat
+        seen = []
+        agent.engine.chat = lambda m, **kw: (
+            seen.append(m[1]["content"]),
+            {"content": "note: " + m[1]["content"][:400]})[1]
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        rows = [f"user: row {i} " + "y" * 120 for i in range(40)]
+        agent._summarise_region("\n\n".join(rows), ref="p/m")
+        self.assertEqual(len(seen), agent._SUMMARY_PARTS_MAX + 1)
+        self.assertIn("row 39", seen[-2])       # the newest part is summarised
+        self.assertFalse(any("row 0 " in s for s in seen[:-1]),
+                         "the oldest parts were dropped, not summarised")
+
+    def test_a_failed_part_falls_back_and_the_rest_still_merge(self):
+        # One part failing must not lose the region: that part contributes its
+        # deterministic fallback, the merge still runs, and the error is
+        # reported so the degraded note is visible to the operator.
+        orig = agent.engine.chat
+        calls = {"n": 0}
+
+        seen = []
+
+        def flaky(messages, **kw):
+            calls["n"] += 1
+            seen.append(messages[1]["content"])
+            if calls["n"] == 1:
+                raise agent.engine.EngineError("HTTP 503: part down")
+            return {"content": "note: " + messages[1]["content"][:400]}
+        agent.engine.chat = flaky
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        rows = [f"user: part {i} " + "z" * 6000 for i in range(30)]
+        summary, err = agent._summarise_region("\n\n".join(rows), ref="p/m")
+        self.assertIn("503", err)
+        self.assertIn("summariser was unavailable", summary)
+        self.assertEqual(len(seen), 3)          # two parts plus the merge call
+        self.assertIn("part 26", seen[1])       # the healthy part was summarised
+        self.assertIn("part 26", seen[2])       # and its note reached the merge
+        self.assertIn("summariser was unavailable", seen[2])
+
 
 # ── the reclamation has to cross the process boundary ────────────────────
 class TestCompactionReachesTheStore(Isolated):
@@ -1320,6 +1390,59 @@ class TestCompactionReachesTheStore(Isolated):
         self.assertLess(len(saved["messages"]), 103,
                         "the record came down: 101 rows in, a folded note out")
 
+    def test_a_fold_the_record_did_not_need_stays_wire_only(self):
+        # The other half of the seam: a mid-turn fold exists to keep the wire
+        # under the window. If the stored record is under the fill target
+        # anyway, the fold must not be written into it — the record keeps
+        # every row and elision serves the newest budget worth next turn, the
+        # way it did before mid-turn folds became persistent. The ledger still
+        # records the saving: the fold did carry the rest of the turn.
+        store.create(title="wire only", model="p/m", sid="x")
+        rec = self._rec(turns=6)
+        store.save(rec)
+        self.assertFalse(agent.should_compact(rec),
+                         "the record is deliberately under the fill target")
+        trace = []
+
+        def fake_run_turn(messages, **kw):
+            trace.append({"text": "step a", "tools": []})
+            yield {"type": "compaction", "compacted": 2, "kept": 3,
+                   "chars_before": 900000, "chars_after": 40000, "saved": 215000,
+                   "summary": "NOTE FROM THE WORKER", "kept_tokens": 6000}
+            trace.append({"text": "step b", "tools": []})
+            yield {"type": "done"}
+
+        orig_run, orig_bus, orig_state = (session_runtime.agent.run_turn,
+                                          session_runtime.turn_bus,
+                                          session_runtime.session_state)
+        published = []
+        session_runtime.agent.run_turn = fake_run_turn
+        session_runtime.turn_bus = types.SimpleNamespace(
+            publish=lambda ev: published.append(ev), finish=lambda *a, **kw: None,
+            start=lambda *a, **kw: None)
+        session_runtime.session_state = types.SimpleNamespace(
+            running=lambda sid: None, end=lambda sid: None,
+            begin=lambda *a, **kw: None, busy=lambda sid: False)
+        self.addCleanup(setattr, session_runtime.agent, "run_turn", orig_run)
+        self.addCleanup(setattr, session_runtime, "turn_bus", orig_bus)
+        self.addCleanup(setattr, session_runtime, "session_state", orig_state)
+
+        run = {"stop": threading.Event(), "steer": [], "worker": None,
+               "thread": None, "loop": None}
+        session_runtime._drive_turn(
+            "x", rec, [], project=None, ref="p/m", chat=True, has_instructions=False,
+            reasoning=None, trace=trace, run=run,
+            bus=types.SimpleNamespace(publish=lambda ev: published.append(ev)))
+
+        saved = session_runtime.store.get("x") or {}
+        notes = [m for m in (saved.get("messages") or []) if m.get("role") == "summary"]
+        self.assertEqual(notes, [],
+                         "a fold the record did not need must not be written into it")
+        self.assertIn("step a", json.dumps(saved.get("messages") or []))
+        self.assertIn("step b", json.dumps(saved.get("messages") or []))
+        self.assertGreater((saved.get("metrics") or {}).get("saved_compaction"), 0,
+                           "the wire saving is real even where the fold was not kept")
+
     def test_a_hand_compaction_moves_the_meter_and_the_ledger(self):
         # The interface's "Compact context" command. It used to fold the record and
         # tell nobody: the bar kept reading the old fill over a transcript that had
@@ -1329,13 +1452,20 @@ class TestCompactionReachesTheStore(Isolated):
         orig = agent.engine.chat
         agent.engine.chat = lambda m, **kw: {"content": "NOTE FROM THE SUMMARISER"}
         self.addCleanup(setattr, agent.engine, "chat", orig)
+        record_before = agent.stored_tokens(rec["messages"])
         info = session_runtime.compact_now(rec, force=True)
         self.assertTrue(info["compacted"])
         self.assertGreater(info["saved_tokens"], 0)
         self.assertEqual(info["model"], "p/m",
                          "which model wrote the note is a fact the person can see")
-        self.assertLess(rec["usage"]["context"]["tokens"], 29_393,
-                        "the meter came down with the record")
+        # The tail keeps a share of the region now, not a flat 8k tokens, so the
+        # meter lands on the kept tail. Against a billed figure that was lying
+        # low (elision had kept the last prompt small over a fat record) that
+        # can read higher than before — the floor exists so the bar does not
+        # lie low over a record that still holds the kept tail. What must hold
+        # is that the meter follows the record the fold actually left behind.
+        self.assertLess(rec["usage"]["context"]["tokens"], record_before,
+                        "the meter follows the record the fold left behind")
         self.assertFalse(rec["usage"]["compacting"], "the pulse ends with the call")
         self.assertGreater((rec.get("metrics") or {}).get("saved_compaction"), 0)
 

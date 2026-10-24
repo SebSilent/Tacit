@@ -752,7 +752,13 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
         # `should_compact` reading it, describe the shrunken request. That is the
         # pair of facts that let a session sit at 99% for sixteen turns with
         # millions of tokens reported as saved and nothing ever reclaimed.
-        if pending is not None:
+        if pending is not None and agent.should_compact(rec):
+            # Persist the fold only when the stored record itself is over the
+            # fill target — the point where between-turns compaction would fold
+            # it anyway. A fold the wire needed but the record did not stays
+            # wire-only: the record keeps every row and elision serves the
+            # newest budget worth next turn, as it did before mid-turn folds
+            # became persistent.
             reclaimed = agent.apply_stored_summary(
                 rec, pending["summary"], pending["kept_tokens"],
                 max(0, len(trace) - pending["at"]))

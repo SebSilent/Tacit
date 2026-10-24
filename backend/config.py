@@ -116,7 +116,12 @@ CONTEXT_FILL_FLOOR = float(os.environ.get("TACIT_CONTEXT_FILL_FLOOR", "0.5"))
 # The tail is kept by token budget, not by message count. Six messages is six
 # huge tool results on one turn and six one-line answers on another; the first
 # blows the summary's input and the second throws away usable recent work.
-COMPACT_TAIL_TOKENS = int(os.environ.get("TACIT_COMPACT_TAIL_TOKENS", "8000"))
+# Kept verbatim through a compaction: a share of whatever triggered it (see
+# agent._tail_budget) under this ceiling. The ceiling is a backstop, not the
+# rule — at 8,000 it bound for every window over 20k tokens and collapsed a
+# 967,000-token transcript to a summary plus 8k rows, which is the loss
+# compaction exists to prevent.
+COMPACT_TAIL_TOKENS = int(os.environ.get("TACIT_COMPACT_TAIL_TOKENS", "200000"))
 COMPACT_TAIL_MIN_MESSAGES = int(os.environ.get("TACIT_COMPACT_TAIL_MIN", "4"))
 COMPACT_TAIL_MAX_MESSAGES = int(os.environ.get("TACIT_COMPACT_TAIL_MAX", "40"))
 # At most this share of the fill target is kept verbatim. The share is what makes

@@ -160,19 +160,22 @@ None of this was invented here.
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
   size actually is (`backend/agent.py:1062`).
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1220-1248`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1222-1250`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
 - **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
   note falls into the region being summarised rather than being pinned
-  (`backend/agent.py:1336-1342`).
+  (`backend/agent.py:1400-1406`).
+- **A region too wide for one summariser call is summarised in parts**: each part is summarised on its
+  own and the part notes are merged into the one note, so the far end of a very long region is not
+  silently absent from it (`backend/agent.py:1322-1371`).
 - **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
-  failed and the most recent activity (`backend/agent.py:1254-1278`).
+  failed and the most recent activity (`backend/agent.py:1256-1280`).
 - **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
   acted on, which is how a compacted session restarts work it already finished.
-- **Compaction runs during a turn, not only between them** (`backend/agent.py:1451-1486`). Checking the
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1518-1545`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
 - **The standing prompt and the task are pinned against elision** (`backend/agent.py:896-916`). Pinning
