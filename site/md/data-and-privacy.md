@@ -62,7 +62,7 @@ One rule, shared by every caller (`backend/config.py:770-788`):
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:774-778`). The scratch folder is why
+blocklist in the way (`backend/config.py:779-783`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by

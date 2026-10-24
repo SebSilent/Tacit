@@ -12,12 +12,12 @@ Four settings are consulted in that order rather than stored as a plain constant
 |---|---|---|---|
 | Delegation model | `TACIT_DELEGATE_MODEL` | `delegateModel` | `backend/config.py:365-368` |
 | Fallback model | `TACIT_FALLBACK_MODEL` | `fallbackModel` | `backend/config.py:381-384` |
-| Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:401` |
+| Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:406` |
 | Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:441-445` |
 | Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:474-478` |
 
 The shell overlap case is the one the interface has to show, because a pinned environment variable
-makes the switch in **Skills & Tools** do nothing. `backend/config.py:451-458` exists to answer that
+makes the switch in **Skills & Tools** do nothing. `backend/config.py:456-463` exists to answer that
 question so the switch can say so instead of lying.
 
 `TACIT_TEMPERATURE` is the exception to "environment always wins": it is a person typing a number,
@@ -64,7 +64,7 @@ point.
 | `TACIT_COST_WARN` | `0.25,0.5,0.75` | `backend/config.py:149` |
 | `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:79` |
 | `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:441` |
-| `TACIT_TURN_WORKER` | `process` | `backend/config.py:401` |
+| `TACIT_TURN_WORKER` | `process` | `backend/config.py:406` |
 
 ### Tool output ceilings
 
@@ -75,7 +75,7 @@ point.
 | `TACIT_FETCH_LIMIT` | `6000` | `backend/config.py:205` |
 | `TACIT_BROWSER_TEXT_LIMIT` | `6000` | `backend/config.py:181` |
 | `TACIT_BROWSER_TIMEOUT` | `90` | `backend/config.py:180` |
-| `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | `backend/config.py:182` |
+| `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | `backend/config.py:187` |
 | `TACIT_SHELL_TIMEOUT` | `180` | `backend/config.py:94` |
 | `TACIT_SHELL_OVERLAP` | `block` | `backend/config.py:474` |
 | `TACIT_PLAYWRIGHT_PATH` | auto-detected | `backend/config.py:157` |
@@ -88,7 +88,7 @@ reproduce whole (`backend/config.py:84`, `:93`).
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_RESEARCH_ASPECTS` | `3` | `backend/config.py:183` |
+| `TACIT_RESEARCH_ASPECTS` | `3` | `backend/config.py:188` |
 | `TACIT_RESEARCH_STEPS` | `6` | `backend/config.py:193` |
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:197` |
 
@@ -124,7 +124,7 @@ model deliberately.
 | Variable | Default | Read at |
 |---|---|---|
 | `TACIT_SNAPSHOT_MAX_FILE` | 2 MB | `backend/config.py:208` |
-| `TACIT_SNAPSHOT_MAX_FILES` | `3000` | `backend/config.py:209` |
+| `TACIT_SNAPSHOT_MAX_FILES` | `3000` | `backend/config.py:214` |
 | `TACIT_PLAN_TASKS` | `4` | `backend/config.py:154` |
 | `TACIT_PLAN_QUESTIONS` | `4` | `backend/config.py:155` |
 | `TACIT_VCS_TIMEOUT` | `120` | `backend/vcs.py:26` |
@@ -178,7 +178,7 @@ silent.
 
 | File | Written by | Holds |
 |---|---|---|
-| `~/.tacit/models.json` | `backend/config.py:504`, seeded at `:257-258` | providers, models, the default ref |
+| `~/.tacit/models.json` | `backend/config.py:509`, seeded at `:262-263` | providers, models, the default ref |
 | `~/.tacit/.env` | `backend/config.py:33` | API keys, masked in the interface |
 | `~/.tacit/capabilities.json` | `backend/providers.py:195`, `:214` | the sandbox, memory and learning selections |
 | `~/.tacit/profiles.json` | `backend/profiles.py:105-106`, read at `:93-102` | your saved profiles and which is active |
