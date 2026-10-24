@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="nocturne">
+<head>
+<meta charset="UTF-8">
+
+<!-- viewport-fit=cover is not cosmetic: without it the browser clamps the
+     layout viewport inside the notch/home-indicator area and every
+     env(safe-area-inset-*) resolves to 0, so the insets in style.css's mobile
+     block do nothing. No maximum-scale / user-scalable=no - pinch zoom stays
+     on, and a 16px floor on inputs (see style.css) is what stops iOS from
+     zooming the page on focus instead. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+<meta name="theme-color" id="meta-theme" content="#14171d">
+<meta name="robots" content="noindex">
+<title>Tacit interface</title>
+<link rel="stylesheet" href="assets/app.css">
+<link rel="stylesheet" href="assets/demo.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
+</head>
+<body>
+<div class="app">
+  <!-- sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" class="brand-icon"><path d="M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z"/></svg>
+      <div class="brand-text"><span class="brand-name">Tacit</span><span class="brand-sub" id="brandVersion" title="version of this checkout" hidden></span></div>
+    </div>
+
+    <button class="new-chat-btn" id="newChatBtn">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      New session
+    </button>
+
+    <div class="section-label">Sessions</div>
+    <nav class="session-list" id="sessionList">
+      <div class="session-item active" data-key="shell-timeout">
+        <span class="s-dot" title="working"></span>
+        <svg class="s-icon" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v11H8l-3 3V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span class="s-title">shell timeout leaves orphans</span>
+        <button class="s-stop" title="Stop this session's turn"><svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></button>
+        <button class="s-del" title="Delete"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="session-item" data-key="audit-rotation">
+        <span class="s-dot" title="idle"></span>
+        <svg class="s-icon" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v11H8l-3 3V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span class="s-title">audit ledger rotation</span>
+        <button class="s-del" title="Delete"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="session-item" data-key="prompt-size">
+        <span class="s-dot" title="idle"></span>
+        <svg class="s-icon" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v11H8l-3 3V4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span class="s-title">why is the prompt so big</span>
+        <button class="s-del" title="Delete"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </div>
+    </nav>
+
+    <div class="section-label">Mode</div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="chat">Chat</button>
+      <button data-mode="agent" class="active">Agent</button>
+    </div>
+    <div class="card ctl-card">
+      <div class="ctl-row"><span class="ctl-label">Provider</span><select id="providerSelect" class="ctl-select"></select></div>
+      <div class="ctl-row"><span class="ctl-label">Model</span><select id="modelSelect" class="ctl-select"></select></div>
+      <div class="ctl-row"><span class="ctl-label">Thinking</span><select id="thinkSelect" class="ctl-select"></select></div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="sidebarToggle" title="Menu">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      </button>
+      <div class="top-title" id="topTitle">New session</div>
+      <div class="top-meta" id="topMeta"></div>
+      <div class="wd-wrap">
+        <button class="wd-chip" id="wdChip" title="Workspace">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg>
+          <span id="wdLabel">pick a workspace</span>
+        </button>
+        <div class="wd-menu" id="wdMenu" hidden></div>
+      </div>
+      <button class="icon-btn" id="snapBtn" title="Snapshots, this session's undo timeline">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v4.5l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="tok-meter" id="tokMeter" hidden>
+        <span class="tok-count" id="tokCount"></span>
+        <span class="tok-ctx">
+          <span class="tok-bar"><span class="tok-fill" id="tokFill"></span></span>
+          <span class="tok-pct" id="tokPct"></span>
+        </span>
+        <span class="tok-auto" id="tokAuto" hidden>auto</span>
+      </div>
+      <button class="icon-btn" id="termBtn" title="Terminal">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="sess-menu-wrap">
+        <button class="icon-btn" id="sessMenuBtn" title="Session actions">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></svg>
+        </button>
+        <div class="sess-menu" id="sessMenu">
+          <button data-act="rename">Rename session</button>
+          <button data-act="stats">Session stats</button>
+          <button data-act="compact">Compact context</button>
+          <button data-act="fork">Fork session</button>
+          <button data-act="clone">Clone session</button>
+        </div>
+      </div>
+      <button class="icon-btn" id="gitBtn" title="Git">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="10" r="2.4"/><path d="M6 8.4v7.2M8.4 6h3.6a3 3 0 0 1 3 3v1" stroke-linecap="round"/></svg>
+      </button>
+      <button class="icon-btn" id="harnessBtn" title="Settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.7V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="icon-btn" id="dgToggle" title="Delegation, what sub-agents are doing">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"/></svg>
+      </button>
+      <button class="icon-btn" id="asToggle" title="Assistant">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 0 1 8-8h2a8 8 0 0 1 8 4z"/><path d="M9 11h6M9 15h4"/></svg>
+      </button>
+    </header>
+
+    <button class="jump-btn" id="jumpBtn" hidden title="Jump to latest">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14m0 0-6-6m6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    </button>
+    <div class="messages" id="messages">
+      <div class="empty" id="emptyState">
+        <div class="empty-mark">
+          <svg viewBox="0 0 24 24"><path d="M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z"/></svg>
+        </div>
+        <h2>Tacit</h2>
+        <p id="emptyTag">Pick a workspace and say what you need.</p>
+        <div class="suggestions" id="suggestions">
+          <button class="chip" data-s="The shell tool kills a timed-out command but the children keep running. Find it and fix it.">Fix a bug</button>
+          <button class="chip" data-s="The audit ledger never rotates. Add size-based rotation without losing the current file.">Add rotation</button>
+          <button class="chip" data-s="How much of the fixed prompt is the tool list, and can I read it anywhere?">Read the prompt</button>
+          <button class="chip" data-s="Review the code in this directory and list bugs with fixes.">Review code</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="plan-strip" id="planStrip" hidden></div>
+
+    <footer class="composer-wrap">
+      <div class="task-strip" id="taskStrip" hidden>
+        <svg class="task-strip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" stroke-linecap="round"/></svg>
+        <span class="task-strip-count" id="taskStripCount"></span>
+        <div class="task-strip-list" id="taskStripList" hidden></div>
+        <button class="task-strip-close" id="taskStripClose" title="Hide the task list">✕</button>
+      </div>
+      <div class="attach-row" id="attachRow" hidden></div>
+      <div class="composer" id="composer">
+        <button class="icon-btn composer-side" id="planToggle" title="Plan mode">
+          <svg viewBox="0 0 24 24"><path d="M9 3h6M12 3v4m0 0-5.5 3A4 4 0 0 0 4.5 13.5V17a4 4 0 0 0 4 4h7a4 4 0 0 0 4-4v-3.5A4 4 0 0 0 17.5 10L12 7z" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-btn composer-side" id="attachBtn" title="Attach images">
+          <svg viewBox="0 0 24 24"><path d="M21.4 11.1 12.6 20a6 6 0 0 1-8.5-8.5l8.9-8.9a4 4 0 0 1 5.7 5.7l-8.5 8.5a2 2 0 0 1-2.9-2.9l8.2-8.1" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
+        <textarea id="input" rows="1" placeholder="Message Tacit…" spellcheck="false"></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">
+          <svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </button>
+        <button class="send-btn stop" id="stopBtn" title="Stop" hidden>
+          <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>
+        </button>
+      </div>
+      <div class="composer-hint"><span id="connHint">connecting…</span><span id="steerHint" hidden> · typing now steers the running turn</span></div>
+    </footer>
+  </main>
+
+  <!-- ── Delegation: what sub-agents and research are doing right now. ── -->
+  <aside class="as-panel dg-panel" id="dgPanel">
+    <header class="as-head">
+      <span class="as-title">Delegation</span>
+      <span class="as-sub" id="dgSub">sub-agents · research</span>
+      <button class="ho-btn small" id="dgSettingsBtn" title="Delegation settings">settings</button>
+      <button class="icon-btn ho-close" id="dgClose" title="Close">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div class="as-context" id="dgSettingsWrap" hidden>
+      <div id="dgSettings"></div>
+      <div class="as-note">Sub-agents and research run on this model. Empty means the session's
+        own model, which is what they used to inherit, at the session's thinking level too.</div>
+    </div>
+    <div class="as-messages" id="dgMessages"></div>
+  </aside>
+
+  <!-- ── Assistant: a per-session side conversation. The agent never sees it. ── -->
+  <aside class="as-panel" id="asPanel">
+    <header class="as-head">
+      <span class="as-title">Assistant</span>
+      <span class="as-sub" id="asSub">reads this session</span>
+      <button class="ho-btn small" id="asSettingsBtn" title="Assistant settings">settings</button>
+      <button class="ho-btn small" id="asClear" title="Start over">clear</button>
+      <button class="icon-btn ho-close" id="asClose" title="Close">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <!-- Autonomous run: the Goal is what the agent works toward while nobody is
+         typing. It is a standing instruction, not a chat message, so it lives
+         outside the thread and is never deleted by clear. -->
+    <div class="as-run" id="asRun">
+      <textarea id="asGoal" rows="2" spellcheck="false"
+        placeholder="Goal, what the agent should keep working toward…"></textarea>
+      <div class="as-run-row">
+        <label class="chk as-chk" title="After each turn the assistant writes the agent's next prompt and the run continues on its own">
+          <input type="checkbox" id="asAuto"> Autonomous
+        </label>
+        <span class="as-run-budget" id="asBudget"></span>
+        <button class="ho-btn small" id="asReset" title="Reset the spent counters without stopping">reset</button>
+      </div>
+    </div>
+    <div class="as-context" id="asSettingsWrap" hidden>
+      <div id="asContext"></div>
+      <div class="as-controls" id="asControls"></div>
+      <div class="as-note">The agent cannot see this conversation, and cannot see the assistant.</div>
+    </div>
+    <div class="as-messages" id="asMessages"></div>
+    <div class="as-input">
+      <textarea id="asInput" rows="1" placeholder="Ask about this session…" spellcheck="false"></textarea>
+      <button class="as-send" id="asSend" title="Send">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── Snapshots: this session's undo timeline, reached from the top bar ── -->
+  <div class="harness-overlay" id="snapOverlay" hidden>
+    <div class="ho-shell snap-shell">
+      <header class="ho-head">
+        <div class="ho-title">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 3l4 4h-7z" stroke-linejoin="round"/></svg>
+          <span>Snapshots</span>
+          <span class="ho-sub" id="snapSessionLabel"></span>
+        </div>
+        <button class="icon-btn ho-close" id="snapClose" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="ho-body">
+        <div id="snapNote" class="ho-sub"></div>
+        <div id="snapList"></div>
+      </div>
+      <footer class="ho-foot"><span>This session's snapshots only, the agent takes one automatically before its first edit of a turn.</span></footer>
+    </div>
+  </div>
+  <div class="term-overlay" id="termOverlay" hidden>
+    <div class="term-shell">
+      <div class="term-head">
+        <span class="term-title">Terminal</span>
+        <span class="term-cwd" id="termCwd"></span>
+        <span class="term-shell-name" id="termShellName"></span>
+        <button class="term-btn" id="termClear" title="Clear">clear</button>
+        <button class="term-btn" id="termClose" title="Close">Close</button>
+      </div>
+      <div class="term-out" id="termOut"></div>
+      <div class="term-input-row">
+        <span class="term-prompt" id="termPrompt">&gt;</span>
+        <input type="text" id="termIn" autocomplete="off" spellcheck="false"
+               placeholder="type a command and press Enter">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Settings overlay: providers · skills · tools · extensions · appearance ─ -->
+  <div class="harness-overlay" id="harnessOverlay" hidden>
+    <div class="ho-shell">
+      <header class="ho-head">
+        <div class="ho-title">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1-.1a1.6 1.6 0 0 0-.3 1.7V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+          <span>Settings</span>
+        </div>
+        <nav class="ho-tabs" id="hoTabs">
+          <button class="ho-tab active" data-tab="general">General</button>
+          <button class="ho-tab" data-tab="providers">Providers</button>
+          <button class="ho-tab" data-tab="tools">Skills &amp; Tools</button>
+          <button class="ho-tab" data-tab="appearance">Appearance</button>
+          <button class="ho-tab" data-tab="prompts">Prompts</button>
+        </nav>
+        <button class="icon-btn ho-close" id="hoClose" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="ho-body" id="hoBody">
+        <section class="ho-panel" id="panel-general"></section>
+        <section class="ho-panel" id="panel-providers" hidden></section>
+        <section class="ho-panel" id="panel-tools" hidden></section>
+        <section class="ho-panel" id="panel-appearance" hidden></section>
+        <section class="ho-panel" id="panel-prompts" hidden></section>
+      </div>
+      <footer class="ho-foot"><span id="hoNote"></span></footer>
+    </div>
+  </div>
+  <!-- ── Git panel: manual version control (the LLM is blocked from git) ── -->
+  <div class="harness-overlay git-overlay" id="gitOverlay" hidden>
+    <div class="ho-shell git-shell">
+      <header class="ho-head">
+        <div class="ho-title">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="10" r="2.4"/><path d="M6 8.4v7.2M8.4 6h3.6a3 3 0 0 1 3 3v1" stroke-linecap="round"/></svg>
+          <span>Git</span>
+        </div>
+        <div class="git-repo" id="gitRepo" title="repository">-</div>
+        <button class="icon-btn ho-close" id="gitClose" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="ho-body git-body">
+        <aside class="git-side">
+          <div class="git-actions">
+            <button class="ho-btn" id="gitRefreshBtn">Refresh</button>
+            <button class="ho-btn" id="gitFetchBtn">Fetch</button>
+            <button class="ho-btn" id="gitPullBtn">Pull</button>
+            <button class="ho-btn primary" id="gitPushBtn">Push</button>
+            <button class="ho-btn" id="gitSyncBtn">Sync</button>
+          </div>
+          <div class="ho-section">Workspace</div>
+          <div class="git-projects">
+            <div class="git-project-status" id="gitProjectStatus"></div>
+          </div>
+          <div class="git-workdir">
+            <input id="gitWorkdir" placeholder="workspace folder" spellcheck="false" autocomplete="off">
+            <button class="ho-btn small" id="gitWorkdirBrowse">Browse</button>
+            <button class="ho-btn small" id="gitWorkdirOpen">Open</button>
+          </div>
+          <div class="git-branchbar" id="gitBranchBar"></div>
+          <div class="ho-section">Changes <span class="ho-count" id="gitChangeCount">0</span></div>
+          <div class="git-changes" id="gitChanges"></div>
+          <div class="git-commit">
+            <textarea id="gitCommitMsg" rows="2" placeholder="Commit message…"></textarea>
+            <div class="git-commit-actions">
+              <button class="ho-btn small" id="gitStageAllBtn">Stage all</button>
+              <button class="ho-btn primary small" id="gitCommitBtn">Commit</button>
+            </div>
+          </div>
+          <div class="ho-section">Remotes</div>
+          <div class="git-remotes" id="gitRemotes"></div>
+          <div class="ho-section">Commit identity</div>
+          <div class="git-id-row">
+            <span class="git-id-label">Commit by</span>
+            <select id="gitIdSelect" class="git-select"></select>
+          </div>
+          <div class="git-id-custom" id="gitIdCustom" hidden>
+            <input id="gitIdName" placeholder="your name" spellcheck="false" autocomplete="off">
+            <input id="gitIdEmail" placeholder="you@example.com" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="git-identity" id="gitIdentity"></div>
+          <div class="git-gh-row">
+            <button class="ho-btn small primary" id="gitIdSave">Save</button>
+          </div>
+          <div class="ho-section">GitHub</div>
+          <div class="git-github">
+            <div class="git-gh-account" id="gitGhAccount">checking…</div>
+            <div class="git-gh-row">
+              <input id="gitGhToken" type="password" placeholder="Personal Access Token (optional)" spellcheck="false" autocomplete="off">
+              <button class="ho-btn small" id="gitGhConnect">Use token</button>
+            </div>
+            <div class="git-gh-row">
+              <input id="gitGhRepo" list="gitGhRepoList" placeholder="owner/repo to clone" spellcheck="false" autocomplete="off">
+              <datalist id="gitGhRepoList"></datalist>
+              <button class="ho-btn small primary" id="gitGhClone">Clone</button>
+            </div>
+            <div class="git-gh-row">
+              <input id="gitGhDir" placeholder="clone into…" spellcheck="false" autocomplete="off">
+              <button class="ho-btn small" id="gitGhDirBrowse">Browse</button>
+              <button class="ho-btn small" id="gitGhSignout">Sign out</button>
+            </div>
+            <div class="saved-folders" id="gitGhSaved" hidden></div>
+            <div class="git-gh-row">
+              <input id="gitGhNewName" placeholder="create new repo from this workspace…" spellcheck="false" autocomplete="off">
+              <select id="gitGhNewVis" class="git-select" style="flex:0 0 92px"><option value="private">Private</option><option value="public">Public</option></select>
+              <button class="ho-btn small primary" id="gitGhCreate">Create</button>
+            </div>
+            <div class="git-gh-row">
+              <label class="git-gh-fresh"><input type="checkbox" id="gitGhFresh"> Fresh start (drop old commits)</label>
+              <button class="ho-btn small danger" id="gitGhDelete">Delete repo</button>
+            </div>
+            <div class="git-gh-list" id="gitGhList"></div>
+          </div>
+        </aside>
+        <section class="git-main">
+          <div class="ho-section">History</div>
+          <div class="git-log" id="gitLog"></div>
+          <div class="ho-section">Console <span class="ho-sub">git / gh commands</span></div>
+          <pre class="git-out" id="gitOut"></pre>
+          <div class="git-cmdrow">
+            <input id="gitCmd" placeholder="git status" spellcheck="false" autocomplete="off">
+            <button class="ho-btn primary" id="gitRunBtn">Run</button>
+          </div>
+        </section>
+      </div>
+      <footer class="ho-foot"><span id="gitNote"></span></footer>
+    </div>
+  </div>
+</div>
+<div class="demo-chrome">
+  <span class="demo-chrome-label">Interface mock, no server</span>
+  <button class="demo-chrome-btn" id="demoPause" type="button">Pause</button>
+  <button class="demo-chrome-btn" id="demoSpeed" type="button">1x</button>
+  <button class="demo-chrome-btn" id="demoReplay" type="button">Replay</button>
+  <a class="demo-chrome-link" href="index.html" target="_top">Docs</a>
+</div>
+
+<script>
+window.TACIT_VERSION = "1.0.7";
+window.TACIT_THEMES = [
+  { id: 'graphite', name: 'Graphite', tone: 'dark', hint: 'warm graphite, petrol accent' },
+  { id: 'verdigris', name: 'Verdigris', tone: 'dark', hint: 'cool grey-green, copper' },
+  { id: 'mono', name: 'Mono', tone: 'dark', hint: 'greyscale; colour only for status' },
+  { id: 'amethyst', name: 'Amethyst', tone: 'dark', hint: 'plum ground, iris accent' },
+  { id: 'nocturne', name: 'Nocturne', tone: 'dark', hint: 'indigo-slate, one brass lamp' },
+  { id: 'lagoon', name: 'Lagoon', tone: 'dark', hint: 'deep teal-slate, water cyan' },
+  { id: 'rosewood', name: 'Rosewood', tone: 'dark', hint: 'plum-rose ground, dusty mauve' },
+  { id: 'absinthe', name: 'Absinthe', tone: 'dark', hint: 'green-slate, chartreuse' },
+  { id: 'iris', name: 'Iris', tone: 'dark', hint: 'cool neutral, deep violet-blue' },
+  { id: 'slate', name: 'Slate', tone: 'dark', hint: 'mid-tone grey, amber indicator' },
+  { id: 'oxide', name: 'Oxide', tone: 'dark', hint: 'iron ground, chalk accent' },
+  { id: 'kinpaku-dark', name: 'Kinpaku dark', tone: 'dark', hint: 'black lacquer, gold leaf' },
+  { id: 'contrast', name: 'Contrast', tone: 'dark', hint: 'AAA, white on black' },
+  { id: 'vellum', name: 'Vellum', tone: 'light', hint: 'warm paper, ultramarine' },
+  { id: 'signal', name: 'Signal', tone: 'light', hint: 'cool white, chart-series colour' },
+  { id: 'celadon', name: 'Celadon', tone: 'light', hint: 'jade-glaze ground, deep teal' },
+  { id: 'frost', name: 'Frost', tone: 'light', hint: 'blue-white ground, deep cyan' },
+  { id: 'monotype', name: 'Monotype', tone: 'light', hint: 'neutral light; the accent is ink' },
+  { id: 'foxglove', name: 'Foxglove', tone: 'light', hint: 'warm light, muted plum' },
+  { id: 'sorrel', name: 'Sorrel', tone: 'light', hint: 'pale clay ground, indigo ink' },
+  { id: 'kinpaku', name: 'Kinpaku', tone: 'light', hint: 'gold-leaf paper, patina teal' },
+  { id: 'contrast-light', name: 'Contrast light', tone: 'light', hint: 'AAA, black on white' },
+];
+window.TACIT_PROMPTS = [{"id": "live", "label": "This session", "entries": [{"name": "Project instructions", "text": "This project has its own instructions and documentation. They are not in your context yet, read the ones that matter before changing anything:\n- README.md (6355 tokens)\n- CONTRIBUTING.md (2365 tokens)"}]}, {"id": "standing", "label": "Standing prompt", "entries": [{"name": "BASE", "text": "You are Tacit, a coding agent working inside a web workspace.\n\nYou have tools for exploring and changing files and for running shell commands. Work by\ninspecting first, then acting. Prefer small, verifiable steps over large speculative edits.\n\nShell: {platform}. Relative paths resolve against your working directory, which is not stated\nto you, ask the shell where you are instead of assuming, and never try a utility that does\nnot exist on this platform.\n\nRules:\n- Read before you write. Never guess at a file's contents.\n- Prefer the file tools over the shell: read_file, edit_file, write_file, not cat, sed or\n  heredoc.\n- If a command fails, read the error and change approach. Do not retry variants of a command\n  the platform does not have.\n- Report what you actually did, including anything that failed.\n{vcs}"}]}, {"id": "standing", "label": "Standing prompt", "entries": [{"name": "CHAT", "text": "No tools are available in this conversation. Answer directly from what you know. If the\nuser asks you to inspect or change files, tell them to switch to Agent mode."}]}, {"id": "guidance", "label": "Guidance", "entries": [{"name": "bg_output failure", "text": "bg_output should be read when you have a reason to, not in a loop. Polling a background job spends the turns the task still needs."}]}, {"id": "compaction", "label": "Compaction", "entries": [{"name": "COMPACT", "text": "Compress the work so far into a dense handover note for later reference.\n\nUse these headings exactly, and keep every file path verbatim, a path that is\nparaphrased is a path that has to be found again:\n\n## Task and constraints\nWhat was asked, and any constraint or preference stated.\n\n## Resolved\nQuestions answered, with the answer. Facts established, with where they came from.\n\n## Pending\nQuestions still open, and what was tried that did not settle them.\n\n## Changed\nFiles created or modified, with their paths.\n\n## Dead ends\nErrors hit and approaches rejected, so they are not repeated.\n\nWrite plainly and factually, in the past tense. This note is a record of work\n…"}]}, {"id": "assistant", "label": "Assistant", "entries": [{"name": "PERSONA", "text": "You are the Assistant, a second set of eyes beside a coding agent.\n\nThe agent is doing the work. You help the person direct it. You can see the full conversation\nhistory and can answer questions about it. Your job is the work around the work: drafting prompts\nto give the agent, thinking an approach through, noticing what was missed, explaining what the\nagent just did.\n\nWhat you may do beyond reading is stated in these instructions as a separate line, because it is\na setting and not a property of you. Believe that line: it is written from what this conversation\nactually arms.\n\nThe agent cannot see you. Nothing you say reaches it unless the person copies it across, so write\n…"}]}, {"id": "plan", "label": "Plan mode", "entries": [{"name": "DECOMPOSE", "text": "You are planning a coding task.\n\nRequest: {prompt}\n\nList the places in the codebase worth inspecting before writing a plan. Reply with a JSON array\nonly, at most {limit} entries, each {{\"label\": \"short name\", \"task\": \"what to find out\"}}.\nNo prose, no code fences."}]}];
+</script>
+<script src="assets/markdown.js"></script>
+<script src="assets/demo.js"></script>
+</body>
+</html>

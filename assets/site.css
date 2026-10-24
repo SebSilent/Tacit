@@ -1,0 +1,563 @@
+/*
+ * The documentation site, on the app's own theme.
+ *
+ * Every colour, size and duration is a token from `nocturne-tokens.css`, which is a
+ * copy of `static/style.css`. No rule here sets a raw length for a property the app
+ * keeps on a ladder, so the page and the interface it documents are the same object.
+ *
+ * Brass is a mark and a line. It never carries a sentence.
+ */
+
+* { box-sizing: border-box; }
+
+html {
+	-webkit-text-size-adjust: 100%;
+	scroll-behavior: smooth;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font);
+	font-size: var(--fs-5);
+	line-height: 1.65;
+	-webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(var(--accent-rgb), .28); }
+
+a {
+	color: var(--text);
+	text-decoration: none;
+	border-bottom: 1px solid var(--line-2);
+	transition: color var(--dur-2) var(--ease-out),
+	            border-color var(--dur-2) var(--ease-out);
+}
+
+a:hover {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent-2);
+	outline-offset: 2px;
+	border-radius: var(--radius-sm);
+}
+
+h1, h2, h3, h4 { text-wrap: balance; }
+
+/* ── masthead ─────────────────────────────────────────────────────────── */
+
+.masthead {
+	position: sticky;
+	top: 0;
+	z-index: 5;
+	background: color-mix(in srgb, var(--bg) 88%, transparent);
+	backdrop-filter: blur(10px);
+	border-bottom: 1px solid var(--line);
+}
+
+.masthead-inner {
+	max-width: var(--site-max);
+	margin: 0 auto;
+	padding: var(--sp-8) var(--site-gutter);
+	display: flex;
+	align-items: center;
+	gap: var(--sp-7);
+	flex-wrap: wrap;
+}
+
+.wordmark {
+	font-size: var(--fs-6);
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	font-weight: 650;
+	color: var(--text);
+	border: 0;
+}
+
+.wordmark::before {
+	content: "";
+	display: inline-block;
+	width: var(--sp-5);
+	height: var(--sp-5);
+	margin-right: var(--sp-5);
+	border-radius: var(--radius-pill);
+	background: var(--accent);
+	vertical-align: 2px;
+}
+
+.wordmark:hover { color: var(--accent); }
+
+.masthead-tag {
+	font-size: var(--fs-2);
+	letter-spacing: .14em;
+	text-transform: uppercase;
+	color: var(--fadetext);
+	border-left: 1px solid var(--line);
+	padding-left: var(--sp-7);
+}
+
+.masthead-links {
+	margin-left: auto;
+	display: flex;
+	gap: var(--sp-9);
+	font-size: var(--fs-3);
+}
+
+.masthead-links a { border-bottom: 0; color: var(--muted); }
+.masthead-links a:hover { color: var(--accent); }
+
+/* ── shell ────────────────────────────────────────────────────────────── */
+
+.shell {
+	max-width: var(--site-max);
+	margin: 0 auto;
+	padding: 0 var(--site-gutter) 96px;
+	display: grid;
+	grid-template-columns: 236px minmax(0, 1fr);
+	gap: clamp(32px, 5vw, 72px);
+	align-items: start;
+}
+
+@media (max-width: 880px) {
+	.shell { grid-template-columns: minmax(0, 1fr); }
+	.nav { position: static; padding-top: var(--sp-8); }
+	.masthead-tag { display: none; }
+}
+
+.nav {
+	position: sticky;
+	top: 64px;
+	padding-top: var(--sp-11);
+	font-size: var(--fs-4);
+	max-height: calc(100vh - 88px);
+	overflow-y: auto;
+}
+
+.nav-group + .nav-group { margin-top: var(--sp-10); }
+
+.nav-label {
+	font-size: var(--fs-1);
+	letter-spacing: .16em;
+	text-transform: uppercase;
+	color: var(--fadetext);
+	margin: 0 0 var(--sp-5);
+	padding-left: var(--sp-7);
+}
+
+.nav ul { list-style: none; margin: 0; padding: 0; }
+.nav li { margin: 0; }
+
+.nav a {
+	display: block;
+	padding: var(--sp-4) 0 var(--sp-4) var(--sp-7);
+	margin-left: calc(-1 * var(--sp-7));
+	padding-right: var(--sp-7);
+	border-left: 2px solid transparent;
+	border-bottom: 0;
+	color: var(--muted);
+	line-height: 1.45;
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.nav a:hover {
+	color: var(--text);
+	background: var(--bg-2);
+	border-left-color: var(--line-2);
+}
+
+.nav a[aria-current="page"] {
+	color: var(--text);
+	font-weight: 600;
+	background: var(--bg-2);
+	border-left-color: var(--accent);
+}
+
+/* ── page ─────────────────────────────────────────────────────────────── */
+
+.page { padding-top: var(--sp-12); min-width: 0; }
+
+.eyebrow {
+	font-size: var(--fs-2);
+	letter-spacing: .16em;
+	text-transform: uppercase;
+	color: var(--accent);
+	margin: 0 0 var(--sp-6);
+}
+
+.prose { max-width: 72ch; }
+
+.prose h1 {
+	font-size: clamp(2.1rem, 4.6vw, 3.4rem);
+	font-weight: 300;
+	line-height: 1.06;
+	letter-spacing: -.015em;
+	color: var(--text);
+	margin: 0 0 var(--sp-9);
+}
+
+.prose h2 {
+	font-size: clamp(1.45rem, 2.4vw, 1.9rem);
+	font-weight: 400;
+	line-height: 1.15;
+	letter-spacing: -.01em;
+	color: var(--text);
+	margin: 72px 0 var(--sp-8);
+	padding-top: var(--sp-10);
+	border-top: 1px solid var(--line);
+}
+
+.prose h2::before {
+	content: "";
+	display: block;
+	width: var(--sp-11);
+	height: 2px;
+	background: var(--accent);
+	margin-bottom: var(--sp-9);
+}
+
+.prose h2:first-of-type { border-top: 0; padding-top: 0; }
+.prose h2:first-of-type::before { display: none; }
+
+.prose h3 {
+	font-size: var(--fs-8);
+	font-weight: 600;
+	color: var(--text);
+	margin: 40px 0 var(--sp-6);
+	letter-spacing: -.005em;
+}
+
+.prose h4 {
+	font-size: var(--fs-6);
+	font-weight: 600;
+	color: var(--text);
+	margin: var(--sp-11) 0 var(--sp-5);
+}
+
+.prose p, .prose li { color: var(--text); overflow-wrap: break-word; }
+.prose strong { color: var(--text-strong); font-weight: 650; }
+
+.prose ul, .prose ol { padding-left: 22px; margin: 0 0 18px; }
+.prose li { margin: var(--sp-4) 0; }
+.prose li::marker { color: var(--fadetext); }
+
+.prose blockquote {
+	margin: 0 0 18px;
+	padding: var(--sp-4) 0 var(--sp-4) var(--sp-9);
+	border-left: 2px solid var(--accent-2);
+	color: var(--muted);
+}
+
+.prose :not(pre) > code {
+	font-family: var(--mono);
+	font-size: .86em;
+	background: var(--bg-3);
+	color: var(--code-text);
+	padding: .16em .42em;
+	border-radius: var(--sp-2);
+	border: 1px solid var(--line);
+}
+
+.prose hr { border: 0; border-top: 1px solid var(--line); margin: var(--sp-12) 0; }
+
+/* Code blocks: a well darker than the page, with a labelled head. */
+
+.code-block {
+	margin: 0 0 22px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-sm);
+	background: var(--code-bg);
+	overflow: hidden;
+}
+
+.code-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-7);
+	background: var(--bg-2);
+	color: var(--fadetext);
+	font-family: var(--mono);
+	font-size: var(--fs-1);
+	letter-spacing: .12em;
+	text-transform: uppercase;
+	padding: var(--sp-5) var(--sp-8);
+	border-bottom: 1px solid var(--line);
+}
+
+.code-head span:first-child { color: var(--muted); }
+
+.copy-btn {
+	margin-left: auto;
+	font: inherit;
+	letter-spacing: inherit;
+	text-transform: inherit;
+	color: var(--muted);
+	background: var(--bg-3);
+	border: 1px solid var(--line-2);
+	border-radius: var(--sp-2);
+	padding: var(--sp-3) var(--sp-7);
+	cursor: pointer;
+	transition: background var(--dur-2) var(--ease-out),
+	            color var(--dur-2) var(--ease-out),
+	            box-shadow var(--dur-2) var(--ease-out);
+}
+
+.copy-btn:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+.copy-btn.is-done {
+	background: transparent;
+	color: var(--ok);
+	box-shadow: inset 0 0 0 1px var(--ok);
+}
+
+.code-block pre {
+	margin: 0;
+	padding: var(--sp-9) var(--sp-10);
+	overflow-x: auto;
+	color: var(--code-text);
+	font-size: var(--fs-3);
+	line-height: 1.6;
+}
+
+.code-block pre code { font-family: var(--mono); }
+
+/* Tables: hairlines and a sunk head, no fills that compete with the type. */
+
+.prose table {
+	width: 100%;
+	max-width: 100%;
+	margin: 0 0 var(--sp-12);
+	border-collapse: collapse;
+	font-size: var(--fs-4);
+	display: block;
+	overflow-x: auto;
+}
+
+.prose th {
+	text-align: left;
+	font-weight: 600;
+	color: var(--muted);
+	background: var(--bg-2);
+	padding: var(--sp-6) var(--sp-8);
+	border-bottom: 1px solid var(--line-2);
+	white-space: nowrap;
+	font-size: var(--fs-3);
+}
+
+.prose td {
+	padding: var(--sp-6) var(--sp-8);
+	border-bottom: 1px solid var(--line);
+	vertical-align: top;
+}
+
+.prose tbody tr { transition: background var(--dur-1) var(--ease-out); }
+.prose tbody tr:hover td { background: var(--bg-2); }
+
+/* ── landing ──────────────────────────────────────────────────────────── */
+
+.hero {
+	padding: var(--site-section) 0 var(--sp-11);
+	max-width: 64ch;
+}
+
+.hero h1 {
+	font-size: clamp(2.4rem, 5.4vw, 4rem);
+	font-weight: 300;
+	line-height: 1.04;
+	letter-spacing: -.02em;
+	color: var(--text);
+	margin: 0 0 var(--sp-9);
+}
+
+.hero p { font-size: var(--fs-7); color: var(--muted); margin: 0 0 var(--sp-7); }
+
+.hero-rule {
+	width: var(--sp-12);
+	height: 2px;
+	background: var(--accent);
+	margin: var(--sp-11) 0;
+}
+
+.card-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+	gap: 1px;
+	background: var(--line);
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	overflow: hidden;
+	margin: var(--sp-11) 0 0;
+}
+
+.card {
+	background: var(--bg-2);
+	padding: var(--sp-10) var(--sp-11);
+	color: var(--muted);
+	display: block;
+	border: 0;
+	position: relative;
+	transition: background var(--dur-2) var(--ease-out);
+}
+
+.card::after {
+	content: "";
+	position: absolute;
+	inset: auto 0 0 0;
+	height: 2px;
+	background: var(--accent);
+	transform: scaleX(0);
+	transform-origin: left;
+	transition: transform var(--dur-3) var(--ease-soft);
+}
+
+.card:hover { background: var(--bg-3); }
+.card:hover::after { transform: scaleX(1); }
+
+.card h2 {
+	font-size: var(--fs-7);
+	font-weight: 600;
+	color: var(--text);
+	margin: 0 0 var(--sp-5);
+	border: 0;
+	padding: 0;
+	letter-spacing: -.01em;
+}
+
+.card h2::before { display: none; }
+
+.card p {
+	font-size: var(--fs-4);
+	color: var(--muted);
+	margin: 0;
+	line-height: 1.55;
+}
+
+.card .card-key {
+	display: block;
+	font-family: var(--mono);
+	font-size: var(--fs-1);
+	letter-spacing: .12em;
+	text-transform: uppercase;
+	color: var(--fadetext);
+	margin-bottom: var(--sp-6);
+}
+
+/* ── the interface mock ───────────────────────────────────────── */
+
+/* The mock is the app's own page in a frame, so there is no fake window chrome to
+   style here and no invented transcript: `assets/app.css` is the real stylesheet and
+   `demo.html` is the real markup. Only the seam around the frame belongs to the site.
+   The height is a viewport unit because the composer is pinned to the bottom of the
+   frame's viewport: a fixed pixel height would either crop the composer or leave a
+   gap under it. */
+.demo-band {
+	margin: var(--sp-11) 0 0;
+	display: grid;
+	gap: var(--sp-6);
+}
+
+.demo-band-head {
+	display: grid;
+	gap: var(--sp-4);
+}
+
+.demo-band-head h2 {
+	margin: 0;
+}
+
+.demo-band-head p {
+	margin: 0;
+	max-width: 76ch;
+	font-size: var(--fs-3);
+	line-height: 1.65;
+	color: var(--muted);
+}
+
+.demo-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sp-4);
+	margin-top: var(--sp-2);
+}
+
+/* The site has no button component, so these take the shape the cards already use:
+   a hairline edge, a fill from the surface ramp, and the accent only on the one that
+   asks for a click. */
+.demo-actions a {
+	font-family: var(--mono);
+	font-size: var(--fs-2);
+	letter-spacing: .04em;
+	padding: var(--sp-3) var(--sp-6);
+	border: 1px solid var(--line-2);
+	border-radius: var(--radius-pill);
+	background: var(--bg-2);
+	color: var(--text);
+	text-decoration: none;
+}
+
+.demo-actions a:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.demo-frame {
+	display: block;
+	width: 100%;
+	height: min(78vh, 760px);
+	border: 1px solid var(--line-2);
+	border-radius: var(--radius);
+	background: var(--bg);
+}
+
+@media (max-width: 720px) {
+	.demo-frame { height: 70vh; }
+}
+
+.demo-note {
+	margin: 0;
+	max-width: 76ch;
+	font-size: var(--fs-2);
+	line-height: 1.6;
+	color: var(--fadetext);
+}
+
+/* ── footer ───────────────────────────────────────────────────────────── */
+
+.footer {
+	border-top: 1px solid var(--line);
+	background: var(--bg-2);
+	color: var(--fadetext);
+	font-size: var(--fs-3);
+}
+
+.footer-inner {
+	max-width: var(--site-max);
+	margin: 0 auto;
+	padding: var(--sp-11) var(--site-gutter);
+	display: flex;
+	gap: var(--sp-9);
+	flex-wrap: wrap;
+	justify-content: space-between;
+}
+
+.footer a { color: var(--muted); }
+.footer a:hover { color: var(--accent); }
+
+.state-error { color: var(--err); font-size: var(--fs-7); }
+
+/* Scrollbars, so a dark page does not get a light bar on Windows. */
+
+* { scrollbar-color: var(--scroll) transparent; scrollbar-width: thin; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: var(--radius-pill); }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+	* { transition: none !important; animation: none !important; }
+	html { scroll-behavior: auto; }
+}
