@@ -1090,6 +1090,11 @@ def start_assistant(sid: str, rec: dict, text: str,
         # it the post-append history would read the question twice.
         mini = dict(rec)
         mini["assistant"] = [dict(m) for m in (rec.get("assistant") or [])]
+        # The prompt travels in the state, not the history: run_turn appends
+        # it as the user row itself, and the worker pops it out of the state
+        # before running. Without it the worker runs with an empty prompt and
+        # the model answers a greeting to nobody.
+        mini["text"] = text
         if turns:
             # A cycle prompt fires after every turn, so it reads a narrower
             # window than a question somebody typed. Per-call, not a setting:

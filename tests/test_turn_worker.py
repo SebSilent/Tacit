@@ -20,8 +20,8 @@ import time
 import unittest
 from pathlib import Path
 
-from backend import config, session_state, turn_worker
-from tests.helpers import state_paths
+from backend import config, session_runtime, session_state, store, turn_worker
+from tests.helpers import drain_turns, state_paths
 
 
 class TurnWorkerTest(unittest.TestCase):
@@ -208,6 +208,140 @@ class TurnWorkerTest(unittest.TestCase):
         w.proc.wait(timeout=10)
         session_state.end("tw-sid")
         self.assertFalse(session_state.busy("tw-sid"))
+
+
+class AssistantWorkerTest(unittest.TestCase):
+    """The assistant's worker process receives the prompt.
+
+    Regression: start_assistant built the worker's state without the prompt
+    in it, so the worker ran run_turn with an empty user message and the
+    model answered a greeting to nobody ("How can I help?"). The handshake
+    is the only seam across the process boundary, so this drives the real
+    runtime entry point against a fake OpenAI-shaped server and asserts on
+    what the model would actually have seen.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        home = Path(self._tmp.name)
+        self._keys = state_paths(config)
+        self._orig = {k: getattr(config, k) for k in self._keys}
+        self._home = config.HOME
+        self.addCleanup(self._restore_config)
+        config.HOME = home
+        for k in self._keys:
+            target = home / Path(self._orig[k]).name
+            setattr(config, k, target)
+            if k.endswith("_DIR"):
+                target.mkdir(parents=True, exist_ok=True)
+        config.ensure_home()
+        # The suite-wide guard pins the thread path (tests/__init__.py);
+        # this test is about the process path, so it opts back in.
+        self._worker_mode = os.environ.get("TACIT_TURN_WORKER")
+        os.environ["TACIT_TURN_WORKER"] = "process"
+        self.addCleanup(self._restore_worker_mode)
+        # The worker resolves its home from TACIT_HOME, not from this
+        # process's module attributes (see TurnWorkerTest.setUp).
+        self._tacit_home = os.environ.get("TACIT_HOME")
+        os.environ["TACIT_HOME"] = str(home)
+        self.addCleanup(self._restore_tacit_home)
+        session_state.reset()
+        self.addCleanup(session_state.reset)
+        self.addCleanup(drain_turns)
+
+    def _restore_tacit_home(self):
+        if self._tacit_home is None:
+            os.environ.pop("TACIT_HOME", None)
+        else:
+            os.environ["TACIT_HOME"] = self._tacit_home
+
+    def _restore_worker_mode(self):
+        if self._worker_mode is None:
+            os.environ.pop("TACIT_TURN_WORKER", None)
+        else:
+            os.environ["TACIT_TURN_WORKER"] = self._worker_mode
+
+    def _restore_config(self):
+        config.HOME = self._home
+        for k, v in self._orig.items():
+            setattr(config, k, v)
+
+    def test_the_prompt_reaches_the_assistant_worker(self):
+        """End to end: a typed prompt, the worker's request, the saved reply."""
+        import asyncio
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        captured: list[dict] = []
+
+        class Fake(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"     # keep-alive; httpx reuses the connection
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                try:
+                    captured.append(json.loads(body))
+                except Exception:  # noqa: BLE001
+                    captured.append({})
+                sse = (
+                    'data: ' + json.dumps({"choices": [{"delta": {
+                        "content": "the assistant reply"}}]}) + '\n\n'
+                    'data: ' + json.dumps({"choices": [{"delta": {},
+                                                        "finish_reason": "stop"}],
+                                           "usage": {"prompt_tokens": 10,
+                                                     "completion_tokens": 5,
+                                                     "total_tokens": 15}}) + '\n\n'
+                    'data: [DONE]\n\n').encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(sse)))
+                self.end_headers()
+                self.wfile.write(sse)
+                self.wfile.flush()
+
+            def log_message(self, *a):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Fake)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        reg = {"default": "p/m", "providers": {"p": {"baseUrl": f"http://127.0.0.1:{port}/v1", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}
+        config.save_registry(reg)
+
+        rec = {"id": "asw-1", "model": "p/m", "transcript": [], "assistant": []}
+        store.save(rec)
+        # No subscribers and no autonomy: publish never touches the loop, so
+        # a fresh loop object is enough for the runtime's bookkeeping.
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        res = session_runtime.start_assistant("asw-1", rec, "what moved the goal?", loop)
+        self.assertTrue(res.get("ok"), res)
+        run = session_runtime._assistants.get("asw-1")
+        self.assertIsNotNone(run and run.get("worker"),
+                             "the reply must run through the process path")
+
+        # The driver's epilogue appends the reply row and saves; that is the
+        # signal that the whole path ran, worker included.
+        deadline = time.time() + 30
+        rows = []
+        while time.time() < deadline:
+            rows = [r for r in rec.get("assistant", []) if r.get("role") == "assistant"]
+            if rows:
+                break
+            time.sleep(0.1)
+        self.assertTrue(rows, "the assistant reply never landed in the record")
+
+        # The regression itself: the worker's request must carry the prompt
+        # as the last user message. With the bug it carried an empty string.
+        self.assertTrue(captured, "the worker never called the model")
+        messages = captured[-1].get("messages") or []
+        self.assertTrue(messages, "the request carried no messages")
+        last = messages[-1]
+        self.assertEqual(last.get("role"), "user")
+        self.assertEqual(last.get("content"), "what moved the goal?")
+        self.assertEqual(rows[-1].get("content"), "the assistant reply")
 
 
 class KillTreeTest(unittest.TestCase):
