@@ -11,7 +11,7 @@ import time
 import threading
 from pathlib import Path
 
-from . import (audit, config, extras, guidance, mcp_registry, memory_modes,
+from . import (archive, audit, config, extras, guidance, mcp_registry, memory_modes,
                memory_store, metrics, model_settings, plugin_manager, sandbox,
                skills, store)
 from . import tokens as token_mod
@@ -473,10 +473,28 @@ def t_memory_add(content: str, type: str = "other", scope: str = "global",
             f"it is not injected anywhere until you approve it in Settings > Memory.")
 
 
+def t_session_archive(action: str = "info", query: str = "", offset: int = 0,
+                      limit: int = 20, session: str = "") -> str:
+    """Read this session's frozen archive — the rows compaction folded away.
+
+    `session` is injected by call_tool from the turn's context, never taken
+    from the model: a tool that could name another session's archive would be
+    a cross-session read dressed as a lookup.
+    """
+    return archive.read(session or "", action=action, query=query,
+                        offset=offset, limit=limit)
+
+
 MEMORY_TOOL_NAMES = ("memory_recall", "memory_add")
 # Named because two callers gate on it: tools_for hides it where retrieval is
 # refused, and profiles.cost_at prices it only where it is offered.
 MEMORY_RECALL = "memory_recall"
+
+# The frozen archive's reader. Named because three callers gate on it: tools_for
+# hides the schema while the switch is off, call_tool refuses the call even when
+# the schema leaked, and the Tools tab routes its toggle to the archive switch
+# rather than the shared disabledTools list.
+ARCHIVE_TOOL = "session_archive"
 
 
 def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
@@ -617,6 +635,7 @@ EXECS = {
     "mcp_call": t_mcp_call,
     "memory_recall": t_memory_recall,
     "memory_add": t_memory_add,
+    "session_archive": t_session_archive,
 }
 
 READONLY_BLOCKED = {"write_file", "edit_file", "run_shell", "bg_start", "bg_stop"}
@@ -741,6 +760,16 @@ TOOLS = [
          "scope": {"type": "string", "enum": list(memory_store.SCOPES)},
          "confidence": {"type": "string", "enum": list(memory_store.CONFIDENCE)}},
         ["content"]),
+    # The frozen archive's reader. Off by default (Settings > Tools), so an
+    # install that never turns it on pays nothing for it. What it reads is the
+    # one thing no other tool can reach: rows a compaction folded away, kept
+    # verbatim because a summary is written for the next request, not to be
+    # asked questions of.
+    _fn("session_archive", "Read this session's frozen archive: every transcript row a "
+                           "compaction folded away, kept verbatim and never summarised. "
+                           "action=info reports its size; action=search greps it by query; "
+                           "action=read pages through it (offset, limit).",
+        {"action": _S, "query": _S, "offset": _I, "limit": _I}, ["action"]),
 ]
 
 SUBTASK = "task"
@@ -898,6 +927,15 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
             rows = [t for t in rows if t["function"]["name"] not in MEMORY_TOOL_NAMES]
         elif not memory_modes.retrieval_on():
             rows = [t for t in rows if t["function"]["name"] != MEMORY_RECALL]
+    except Exception:  # noqa: BLE001
+        pass
+
+    # The archive reader follows its own switch, off by default. Same rule as
+    # the MCP helpers: a schema for a capability that is switched off is a
+    # dead end that costs tokens and invites calls that can only fail.
+    try:
+        if not config.archive_tool():
+            rows = [t for t in rows if t["function"]["name"] != ARCHIVE_TOOL]
     except Exception:  # noqa: BLE001
         pass
 
@@ -1430,6 +1468,11 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
     if not old:
         return None
     before = _chars(msgs)
+    # Archived before the prune below touches them: the prune clears tool
+    # output in place, and an archive taken after it would preserve the head
+    # it kept and lose the body it dropped — the exact part the archive
+    # exists to keep. Fails silently if it cannot write; the fold must go on.
+    archived = archive.append_rows(rec.get("id") or "", old, why="fold")
     # A summary written by an earlier compaction sits at the head of `old`, so it
     # is digested along with everything else and the new note refines it rather
     # than stacking a second summary on top of the first.
@@ -1439,7 +1482,7 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
                        + [{"role": "summary", "content": summary}] + tail)
     return {"compacted": len(old), "kept": len(tail), "chars_before": before,
             "chars_after": _chars(rec["messages"]), "pruned_chars": reclaimed,
-            "error": err}
+            "archived": archived, "error": err}
 
 
 def apply_stored_summary(rec: dict, summary: str, kept_tokens: int = 0,
@@ -1482,6 +1525,10 @@ def apply_stored_summary(rec: dict, summary: str, kept_tokens: int = 0,
     if i <= 0:
         return 0                      # the tail already covers the whole record
     before = _chars(msgs)
+    # Archived before the fold below drops them, verbatim and unpruned: this is
+    # the mid-turn path, the one that used to lose everything at the process
+    # boundary, so these rows are the ones the archive exists for.
+    archive.append_rows(rec.get("id") or "", rest[:i], why="mid-turn fold")
     folded = list(msgs[:pin]) + [{"role": "summary", "content": summary}] + rest[i:]
     after = _chars(folded)
     if after >= before:
@@ -1733,6 +1780,13 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         if refusal:
             out["result"] = refusal
             return
+    # The archive reader is refused at the call, not merely hidden from the
+    # schema: a model that remembers the name from an earlier turn can still
+    # emit it, and a refusal it can read is the honest answer.
+    if name == ARCHIVE_TOOL and not config.archive_tool():
+        out["result"] = ("ERROR: 'session_archive' is off; enable it in Settings > Tools "
+                         "(or set TACIT_ARCHIVE_TOOL=1)")
+        return
     parent_call_id = call.get("id") if call else None
     if name == SUBTASK:
         yield from run_subagent(args.get("prompt", ""), ctx, out, parent_call_id=parent_call_id)

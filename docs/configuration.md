@@ -13,7 +13,7 @@ Four settings are consulted in that order rather than stored as a plain constant
 | Delegation model | `TACIT_DELEGATE_MODEL` | `delegateModel` | `backend/config.py:365-368` |
 | Fallback model | `TACIT_FALLBACK_MODEL` | `fallbackModel` | `backend/config.py:381-384` |
 | Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:406` |
-| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:441-445` |
+| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:456-464` |
 | Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:474-478` |
 
 The shell overlap case is the one the interface has to show, because a pinned environment variable
@@ -63,7 +63,7 @@ point.
 | `TACIT_TURN_TOKEN_BUDGET` | `0`, no ceiling | `backend/config.py:152` |
 | `TACIT_COST_WARN` | `0.25,0.5,0.75` | `backend/config.py:149` |
 | `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:79` |
-| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:441` |
+| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:456` |
 | `TACIT_TURN_WORKER` | `process` | `backend/config.py:406` |
 
 ### Tool output ceilings
@@ -146,7 +146,7 @@ outright (`backend/config.py:881-887`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:17`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:682-684`), and that sentence has to be testable.
+it runs on (`backend/agent.py:701-703`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -160,7 +160,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `delegateModel` | `backend/config.py:365` | overridden by `TACIT_DELEGATE_MODEL` |
 | `fallbackModel` | `backend/config.py:381` | the model a session runs on when its own is gone; without it the turn fails and says so |
 | `deliverGuarantee` | `backend/config.py:444` | overridden by `TACIT_DELIVER_GUARANTEE` |
-| `shellOverlap` | `backend/config.py:476` | overridden by `TACIT_SHELL_OVERLAP` |
+| `shellOverlap` | `backend/config.py:487-504` | overridden by `TACIT_SHELL_OVERLAP` |
 | `turnSound` | `backend/config.py:413` | on by default |
 | `alertSound` | `backend/config.py:426` | off by default |
 | `allowVersionControl` | `backend/config.py:496` | absent means the agent may not run git |

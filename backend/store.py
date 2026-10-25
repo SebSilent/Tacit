@@ -201,6 +201,11 @@ def remove(sid: str) -> bool:
     # Outside the lock, and after the row is gone: the session's scratch folder holds
     # whatever its tools wrote during a project-less turn, and nothing else collects it.
     config.remove_workspace(sid)
+    # The archive is part of the session's record, not a backup of it: a delete
+    # that left the folded rows behind would be a resurrection path with a
+    # transcript attached, and resurrection is the bug this store refuses.
+    from . import archive
+    archive.remove(sid)
     return True
 
 

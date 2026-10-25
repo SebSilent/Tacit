@@ -394,14 +394,24 @@ async function renderTools(container) {
     // toggle would lie (it does nothing the model can see), so the row says
     // so instead of offering a switch.
     const gated = t.name.startsWith('mcp_') && !mcpLive;
+    // The archive reader is off by default on its own pref, and the env var
+    // can pin it on. A pinned row keeps its state but loses the switch, the
+    // same treatment the MCP helpers get: a toggle that cannot take effect
+    // is a lie.
+    const pinned = t.name === 'session_archive' && !!d.archiveToolPinned;
+    const archiveHint = t.name === 'session_archive' && !t.enabled && !pinned
+      ? ' <b>Off by default.</b> Turn it on to let the agent read what a compaction folded away.'
+      : '';
     return `
     <div class="tool-row ${t.enabled && !gated ? '' : 'off'}" data-name="${esc(t.name)}">
       <span class="tool-name">${esc(t.name)}</span>
-      <span class="tool-desc">${esc(t.description || '')}${gated
+      <span class="tool-desc">${esc(t.description || '')}${archiveHint}${gated
         ? ' <b>Hidden from the agent - no MCP server configured.</b> Add one in the MCP tab and this turns on by itself.'
+        : ''}${pinned
+        ? ' <b>Pinned on by <code>TACIT_ARCHIVE_TOOL</code>.</b> Unset the variable to change it here.'
         : ''}</span>
-      ${gated
-        ? '<span class="badge">gated</span>'
+      ${(gated || pinned)
+        ? `<span class="badge">${pinned ? 'pinned' : 'gated'}</span>`
         : `<button class="tgl ${t.enabled ? 'on' : ''}" data-act="toggle" role="switch" aria-checked="${t.enabled}" title="${t.enabled ? 'Disable' : 'Enable'}">
              <span class="tgl-knob"></span>
            </button>`}

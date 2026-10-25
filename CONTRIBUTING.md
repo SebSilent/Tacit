@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:615-619` both exist because a cached path made a redirected test write into the real
+`backend/config.py:746-751` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not

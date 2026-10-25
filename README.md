@@ -268,10 +268,10 @@ is the counterexample already in the table.
 **Three harness behaviours changed these scores, and they are here so you can discount them.** The delivery
 guarantee, on by default, finishes a write the turn started and missed when it is about to end with nothing
 on disk, gives the salvage phase three rounds rather than one, and spends the last minutes of wall budget
-landing it (`backend/config.py:441-445`, `backend/agent.py:777-781`): on, a failed cell is still a
+landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed cell is still a
 graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when the agent ends it.
 The repeat guard answers an identical call from cache after three runs and ends a turn after four blocked
-repeats (`backend/agent.py:767-776`), because one cell spent 26 of its 29 shell calls on refused repeats
+repeats (`backend/agent.py:796-805`), because one cell spent 26 of its 29 shell calls on refused repeats
 and ended with nothing written. The uncapped retry re-asks a round this harness's own output ceiling
 destroyed, so thinking is never billed as waste, and that one is not part of the delivery switch.
 

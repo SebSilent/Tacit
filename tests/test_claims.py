@@ -521,11 +521,12 @@ class TestPublishedFigures(Isolated):
 
     def test_default_profile_tool_count_matches_the_schema(self):
         from backend import profiles
-        # The registry holds 22 schemas; the default profile offers 20, because
-        # the two memory schemas ride with the memory mode and are priced in
-        # that bucket instead. These are the counts README's profile table
-        # publishes: 20 default, 21 explicit, 22 full.
-        self.assertEqual(len(agent.TOOLS), 22)
+        # The registry holds 23 schemas; the default profile offers 20, because
+        # the two memory schemas ride with the memory mode and the archive
+        # reader with its own switch, and both are off by default, so both are
+        # priced in their own buckets instead. These are the counts README's
+        # profile table publishes: 20 default, 21 explicit, 22 full.
+        self.assertEqual(len(agent.TOOLS), 23)
         self.assertEqual(profiles.cost_of(profiles.BUILTIN["default"])["tool_count"], 20)
         self.assertEqual(profiles.cost_of(profiles.BUILTIN["safe"])["tool_count"], 21)
         self.assertEqual(profiles.cost_of(profiles.BUILTIN["full"])["tool_count"], 22)

@@ -133,6 +133,11 @@ def _tool_set(cfg: dict) -> list[dict]:
     # well billed them twice and made a memory-off profile look like it carried
     # the memory tools it does not actually offer.
     from . import agent as _agent
+    # The archive reader rides its own switch, off by default: billing it to a
+    # profile that does not offer it is the same double-count the memory
+    # schemas got above, so it is priced only where the switch is on.
+    if not config.archive_tool():
+        names = [n for n in names if n != _agent.ARCHIVE_TOOL]
     return [by_name[n] for n in names if n not in _agent.MEMORY_TOOL_NAMES]
 
 

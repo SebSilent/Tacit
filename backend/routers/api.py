@@ -954,8 +954,14 @@ async def get_tools():
     rows = []
     for t in agent_mod.TOOLS:
         fn = t["function"]
+        # The archive reader's switch is its own pref, not the shared
+        # disabledTools list: it is off by default, and a default that lived in
+        # disabledTools would have to be seeded into every existing install to
+        # be true. The tab therefore shows the state the switch actually owns.
+        enabled = (config.archive_tool() if fn["name"] == agent_mod.ARCHIVE_TOOL
+                   else fn["name"] not in disabled)
         rows.append({"name": fn["name"], "description": fn["description"],
-                     "enabled": fn["name"] not in disabled})
+                     "enabled": enabled})
     # `shellOverlap` rides along because the Tools tab is its home and the tab
     # must render the current mode, not assume the default. The vocabulary comes
     # from config so the switch cannot drift from what shell_overlap() accepts;
@@ -964,6 +970,7 @@ async def get_tools():
             "shellOverlap": config.shell_overlap(),
             "shellOverlapModes": list(config.SHELL_OVERLAP_MODES),
             "shellOverlapPinned": config.shell_overlap_pinned(),
+            "archiveToolPinned": config.archive_tool_pinned(),
             "note": "Toggles apply to new agent turns. Chat mode arms no tools at all."}
 
 
@@ -986,6 +993,15 @@ async def toggle_tool(request: Request):
                          + "; unset it to change the mode here")
         config.save_prefs({"shellOverlap": mode})
         return _ok(name="shellOverlap", mode=mode)
+    # The archive reader toggles its own pref, for the same reason /api/tools
+    # reports its state from that pref: the default-off lives in the pref, not
+    # in a disabledTools entry that would have to be seeded everywhere.
+    from .. import agent as agent_mod
+    if name == agent_mod.ARCHIVE_TOOL:
+        if config.archive_tool_pinned():
+            return _fail("TACIT_ARCHIVE_TOOL pins this on; unset it to change it here")
+        config.save_prefs({"archiveTool": bool(body.get("enabled"))})
+        return _ok(name=name, enabled=config.archive_tool())
     disabled = set(config.prefs().get("disabledTools") or [])
     if body.get("enabled"):
         disabled.discard(name)

@@ -419,6 +419,27 @@ def turn_sound() -> bool:
     return True if v is None else bool(v)
 
 
+def archive_tool() -> bool:
+    """Whether the agent may read a session's frozen archive. Off by default.
+
+    The archive itself is always written — it is the record that makes a
+    compaction honest, and a record kept only when someone asks for it is a
+    record that is missing exactly when it is needed. This switch gates only
+    the *reader*: the tool that lets an agent page back through what its own
+    compactions folded away. Off, the schema is not offered and the call is
+    refused; on, the agent can search and read its own past.
+    """
+    v = prefs().get("archiveTool")
+    if v is not None:
+        return bool(v)
+    return os.environ.get("TACIT_ARCHIVE_TOOL", "0") not in ("0", "false", "")
+
+
+def archive_tool_pinned() -> bool:
+    """Whether the env var has spoken, so the Settings toggle should stand down."""
+    return "TACIT_ARCHIVE_TOOL" in os.environ
+
+
 def alert_sound() -> bool:
     """Whether the browser chimes for things that happen *during* work. Off by default.
 

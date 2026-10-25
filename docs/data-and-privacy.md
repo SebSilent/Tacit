@@ -51,7 +51,7 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:770-788`):
+One rule, shared by every caller (`backend/config.py:796-809`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
@@ -66,7 +66,7 @@ blocklist in the way (`backend/config.py:779-783`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:705`, `:716-717`).
+an underscore and the result capped at 48 characters (`backend/config.py:731`, `:742-743`).
 
 ## Deleting
 
