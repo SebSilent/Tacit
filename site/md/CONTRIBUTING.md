@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:615-619` both exist because a cached path made a redirected test write into the real
+`backend/config.py:746-751` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not
@@ -131,7 +131,7 @@ checker is on the list of cells the table wants next (`README.md:280-281`).
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
 (`README.md:282-283`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
-somebody else can re-run (`docs/testing-and-benchmarks.md:152-154`).
+somebody else can re-run (`docs/testing-and-benchmarks.md:153-155`).
 
 Templates for both are in `.github/`.
 

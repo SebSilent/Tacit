@@ -19,10 +19,10 @@ The standing prompt is assembled in one function (`backend/ai/prompts.py:154-182
 
 On top of that sits the tool schemas, then plugin tools, then memory, then any eagerly injected MCP
 schemas. `cost_of` returns those five numbers separately rather than one total, so a reader can see
-which part of the bill moved (`backend/profiles.py:199-203`).
+which part of the bill moved (`backend/profiles.py:204-208`).
 
 The published figures are in the README: 974 characters of standing instructions, about 768 tokens on
-Minimal and 1,913 on Default (`README.md:13-15`). A test reads the table back out of the README and
+Minimal and 2,039 on Default (`README.md:13-15`). A test reads the table back out of the README and
 re-measures it against `cost_of`, because 1,889 stayed published for a while after the schemas grew
 past it and nothing noticed.
 
@@ -66,7 +66,7 @@ not decide what Tacit is allowed to remember on its own (`README.md:199-200`).
 
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
-(`backend/profiles.py:128-136`, `:196-200`). At request time a fresh install with no MCP server is
+(`backend/profiles.py:128-136`, `:194-199`). At request time a fresh install with no MCP server is
 offered 16, because the four MCP helpers are also removed (`backend/agent.py:849-852`). The first
 figure is what the profile owns; the second is what the model sees.
 
@@ -79,15 +79,15 @@ memory-off profile is not billed for tools it does not have (`:131-136`).
 
 `apply` switches and reports honestly what it could not turn on: a profile is a bundle of choices, and
 if one cannot be honoured the rest still apply and the failed one is named with its reason, because a
-profile must never silently give you less than it claims (`backend/profiles.py:243-249`).
+profile must never silently give you less than it claims (`backend/profiles.py:249-254`).
 
 The order matters. Capabilities are applied first so the memory mode and budget are in place before the
-plugins and the toolset are decided (`backend/profiles.py:257-282`). A capability that has no adapter or
-is unavailable is skipped with the reason from the registry (`:265-270`). Then every known plugin is
-enabled or disabled to match the bundle (`:287-293`), the memory budget is written (`:294`), MCP direct
-mode is set (`:296`), the tool set becomes `disabledTools` in prefs (`:300-302`), the active name is
-saved (`:304-306`), and the whole thing is recorded as `profile_applied` with status `partial` when
-anything was skipped (`:307-308`).
+plugins and the toolset are decided (`backend/profiles.py:262-287`). A capability that has no adapter or
+is unavailable is skipped with the reason from the registry (`:269-275`). Then every known plugin is
+enabled or disabled to match the bundle (`:292-298`), the memory budget is written (`:299`), MCP direct
+mode is set (`:300-303`), the tool set becomes `disabledTools` in prefs (`:305-307`), the active name is
+saved (`:309-311`), and the whole thing is recorded as `profile_applied` with status `partial` when
+anything was skipped (`:312`).
 
 `capture` saves the live configuration under a name you choose, refusing a built-in name and resolving
 legacy aliases first so a capture cannot shadow a real profile (`backend/profiles.py:313-332`). `delete`
@@ -158,27 +158,33 @@ None of this was invented here.
 ### What the mechanics do, and why each is there
 
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
-  size actually is (`backend/agent.py:1062`).
+  size actually is (`backend/agent.py:1139-1172`). It reads two measures and answers to the larger: the
+  *billed* prompt of the last provider call, at the plain fill target, and the *stored* record, at twice
+  the target (`TACIT_STORE_COMPACT_FACTOR`). The store is what elision serves from — a store over the
+  target means stubs in the wire, not an over-budget request — and folding it at the plain target
+  summarised records whose wire was fine, which is how 1.0.8 came to compact sessions that needed no
+  fold: every fold is a model call that replaces verbatim rows with a note. The billed measure keeps no
+  headroom because it describes the request the provider will actually make.
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1222-1250`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1260-1288`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
-- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:119-121`). Six
+- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:124-126`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
   note falls into the region being summarised rather than being pinned
-  (`backend/agent.py:1400-1406`).
+  (`backend/agent.py:1476-1480`).
 - **A region too wide for one summariser call is summarised in parts**: each part is summarised on its
   own and the part notes are merged into the one note, so the far end of a very long region is not
-  silently absent from it (`backend/agent.py:1322-1371`).
+  silently absent from it (`backend/agent.py:1360-1409`).
 - **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
-  failed and the most recent activity (`backend/agent.py:1256-1280`).
+  failed and the most recent activity (`backend/agent.py:1294-1318`).
 - **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
   acted on, which is how a compacted session restarts work it already finished.
-- **Compaction runs during a turn, not only between them** (`backend/agent.py:1518-1545`). Checking the
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1565-1592`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
-- **The standing prompt and the task are pinned against elision** (`backend/agent.py:896-916`). Pinning
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:964-984`). Pinning
   only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
   question.
 

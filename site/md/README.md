@@ -12,7 +12,7 @@ supposed to be able to read, and a platform inside it is the part you cannot.
 
 One turn costs a fixed amount before your question is read: 974 characters of standing instructions plus
 every tool description the session is offered. The pair to remember is
-768 tokens on Minimal and 1,913 on Default, and a test re-derives both from the code on every run.
+768 tokens on Minimal and 2,039 on Default, and a test re-derives both from the code on every run.
 
 ![A turn streaming in the Tacit interface](assets/demo.gif)
 
@@ -99,7 +99,7 @@ install anything, and do not treat it as evidence of anything.
 **The fixed cost of a turn is measured, shown, and yours to set.** Every request carries the standing
 instructions plus every tool description, and most harnesses never say what that costs. Tacit quotes it in
 the top bar per turn and in **Settings > General** per profile, computed from the live configuration rather
-than from a table somebody typed: the six built-in profiles span ~768 to ~2,138 tokens. 1,913 tokens of
+than from a table somebody typed: the six built-in profiles span ~768 to ~2,264 tokens. 2,039 tokens of
 preamble on an 8K model is a quarter of the window before the work starts, and the way out is a switch
 rather than a fork.
 
@@ -156,13 +156,13 @@ looks like.
 |---|---|---|---|---|
 | **Tacit, Minimal** | **974 chars** | **7** | **2.0 KB** | **~768 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **974 chars** | **20** | **6.5 KB** | **~1,913** |
+| **Tacit, default profile** | **974 chars** | **21** | **7.0 KB** | **~2,039** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
 
 Tacit appears twice because the profile is the variable, and the two rows are the same program:
-768 tokens on Minimal and 1,913 on Default. The other rows were read out of the installed programs on this
+768 tokens on Minimal and 2,039 on Default. The other rows were read out of the installed programs on this
 machine and are reproducible from their own tooling; Tacit's are read from its own profile selector and
 derived from `profiles.cost_of` by a test on every run. The first row is the one worth arguing about,
 because it compares the same seven capabilities on both sides: the Minimal profile ships exactly what Pi
@@ -188,11 +188,11 @@ which is why it is measured and published rather than asserted.
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
 | **minimal** | 7 | none | off | off | ~768 tokens |
-| **default** | 20 | none | off | off | ~1,913 tokens |
-| **safe** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
-| **power-isolation** | 21 | tacit-micro | explicit | off | `default` + the memory tools + budget |
-| **power-memory** | 22 | none | full, budgeted | off | `default` + the memory tools + budget |
-| **full** | 22 | tacit-micro | full, budgeted | off | `default` + the memory tools + budget |
+| **default** | 21 | none | off | off | ~2,039 tokens |
+| **safe** | 22 | tacit-micro | explicit | off | `default` + the memory tools + budget |
+| **power-isolation** | 22 | tacit-micro | explicit | off | `default` + the memory tools + budget |
+| **power-memory** | 23 | none | full, budgeted | off | `default` + the memory tools + budget |
+| **full** | 23 | tacit-micro | full, budgeted | off | `default` + the memory tools + budget |
 
 The tool count moves with the memory mode, because memory is a capability the profile selects rather than a
 plugin it enables: `explicit` is offered the propose tool only, `jit` and `full` also get the search tool.
@@ -268,10 +268,10 @@ is the counterexample already in the table.
 **Three harness behaviours changed these scores, and they are here so you can discount them.** The delivery
 guarantee, on by default, finishes a write the turn started and missed when it is about to end with nothing
 on disk, gives the salvage phase three rounds rather than one, and spends the last minutes of wall budget
-landing it (`backend/config.py:441-445`, `backend/agent.py:777-781`): on, a failed cell is still a
+landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed cell is still a
 graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when the agent ends it.
 The repeat guard answers an identical call from cache after three runs and ends a turn after four blocked
-repeats (`backend/agent.py:767-776`), because one cell spent 26 of its 29 shell calls on refused repeats
+repeats (`backend/agent.py:796-805`), because one cell spent 26 of its 29 shell calls on refused repeats
 and ended with nothing written. The uncapped retry re-asks a round this harness's own output ceiling
 destroyed, so thinking is never billed as waste, and that one is not part of the delivery switch.
 
