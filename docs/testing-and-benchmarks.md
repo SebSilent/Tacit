@@ -96,9 +96,10 @@ at the same time, and that is what "connecting..." for ages actually is
 `scripts/measure_registry.py` counts bytes rather than messages for `/api/sessions/registry`
 (`scripts/measure_registry.py:3`, route at `backend/routers/api.py:695`). Counting messages is not enough
 to know whether the payload is small, because one message can carry a 48,000-character `read_file`
-result, and bytes are the unit the wire and the parser actually pay (`:5-7`). It is read-only and takes an
+result, and bytes are the unit the wire and the parser actually pay
+(`scripts/measure_registry.py:5-7`). It is read-only and takes an
 optional home directory so a synthetic case can be measured
-(`:9-12`).
+(`scripts/measure_registry.py:9-12`).
 
 Both are kept in the repo on purpose: the first version of one of them lived in `%TEMP%` and was deleted
 with it, which is why the registry's byte cost was argued about from memory afterwards
