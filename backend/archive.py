@@ -10,8 +10,9 @@ and never loaded during a turn.
 
 The file is append-only JSONL, one line per stored row, beside the session it
 belongs to. Nothing reads it during a turn except the `session_archive` tool,
-and that tool is off by default: an agent that can page through its own past
-is a capability the person opts into, not one that arrives with the update.
+which is on by default: a fold that the model cannot read back is the loss the
+person feels, and the reader is what makes a fold a reorganisation instead of
+a deletion. The Settings > Tools switch still turns it off.
 
 Deletion is the last word, as everywhere else in the store: removing a session
 removes its archive with it. An archive that outlived its session would be a

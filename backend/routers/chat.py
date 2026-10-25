@@ -10,10 +10,16 @@ session opened on two devices sees the same stream, because both are just
 subscribers of the same buffer.
 
 Blocking commands, a turn's start (compaction can call a model), an abort's
-grace wait, a terminal command, a forced compaction, run in the executor,
-never on the event loop. One slow summariser or shell command must not freeze
-every other session's stream, which is exactly what the old socket-owned path
-did.
+grace wait, a terminal command, a forced compaction, run off the event loop,
+never on it. One slow summariser or shell command must not freeze every other
+session's stream, which is exactly what the old socket-owned path did.
+
+They run on two dedicated pools rather than the default executor, which
+asyncio.to_thread shares with git operations and the updater: a saturated
+default pool made every session's prompt hang with nothing running. A turn's
+start is additionally a task, not an await: the start can begin with a
+compaction that calls the summariser, and a Stop pressed during that wait
+must reach the run, not queue behind it.
 
 Plan mode is owned the same way, by ``backend/plan_runtime.py``. It used to be
 the exception, its state lived in a dict inside this handler on the argument
@@ -25,6 +31,7 @@ for a person is precisely the thing that must not be owned by a connection.
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -33,6 +40,21 @@ from .. import (agent, assistant, config, extras, plan_runtime, session_runtime,
 from ..session_runtime import _title
 
 router = APIRouter()
+
+# Interactive blocking calls get their own pools instead of the default
+# executor, which asyncio.to_thread shares with everything else that offloads
+# a blocking call (git operations, project enrichment, the updater) and which
+# is min(32, cpu + 4) threads. A few terminals and a git clone hold their
+# threads for minutes; the next turn start then queues behind them and every
+# session's prompt hangs with nothing running — the freeze that looked like
+# compaction eating the UI. The split keeps the two long-latency kinds apart:
+# a terminal cannot starve a turn start, and a compaction's summariser call
+# cannot starve a terminal. Sizes are config knobs (TACIT_TURN_POOL,
+# TACIT_TERM_POOL).
+turn_pool = ThreadPoolExecutor(max_workers=config.TURN_POOL_WORKERS,
+                               thread_name_prefix="tacit-turn")
+term_pool = ThreadPoolExecutor(max_workers=config.TERM_POOL_WORKERS,
+                               thread_name_prefix="tacit-term")
 
 # Bounds for transcript fields a browser may push back. Stored tool results are
 # what the agent reads as its own memory next turn, so they are kept, but clipped
@@ -323,6 +345,32 @@ async def ws_session(ws: WebSocket, sid: str):
         store.save(rec)
         await ws.send_text(_json({"type": "state_delta", "name": rec["title"]}))
 
+    async def _off_loop_notify(fn, *args, level="warn",
+                               fallback="could not start the turn", fmt=None):
+        """Start a turn off this socket's message loop, as a task.
+
+        The prompt handlers used to await the start here, which made the loop
+        wait out the whole start — compaction included, and a compaction calls
+        the summariser model. An abort or a steer sent while "compacting…"
+        showed then sat in the receive buffer until the summariser came back:
+        the one session that most needed a Stop button was the one that could
+        not be stopped. Running the start as a task keeps the loop receiving;
+        the run is registered and busy is published inside start_turn before
+        its compaction begins, so an abort that arrives a moment later finds
+        the run and cancels it. What is given up is ordering: a command typed
+        in the instant before the user row lands can be processed first, a
+        window of milliseconds no viewer depends on.
+        """
+        try:
+            res = await loop.run_in_executor(turn_pool, fn, *args)
+        except Exception as e:  # the task must answer, not die silently
+            res = {"ok": False, "error": str(e) or "the turn could not start"}
+        err = (res or {}).get("error") or ""
+        if not (res or {}).get("ok"):
+            await ws.send_text(_json({
+                "type": "notify", "level": level, "sid": rec["id"],
+                "message": (fmt(err) if (fmt and err) else (err or fallback))}))
+
     try:
         while True:
             raw = await ws.receive_text()
@@ -337,17 +385,15 @@ async def ws_session(ws: WebSocket, sid: str):
                     asyncio.create_task(start_plan(msg.get("message") or ""))
                 else:
                     # The start runs in the executor: compaction may call a
-                    # model, and the spawn takes real time. This socket's
-                    # message loop waits, its pumps do not, and no other
-                    # session's stream waits with it.
-                    res = await loop.run_in_executor(
-                        None, session_runtime.start_turn,
+                    # model, and the spawn takes real time. It runs as a task
+                    # (see _off_loop_notify) so this socket's message loop
+                    # keeps receiving while it works — an abort sent during
+                    # the start's compaction must reach the run, not queue
+                    # behind it. No other session's stream waits with it.
+                    asyncio.create_task(_off_loop_notify(
+                        session_runtime.start_turn,
                         rec["id"], rec, msg.get("message") or "",
-                        msg.get("images"), loop)
-                    if not res.get("ok"):
-                        await ws.send_text(_json({
-                            "type": "notify", "level": "warn", "sid": rec["id"],
-                            "message": res.get("error") or "could not start the turn"}))
+                        msg.get("images"), loop))
 
             elif kind == "steer":
                 text = msg.get("message") or ""
@@ -364,17 +410,19 @@ async def ws_session(ws: WebSocket, sid: str):
                 # Scoped to this socket's session by construction: the
                 # runtime's registries are keyed by sid. The cancel may wait
                 # out the cooperative grace period, so it runs off the event
-                # loop; the stop is not awaited, exactly as before.
-                loop.run_in_executor(None, session_runtime.cancel, rec["id"])
+                # loop; the stop is not awaited, exactly as before. It rides
+                # the turn pool: cancel is the one command that must never
+                # queue behind a saturated default executor.
+                loop.run_in_executor(turn_pool, session_runtime.cancel, rec["id"])
 
             elif kind == "assistant_prompt":
-                res = await loop.run_in_executor(
-                    None, session_runtime.start_assistant,
-                    rec["id"], rec, msg.get("message") or "", loop)
-                if not res.get("ok"):
-                    await ws.send_text(_json({
-                        "type": "notify", "level": "warn", "sid": rec["id"],
-                        "message": res.get("error") or "the assistant could not start"}))
+                # A task, like the prompt handler above: the assistant's start
+                # can begin with a compaction, and the loop must keep
+                # receiving while it works.
+                asyncio.create_task(_off_loop_notify(
+                    session_runtime.start_assistant,
+                    rec["id"], rec, msg.get("message") or "", loop,
+                    fallback="the assistant could not start"))
 
             elif kind == "assistant_clear":
                 assistant.clear(rec)
@@ -406,7 +454,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 max_cycles = msg.get("max_cycles")
                 max_hours = msg.get("max_hours")
                 state = await loop.run_in_executor(
-                    None, lambda: session_runtime.autonomy_set(
+                    turn_pool, lambda: session_runtime.autonomy_set(
                         rec["id"], enabled=enabled,
                         max_cycles=max_cycles, max_hours=max_hours))
                 await ws.send_text(_json({"type": "assistant_autonomy", "sid": rec["id"],
@@ -451,19 +499,15 @@ async def ws_session(ws: WebSocket, sid: str):
                             "message": "sent to the agent" if carried
                                        else "the agent could not take it mid-turn"}))
                     else:
-                        out = await loop.run_in_executor(
-                            None, session_runtime.start_turn,
-                            rec["id"], rec, text, None, loop, "assistant")
-                        # start_turn answers {"ok": False, "error": ...} instead
-                        # of raising. Swallowing it meant a prompt that never
-                        # reached the agent left no trace anywhere, the pane
-                        # showed the message, the transcript showed nothing, and
-                        # the person had no way to know the agent was idle.
-                        if not (out or {}).get("ok"):
-                            await ws.send_text(_json({
-                                "type": "notify", "level": "error", "sid": rec["id"],
-                                "message": ("could not send to the agent: "
-                                            + (out or {}).get("error", "no reason given"))}))
+                        # A task, like the prompt handler: this start can begin
+                        # with a compaction, and the loop must keep receiving
+                        # while it works.
+                        asyncio.create_task(_off_loop_notify(
+                            session_runtime.start_turn,
+                            rec["id"], rec, text, None, loop, "assistant",
+                            level="error",
+                            fmt=lambda e: "could not send to the agent: " + e,
+                            fallback="could not send to the agent: no reason given"))
 
             elif kind == "switch":
                 # Deleted in stage 1b. A socket is born attached to one
@@ -576,7 +620,7 @@ async def ws_session(ws: WebSocket, sid: str):
                 # A terminal command can run for minutes; it must not hold the
                 # event loop, every other session's stream would freeze with it.
                 res = await loop.run_in_executor(
-                    None, agent.run_terminal, msg.get("command") or "",
+                    term_pool, agent.run_terminal, msg.get("command") or "",
                     rec.get("project") or None)
                 await ws.send_text(_json({"type": "rpc_response", "command": "bash",
                                           "ok": bool(res.get("ok")), "data": res,
@@ -677,7 +721,7 @@ async def ws_session(ws: WebSocket, sid: str):
 
                 try:
                     info = await loop.run_in_executor(
-                        None, lambda: session_runtime.compact_now(
+                        turn_pool, lambda: session_runtime.compact_now(
                             rec, force=True,
                             notice=lambda on: _tell(bool(on))))
                     store.save(rec)

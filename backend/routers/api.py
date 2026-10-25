@@ -955,9 +955,10 @@ async def get_tools():
     for t in agent_mod.TOOLS:
         fn = t["function"]
         # The archive reader's switch is its own pref, not the shared
-        # disabledTools list: it is off by default, and a default that lived in
-        # disabledTools would have to be seeded into every existing install to
-        # be true. The tab therefore shows the state the switch actually owns.
+        # disabledTools list: its default lives in config.archive_tool, and a
+        # default that lived in disabledTools would have to be seeded into
+        # every existing install to be true. The tab therefore shows the state
+        # the switch actually owns.
         enabled = (config.archive_tool() if fn["name"] == agent_mod.ARCHIVE_TOOL
                    else fn["name"] not in disabled)
         rows.append({"name": fn["name"], "description": fn["description"],
@@ -994,12 +995,12 @@ async def toggle_tool(request: Request):
         config.save_prefs({"shellOverlap": mode})
         return _ok(name="shellOverlap", mode=mode)
     # The archive reader toggles its own pref, for the same reason /api/tools
-    # reports its state from that pref: the default-off lives in the pref, not
-    # in a disabledTools entry that would have to be seeded everywhere.
+    # reports its state from that pref: the default lives in config, not in a
+    # disabledTools entry that would have to be seeded everywhere.
     from .. import agent as agent_mod
     if name == agent_mod.ARCHIVE_TOOL:
         if config.archive_tool_pinned():
-            return _fail("TACIT_ARCHIVE_TOOL pins this on; unset it to change it here")
+            return _fail("TACIT_ARCHIVE_TOOL pins this switch; unset it to change it here")
         config.save_prefs({"archiveTool": bool(body.get("enabled"))})
         return _ok(name=name, enabled=config.archive_tool())
     disabled = set(config.prefs().get("disabledTools") or [])

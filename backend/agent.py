@@ -1152,11 +1152,24 @@ def should_compact(rec: dict) -> bool:
         # purpose and leaves the stored record untouched. Reading only the billed
         # figure is how a session carrying 640,000 tokens of transcript sat at 11%
         # on the meter with this check asleep for sixteen turns.
-        return max(billed, stored_tokens(msgs)) > config.context_fill_target(window)
+        #
+        # The two measures do not share a target. `billed` keeps the plain fill
+        # target: it describes the request the provider will actually make, and
+        # if that is over budget the fold cannot wait. `stored` gets headroom
+        # (config.STORE_COMPACT_FACTOR): the store is what elision serves from,
+        # and a store over the target means stubs in the wire, not an
+        # over-budget request. Folding the store at the plain target summarised
+        # records whose wire was fine — every fold is a model call that replaces
+        # verbatim rows with a note, so a trigger that fires on a healthy wire
+        # is a trigger that destroys work for nothing.
+        target = config.context_fill_target(window)
+        return (billed > target
+                or stored_tokens(msgs) > target * config.STORE_COMPACT_FACTOR)
     # No window known: compact once the transcript exceeds what we are willing to
-    # send, which is exactly the point where elision would otherwise start
-    # throwing information away instead of summarising it.
-    return _chars(msgs) > context_budget(rec.get("model"), rec)
+    # send, with the same headroom as the stored measure above — elision serves
+    # the wire from this record, so being over the budget means stubs, not an
+    # over-budget request.
+    return _chars(msgs) > context_budget(rec.get("model"), rec) * config.STORE_COMPACT_FACTOR
 
 
 def _msg_tokens(m: dict) -> int:

@@ -220,9 +220,21 @@ class TestCompactionTrigger(Isolated):
         self.assertGreaterEqual(agent._chars(rec["messages"]), 50000)
 
     def test_tool_heavy_session_compacts_without_provider_usage(self):
-        # 13k of narration hiding 200k of tool results is the shape that never
-        # triggered compaction, so the window cap elided the work instead.
-        self.assertTrue(agent.should_compact(self._rec(200000)))
+        # 13k of narration hiding 500k of tool results is the shape that never
+        # triggered compaction, so the window cap elided the work instead. The
+        # trigger carries headroom (STORE_COMPACT_FACTOR): a record over the
+        # send budget is being stubbed by elision, not over-budget, and the
+        # fold waits until roughly half the record is stubbed every turn.
+        self.assertTrue(agent.should_compact(self._rec(500000)))
+
+    def test_over_the_send_budget_but_under_the_headroom_does_not_compact(self):
+        # 150k chars against a 120k send budget: elision is stubbing old tool
+        # results, which is lossless next to a fold — a fold is a model call
+        # that replaces verbatim rows with a note. This is the band 1.0.8
+        # folded at the plain target, the "compacts so often" regression.
+        self.assertGreater(agent._chars(self._rec(150000)["messages"]),
+                           agent.context_budget("p/m", self._rec(150000)))
+        self.assertFalse(agent.should_compact(self._rec(150000)))
 
     def test_small_session_does_not_compact(self):
         self.assertFalse(agent.should_compact(self._rec(10)))
@@ -521,15 +533,16 @@ class TestPublishedFigures(Isolated):
 
     def test_default_profile_tool_count_matches_the_schema(self):
         from backend import profiles
-        # The registry holds 23 schemas; the default profile offers 20, because
-        # the two memory schemas ride with the memory mode and the archive
-        # reader with its own switch, and both are off by default, so both are
-        # priced in their own buckets instead. These are the counts README's
-        # profile table publishes: 20 default, 21 explicit, 22 full.
+        # The registry holds 23 schemas; the default profile offers 21, because
+        # the two memory schemas ride with the memory mode and are priced in
+        # their own bucket, while the archive reader rides with the default set
+        # since 1.0.9: a session that cannot read its own fold cannot recover
+        # from one. These are the counts README's profile table publishes:
+        # 21 default, 22 explicit, 23 full.
         self.assertEqual(len(agent.TOOLS), 23)
-        self.assertEqual(profiles.cost_of(profiles.BUILTIN["default"])["tool_count"], 20)
-        self.assertEqual(profiles.cost_of(profiles.BUILTIN["safe"])["tool_count"], 21)
-        self.assertEqual(profiles.cost_of(profiles.BUILTIN["full"])["tool_count"], 22)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["default"])["tool_count"], 21)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["safe"])["tool_count"], 22)
+        self.assertEqual(profiles.cost_of(profiles.BUILTIN["full"])["tool_count"], 23)
 
     def test_memory_profiles_report_their_memory_tools(self):
         # Memory is a capability the profile selects, not a plugin it enables
@@ -1245,7 +1258,7 @@ class TestCompactionReachesTheStore(Isolated):
     had shrunk) stayed asleep at 11% over a 640,000-token transcript.
     """
 
-    def _rec(self, turns=100, window=262_144, meter=29_393, bulk=12000):
+    def _rec(self, turns=100, window=262_144, meter=29_393, bulk=19000):
         msgs = [{"role": "user", "content": "the task: fix calc.py"}]
         for i in range(turns):
             msgs.append({"role": "assistant", "content": f"step {i}",
@@ -1256,8 +1269,10 @@ class TestCompactionReachesTheStore(Isolated):
                 "usage": {"context": {"tokens": meter, "window": window}}}
 
     def test_a_full_record_compacts_even_when_the_meter_reads_low(self):
-        # The shape that never fired: a session carrying 1.2M characters of
-        # transcript while the last billed prompt read 11% of the window.
+        # The shape that never fired: a session carrying 1.9M characters of
+        # transcript while the last billed prompt read 11% of the window. The
+        # store's own trigger carries headroom (STORE_COMPACT_FACTOR), so the
+        # fixture has to be over twice the fill target, not merely over it.
         rec = self._rec()
         self.assertLess(rec["usage"]["context"]["tokens"],
                         config.context_fill_target(262_144),

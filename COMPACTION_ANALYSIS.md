@@ -1,245 +1,196 @@
-# Why compaction got aggressive between 1.0.3 and 1.0.7
+# Compaction analysis: why sessions compact so often and lose context (1.0.3 → 1.0.8)
 
-Investigation notes. 1.0.3 = commit `aa2aa7e`, 1.0.7 = `c1a18e7` ("Version 1.0.7"; HEAD
-is `3dcdfb6`, a frontend-only site rebuild on top of it (no backend changes)). Scratch
-checkouts
-of both versions were compared file-by-file (recreate with
-`git worktree add .tmp103 aa2aa7e` / `git worktree add .tmp107 c1a18e7`).
+Status: concluded. Fixes 1, 2 and 4 under "Suggested fixes" shipped in 1.0.9;
+fix 3 (summariser model choice) remains open. Everything below is verified against
+the code unless marked **unconfirmed**. Version under review: `1.0.8` (VERSION file) plus two
+commits on top (`3b1e648` rebuild site, `3b24560` archive-before-fold). Baseline for
+comparison: v1.0.3 = commit `aa2aa7e` (no git tags exist; versions are plain commits
+titled "Version 1.0.x").
 
-**Headline:** one commit, `c75c444` "Persist compaction, fail unknown models", shipped
-between 1.0.3 and 1.0.4, inverted the pressure-valve hierarchy. In 1.0.3, elision carried
-the context (ephemeral, keeps up to a full wire-budget of real rows) and compaction was a
-rare, mostly-dormant turn-start event. In 1.0.7, compaction is the primary valve: it fires
-on the stored record, fires mid-turn, and every fold is written into the stored record
-permanently, while keeping at most 8,000 tokens verbatim, the same cap 1.0.3 had, but
-which 1.0.3 only ever applied ephemerally.
+## The complaint
 
-**Also important:** the working tree currently holds *uncommitted* changes to
-`backend/agent.py`, `backend/config.py`, `backend/session_runtime.py`, four docs and
-`tests/test_claims.py` that implement most of the fixes this analysis recommends (tail
-8000 → 200000, share-of-region tail trigger, gated persistence, newest-slice digest, and
-(added later in this session) part-summarising of oversized digests).
-They are coherent and self-consistent (docs and tests updated to match); they were
-committed as the 1.0.8 compaction fix (see "State of the working tree" below, kept as
-written). Everything in this file describes
-**HEAD** unless marked *working tree*.
+- Sessions get compacted far more often than before.
+- Compaction now fires mid-turn as well as between turns.
+- Information/context that used to survive is being lost.
+- A compaction appears to freeze the whole chat, not just the compacting session.
 
-## How compaction works in 1.0.7
+## What did NOT change between 1.0.3 and now (ruled out as causes)
 
-Two valves, in order of when they act:
+Diffed `aa2aa7e..HEAD` for `backend/config.py`, `backend/agent.py`,
+`backend/ai/prompts.py`, `backend/session_runtime.py`. Identical in both versions:
 
-1. **Elision** (`agent.windowed`, applied at send time): the wire is trimmed to
-   `context_budget(ref)` chars: pin rows + newest rows that fit, older rows replaced by
-   an `ELIDED` marker. Ephemeral: the stored record keeps every row. This is 1.0.3's
-   primary valve and it still exists, unchanged.
-2. **Compaction** (summary + tail): rewrites the transcript into one summary row plus a
-   verbatim tail. Two entry points:
-   - *Between turns*: `compact_now` at `session_runtime.py:893`, before the user's row is
-     appended, gated on `agent.should_compact(rec)` (`agent.py:1101`), announced with a
-     notify, record saved.
-   - *Mid-turn*: inside `run_turn` (`agent.py:2693`), when the un-elided wire exceeds
-     `context_budget(ref)`, at most 3 folds per turn. The fold emits a `compaction` event
-     carrying `summary`/`kept_tokens` (`agent.py:2707`); the parent captures it
-     (`session_runtime.py:684-703`) and at the epilogue writes it into the stored record
-     via `agent.apply_stored_summary` (`agent.py:1386`, called at
-     `session_runtime.py:762`): **unconditionally at HEAD**.
+- All trigger constants: `AGENT_CONTEXT_BUDGET=120000`, `CONTEXT_BUDGET_MIN=24000`,
+  `CONTEXT_BUDGET_MAX=2000000`, `COMPACT_AT=0`, `CONTEXT_RESERVE_TOKENS=33000`,
+  `CONTEXT_FILL_FLOOR=0.5`, `CHARS_PER_TOKEN=4` (`backend/tokens.py:19`).
+- The fill target itself, `config.context_fill_target(window)` =
+  `max(window*0.5, window-33000)` (config.py:238-240).
+- The mid-turn trigger condition and its cap — `not chat and COMPACT_MID_TURN and
+  compactions < 3 and wire_chars(messages) > budget` — is character-for-character the
+  same logic in both versions (v1.0.3 agent.py:2428, HEAD agent.py:2806). Mid-turn
+  compaction is not new; it existed in 1.0.3 with the same 3-folds-per-turn cap.
+- Tail shape constants: `COMPACT_TAIL_MIN_MESSAGES=4`, `COMPACT_TAIL_MAX_MESSAGES=40`,
+  `COMPACT_TAIL_SHARE=0.4`, `COMPACT_PRUNE_KEEP_CHARS=400`,
+  `COMPACT_PRUNE_MIN_CHARS=1200`, `SUMMARY_INPUT_MAX_CHARS=160000`,
+  `COMPACT_KEEP_TAIL=6`.
 
-The tail is `_tail_budget` (`agent.py:1139`): `max(500, min(COMPACT_TAIL_TOKENS,
-trigger × 0.4))`. With `COMPACT_TAIL_TOKENS = 8000`, the 40% share never binds for any
-window ≥ 20k tokens: every compaction keeps ~8k tokens verbatim, everything older
-becomes one summary row.
+So "mid-turn compaction was added recently" is false — it predates 1.0.3. What changed
+is *when the between-turns trigger fires* and *what a fold costs*, below.
 
-## What changed 1.0.3 → 1.0.7
+## What DID change (the candidates for the regression)
 
-| Aspect | 1.0.3 (`aa2aa7e`) | 1.0.7 HEAD (`c1a18e7`) | Commit |
-|---|---|---|---|
-| `should_compact` | `billed > fill_target` | `max(billed, stored_tokens(msgs)) > fill_target` | `c75c444` |
-| Mid-turn fold persistence | none (wire-only; parent rebuilt the record from `trace` verbatim, `.tmp103/session_runtime.py:568` only bumps metrics) | `apply_stored_summary` at turn end, unconditional | `c75c444` |
-| Tail cap (`COMPACT_TAIL_TOKENS`) | 8000 | 8000 (200000 only in the uncommitted working tree) | n/a |
-| Tail trigger | 0.4 × `fill_target(window)` | same at HEAD; share-of-region in working tree | n/a |
-| Summariser model | `TACIT_COMPACT_MODEL` override, else session model | session model only (override removed) | `c75c444` |
-| Digest input cap | oldest 160k chars of the region | oldest 160k chars (newest in working tree) | n/a |
-| Mid-turn trigger/budget | `wire_chars > context_budget(ref)`, ≤3/turn | identical | n/a |
-| Elision, prune, digest caps | identical | identical | n/a |
-| UI | notify only | + `compaction_start` spinner | `91d11c6` |
+### 1. `should_compact` now also reads the stored transcript — the "so often" candidate
 
-`398232c`/`efbddf3`/`3f3dac5` are reasoning-replay work (keep newest reasoning through
-compaction), not frequency drivers.
+- v1.0.3 (agent_103.py:1102-1119): compact when the **billed** prompt tokens of the
+  last provider call exceed the fill target; a local estimate only when the window is
+  known but the provider reported no usage.
+- HEAD (agent.py:1139-1159): compact when `max(billed, stored_tokens(msgs))` exceeds
+  the fill target. The comment says this was added because a session carrying 640K
+  tokens of transcript sat at 11% on the meter with the check asleep for sixteen turns
+  — the billed number alone misses work a mid-turn fold removed from the wire.
 
-## Why it feels like constant mid-turn compaction with heavy loss
+Effect: compaction now fires on **store size**, not just wire size. The stored record
+holds everything (full tool results, reasoning rows); the wire copy is what elision
+actually sends. Any session whose stored transcript is large but whose wire is small
+(elision doing its job) now trips the trigger every turn start, where 1.0.3 left it
+alone. Each trip is a summariser call that rewrites history — which is exactly
+"compacted so often" plus "losing context that was fine before": rows are being folded
+that would never have been sent anyway.
 
-1. **Valve inversion.** 1.0.3: when the wire overflowed, elision kept up to a full
-   wire-budget (~fill_target tokens) of *newest real rows*, ephemerally; the record
-   accumulated everything; permanent compaction only fired at turn start, gated on
-   `billed`, which stayed small after folds/elision, so the check mostly slept (the
-   commit's own anecdote: 640k tokens of transcript, meter at 11%, asleep for sixteen
-   turns). 1.0.7: compaction fires on the *stored* measure and mid-turn folds persist, so
-   the record never accumulates real rows past the fold point and elision (which could
-   carry ~167k real tokens on a 200k window) almost never gets to work.
-2. **Persistence.** Every mid-turn fold (up to 3 per turn) is now written into the record
-   at turn end. In 1.0.3 the identical folds died at the process boundary. The same
-   trigger, the same 8k tail, but permanent.
-3. **Trigger widening.** `max(billed, stored)` was a deliberate fix for the sleeping
-   trigger, but it converted silent bloat into aggressive permanent compaction: turn-start
-   compaction now fires whenever the record crosses the fill target, including states
-   (post-fold small billed) where 1.0.3 showed nothing.
-4. **The 8k tail is ~20× smaller than the elision budget it displaces** (167k tokens on a
-   200k window). Each event collapses the model's verbatim context from "newest
-   167k–500k tokens of real rows" to "one summary + 8k tokens".
-5. **Lossy digest loop.** Rows are truncated to 2000 chars, tool results pruned to 400
-   before summarising, the digest input capped at 160k chars (oldest slice at HEAD: the
-   newest rows of the folded region never reach the summariser). The model re-reads what
-   it lost, regenerates transcript, re-hits the budget, folds again.
+Secondary effect interacting with (2): after a mid-turn fold the wire shrinks but the
+store does not; the fold becomes real only at the epilogue, and only when the *stored*
+record is still over target (session_runtime.py:755-766 — "A fold the wire needed but
+the record did not stays wire-only"). So it converges rather than loops: one fold per
+session that crosses the store threshold. The extra frequency comes from the stored
+measure tripping at all on sessions whose wire was fine, plus a systematic bias:
+`estimate_tokens` uses 4 chars/token (tokens.py:19), which over-counts code- and
+JSON-heavy transcripts (~3-3.5 chars/token real), so `max(billed, stored)` can trigger
+on sessions the provider itself says are well under target. **No live session traced —
+frequency claims rest on code reading, not a measured transcript.**
 
-## The numbers
+### 2. Tail budget ceiling 8,000 → 200,000 tokens (config.py:124)
 
-`CHARS_PER_TOKEN = 4` (`backend/tokens.py:19`). `context_fill_target(window)` =
-`max(window × 0.5, window − 33,000)` (`backend/config.py:213`): 1M → 967k, 200k → 167k.
-`context_budget` = `clamp(fill_target × 4 chars, 24k, 2M)` (`backend/agent.py:974`,
-identical in both versions).
+`COMPACT_TAIL_TOKENS` went from `8000` (v1.0.3) to `200000` (HEAD). This keeps *more*
+verbatim per fold — less loss per compaction, and the commit comment says the 8K
+ceiling collapsed a 967K-token transcript to a summary plus 8K rows. Directionally
+this is a fix, not a regression. But it makes every fold keep a much larger tail, and
+combined with (1) the post-fold store is bigger, which can re-arm the trigger sooner.
 
-### 1M-window model
+### 3. The summariser now always runs on the session's own model (config.py:137-143)
 
-| | 1.0.3 | 1.0.7 |
-|---|---|---|
-| Wire cap | 2M chars ≈ 500k tokens | same |
-| Between-turns trigger | billed ≤ ~500k < 967k → **never fires** | stored > 967k → **fires** |
-| What the model works with | newest ~500k tokens of real rows (elision) | one summary + ≤8k tokens |
-| Mid-turn fold | fires at 2M chars, wire-only, record untouched | fires at 2M chars, **persisted** |
+v1.0.3 had `COMPACT_MODEL` (`TACIT_COMPACT_MODEL`) to nominate a cheap summariser.
+HEAD removed it ("a summary could be written by a model nobody had chosen"). Now every
+compaction is a full-strength model call with up to `SUMMARY_INPUT_MAX_CHARS=160000`
+chars (~40K tokens) of transcript as input. On a large/slow model this is a slow,
+expensive call — and it runs:
 
-### 200k-window model
+- inside `start_turn` (turn-start compaction, `session_runtime.compact_now`), which
+  chat.py:343 runs via `loop.run_in_executor(None, ...)` — the loop's **default**
+  executor; and
+- inside the turn worker (mid-turn fold, agent.py:2812), announced to the UI as
+  `compaction_start` → the composer shuts and the meter pulses.
 
-| | 1.0.3 | 1.0.7 |
-|---|---|---|
-| Wire cap | 668k chars ≈ 167k tokens ≈ fill target | same |
-| Between-turns trigger | billed crosses 167k only while the wire is full; after a mid-turn fold billed drops, so it mostly stayed asleep | stored crosses 167k → fires |
-| What the model works with | newest ~167k tokens of real rows | one summary + ≤8k tokens |
-| Mid-turn fold | wire-only, ephemeral | persisted |
+### 4. Archive-before-fold (commit `3b24560`, newest change)
 
-That last row is the regression users feel: the model went from "sees the newest
-167k–500k tokens of actual rows" to "sees a summary plus 8k tokens", and the rows are
-gone from the record too, so it must re-read files it already read.
+Every fold now writes the rows it is about to drop verbatim to
+`<session>.archive.jsonl` before pruning (agent.py `compact_history`, new
+`backend/archive.py`), readable via a `session_archive` tool that is off by default.
+Additive, reduces loss; not a cause. But it is the newest behaviour change in the
+compaction path and the most likely candidate for *any* new slowdown at fold time
+(extra file writes per fold, per row).
 
-## Secondary aggravators (all present in 1.0.7, most in 1.0.3 too)
+### 5. `398232c` "Keep newest reasoning through compaction"
 
-- **Summary input cap is oldest-first at HEAD.** `_summarise` caps the digest at
-  `SUMMARY_INPUT_MAX_CHARS = 160,000` chars with `transcript[:160000]`
-  (`backend/agent.py:1293`). When the folded region is bigger than that, the *newest*
-  rows (the ones just before the kept tail, usually the most valuable) are cut from
-  the summariser's view. (Working tree flips this to the newest slice.)
-- **Digest truncation.** `_digest_row`/`_digest_wire` cap row content at 2000/1500
-  chars, tool args at 200, results at 400. File contents cannot survive into a
-  summary at all: only "read X, ran Y".
-- **`_prune_old_output` runs before summarising** (`compact_history:1369`,
-  `compact_messages:1471`): tool outputs > 1200 chars are pruned to 400 chars in the
-  folded region, so the digest sees pruned results and the record loses the rest.
-- **Up to 3 mid-turn folds per turn** (`compactions < 3`, `backend/agent.py:2693`),
-  each refining the previous summary; loss compounds within one long turn.
-- **The summariser is always the session's own model** (`COMPACT_MODEL` was removed
-  in this range): a mid-turn pause of seconds, and summary quality tracks whatever
-  model the session runs.
-- **The local estimator can fire early.** `stored_tokens` estimates at 4 chars/token;
-  code-heavy transcripts often run wider, so the stored half of the trigger can cross
-  the fill target before the provider's own count would.
+Keeps reasoning rows through folds — again less loss, not more.
 
-## State of the working tree (committed since, as 1.0.8)
+## The "entire chat freezes" symptom
 
-`git status` shows modifications to `backend/agent.py`, `backend/config.py`,
-`backend/session_runtime.py`, `docs/{architecture,configuration,cost-and-profiles,
-data-and-privacy,isolation-and-audit,tools}.md` and `tests/test_claims.py`
-(~50 insertions, 24 deletions). They implement, as one coherent change:
+Ruled out by reading the code:
 
-1. `COMPACT_TAIL_TOKENS` 8000 → **200000** (`config.py:124`), documented as a backstop.
-2. `_tail_budget` becomes "a share of the region being folded, under an absolute
-   ceiling": the share is the rule, the ceiling the backstop.
-3. `compact_history` triggers the tail on `_chars(rest) // 4` (share of the region being
-   folded) instead of `fill_target(window)`: a small record now folds cleanly instead of
-   the tail covering the whole region and refusing.
-4. `_summarise` keeps the **newest** 160k chars of the region (`transcript[-...]`);
-   superseded later in this session by part-summarising (see Recommendations, item 3).
-5. `_drive_turn` persists a mid-turn fold **only when `agent.should_compact(rec)`**,
-   i.e. only when the stored record itself is over the fill target, the point where
-   between-turns compaction would fold it anyway. A fold the wire needed but the record
-   did not stays wire-only, as in 1.0.3.
-6. Docs and tests updated to match (the tail-budget test now pins the share rule).
+- Bus events are sid-scoped: `compacting` carries `sid`
+  (session_runtime.py:518), and the frontend gates on `m.sid === activeId`
+  (app.js:928) — one session's fold cannot flip another window's composer.
+- The engine has no global lock: `ai/engine.py` builds a fresh `httpx.Client` per
+  call; concurrent model calls are not serialised.
+- `store._write_lock` (store.py:104) is global but held only for one record's
+  read-modify-write; a big record makes it longer, not cross-session-stuck.
+- `start_turn` returns after spawning the driver thread (session_runtime.py:1055-1060);
+  it does not hold its executor thread for the whole turn.
 
-**Validated (this session):** every hunk of the diff reviewed against the 1.0.3/1.0.7
-comparison; the full suite passes (1371 passed, 1 skipped, 29 subtests). Code-review
-findings, all sound:
+**Confirmed: everything interactive shares one default thread pool.** No
+`set_default_executor` / `max_workers` anywhere in `backend/` — the pool is asyncio's
+default `min(32, cpu+4)` threads. All of these run on it (`routers/chat.py`, every
+call passes `None`):
 
-- `apply_stored_summary` keeps the stored tail at least as wide as the fold's tail
-  *plus* every row the turn appended after it (`agent.py:1414-1424`), so the fold can
-  never reach rows the summary does not describe.
-- The mid-turn path (`compact_messages:1473`) passes `budget_chars // 4` (the wire
-  budget, which *is* the mid-turn region's upper bound), so mid-turn folds keep
-  `min(200000, 0.4 × fill_target)` ≈ 67k tokens on a 200k window instead of 8k.
-- The gate's negative branch was untested. Added
-  `test_a_fold_the_record_did_not_need_stays_wire_only` (`tests/test_claims.py`): a
-  mid-turn fold over a record under the fill target must leave the record untouched
-  (no summary row, both trace steps present) while the ledger still records the wire
-  saving. It passes; first run failed only because the test record's `id` did not match
-  the sid it was stored under (the anti-resurrection guard refused the save).
+- :343 `start_turn` — a user prompt. **`start_turn` runs `compact_now` synchronously
+  before spawning the worker** (session_runtime.py:893), and `compact_now` →
+  `compact_history` → the summariser model call (session's own model, up to 160K chars
+  input). A compacting turn start holds a pool thread for the whole summariser call.
+- :368 `cancel` — the Stop button queues behind the same pool.
+- :454 `start_turn` in assistant mode — autonomous sessions keep starting turns; each
+  may compact at turn start the same way.
+- :578 `run_terminal` — the code's own comment: "A terminal command can run for
+  minutes; it must not hold the event loop, every other session's stream would freeze
+  with it." It was moved off the event loop, but onto the *same shared pool*.
+- :679 the manual Compact button — `compact_now(force=True)`, summariser call included.
 
-This restores 1.0.3's behaviour for the common case (mid-turn folds ephemeral) and fixes
-the 8k-tail collapse. It does **not** change the widened `should_compact` trigger, the
-digest caps, or the 3-folds-per-turn cap.
+So N sessions compacting at turn start (or compacting + terminals + assistant
+continuations) hold N pool threads for tens of seconds each; on a small machine the
+pool is 8-12 threads, and every other session's prompt, Stop, and terminal queues
+behind them. Turns already streaming keep flowing (driver threads are plain threads) —
+which reads exactly as "the whole chat is frozen but the running turn still moves".
 
-## Recommendations
+Second, environment-dependent freeze path (**unconfirmed**): if the provider is a
+local/single-slot server (the engine config mentions ollama_cloud), the summariser
+call's 40K-token input occupies the model server itself, and every other session's
+next model call queues behind it at the provider. Nothing in Tacit can show that
+except slow streams.
 
-1. **Review and commit the working-tree change**: it is exactly the fix this analysis
-   would prescribe, and it is currently one `git checkout .` away from being lost.
-   Done: committed as the 1.0.8 compaction fix.
-2. Consider making the between-turns trigger elision-aware: compact when the record
-   exceeds what elision can actually carry (rows the model loses), not merely when
-   `stored > fill_target`; that would also spare sessions whose wire is comfortably
-   under budget.
-   Left as is, deliberately: the trigger already fires exactly when the record
-   outgrows what elision can carry, because elision keeps the same tail budget the
-   fold keeps; a record past `fill_target` is a record whose overflow is being
-   dropped row by row with no note. An elision-aware trigger would only move the
-   same fold earlier, and would add a second measure to keep in step with
-   `_tail_budget`.
-3. Consider chunk-summarising (or raising `SUMMARY_INPUT_MAX_CHARS`) so the folded
-   region's far end is not silently dropped from the digest.
-   Done: `_summarise_region` splits an oversized digest at row boundaries
-   (`_chunk_digest`), summarises each part, and merges the part notes into the one
-   note, bounded at `_SUMMARY_PARTS_MAX = 8` parts with the oldest dropped past the
-   bound. Raising the cap alone was rejected: the cap also protects the summariser
-   call itself from overflowing the session's window, and a flat raise would break
-   small-window models.
-4. Keep the tail ceiling tied to the window rather than a flat constant, so the 200k
-   backstop cannot itself bind on small windows.
-   Left as is, deliberately: `TACIT_COMPACT_TAIL_TOKENS` is an operator escape hatch,
-   and a window-derived ceiling would make the knob's effect depend on the model in
-   a way the docs cannot state plainly. On a window small enough for the 200k
-   ceiling to bind, `context_budget`'s own reserve already caps the wire first.
+## Where the loss actually comes from (mechanism, once triggering is fixed)
 
-Stopgaps without code changes (superseded by the working-tree fix, listed for
-environments pinned to HEAD):
+A fold keeps: a summary of the head (written by the session's own model, ≤160K chars
+input) + a verbatim tail (≤200K tokens, ≥4 messages) + pruned-but-present stubs for
+old tool output (400 chars kept per row). Everything else exists only in the archive
+(since `3b24560`) — and the archive reader is **off by default**, so by default a fold
+really is lossy for anything older than the tail. In 1.0.3 the same fold shape existed
+but fired rarely (billed-only trigger) and kept a smaller tail; the difference the user
+feels is frequency (1) plus the fact that folds now happen on sessions whose wire never
+needed one.
 
-- `TACIT_COMPACT_MID_TURN=0`: restores wire-only mid-turn behaviour (no fold → no
-  `compaction` event → nothing persisted). The between-turns trigger stays
-  stored-based.
-- `TACIT_COMPACT_TAIL_TOKENS=<much larger>`: widens what every compaction keeps.
-- `TACIT_SUMMARY_INPUT_MAX=<larger>`: widens what the summariser sees.
-- Per-model `context_budget` profile override: raises the wire cap and, with it,
-  every trigger derived from it.
+## Suggested fixes (in order of confidence)
 
-## Verification notes
+1. **Executor pool** — *shipped in 1.0.9* as dedicated turn and terminal pools
+   (`TACIT_TURN_POOL`, `TACIT_TERM_POOL`), with the turn start run as a task so
+   Stop reaches a run that is still compacting. Original text: install a dedicated executor for turn
+   starts/terminals/compaction (`loop.set_default_executor` is not needed — pass an
+   explicit executor to `run_in_executor` at chat.py:343/454/578/679), so one session's
+   summariser call or terminal cannot starve another session's prompt or Stop.
+2. **Re-scope `should_compact`** — *shipped in 1.0.9* as `STORE_COMPACT_FACTOR`
+   (default 2.0): the billed measure keeps the plain fill target, the stored
+   measure gets the headroom, so folds wait until the record is genuinely being
+   stubbed. Original text: re-scope `should_compact` to the wire/billed measure, or give the stored measure
+   its own ceiling (e.g. the elision budget) instead of the fill target — restores
+   1.0.3 frequency while keeping the 640K-token fix for sessions that genuinely never
+   report usage. Also consider a provider-vs-estimate reconciliation: `estimate_tokens`
+   at 4 chars/token over-counts code-heavy transcripts, so `max(billed, stored)` can
+   trigger on sessions the provider itself says are well under target.
+3. **Re-expose a summariser model choice** — *still open* (the `COMPACT_MODEL` removal traded
+   cost/latency for governance; a Settings surface would keep the governance and
+   restore the cheap path).
+4. **Turn the archive reader on by default** — *shipped in 1.0.9*: the default is
+   on, `TACIT_ARCHIVE_TOOL` pins it, and the Settings > Tools switch still turns
+   it off. Original text: turn the archive reader on by default (or surface it in the transcript UI) so a
+   fold is never the last copy from the user's point of view, not just the model's.
 
-Checked directly, in both versions: both `should_compact` bodies; both `context_budget`
-bodies; all compaction constants in both `config.py` files; the mid-turn trigger and cap
-(`agent.py:2693` vs `.tmp103/agent.py:2428`); the persistence path (`agent.py:2690-2718`
-→ `session_runtime.py:684-703` → epilogue `748-766` → `apply_stored_summary`
-`agent.py:1386`); `_tail_budget`, `_msg_tokens`, `_digest_row`, `_digest_wire`,
-`_summarise`, `_stored_pin`; the turn-start call site (`session_runtime.py:893`, with
-notify, in both); `CONTEXT_RESERVE_TOKENS = 33000` in both configs; tests
-(`tests/test_claims.py` pins the new behaviour symbolically: `COMPACT_TAIL_TOKENS` by
-name, `_tail_budget(1_000_000) == config.COMPACT_TAIL_TOKENS`, `<= 4000 × share`, and
-`should_compact`'s stored measure at 1173-1205, so the working-tree changes do not break
-them); the full uncommitted diff (`git diff`).
+## Evidence index
 
-Earlier open questions, now resolved: the turn-start compaction is automatic (not
-hand-triggered) and was announced in 1.0.3 too, so visibility is not the regression;
-persistence is. The summariser-model change (`COMPACT_MODEL` removal) is real but a
-quality/cost change, not a loss driver.
+- `git diff aa2aa7e HEAD -- backend/config.py` — tail ceiling 8000→200000,
+  COMPACT_MODEL removed, fallback_model added, archive switch added.
+- `git show 3b24560` — archive-before-fold commit (agent.py, archive.py, config.py).
+- v1.0.3 agent.py extracted to `%TEMP%\agent_103.py` via `git show aa2aa7e:backend/agent.py`;
+  should_compact at :1102, mid-turn trigger at :2428.
+- HEAD: config.py:100-148 (constants), :238-240 (fill target); agent.py:1012-1040
+  (context_budget), :1139-1159 (should_compact), :1177-1188 (_tail_budget),
+  :1454+ (compact_history), :2806-2831 (mid-turn fold); session_runtime.py:507-521
+  (compacting_notice), :524+ (compact_now), :677-708 (driver fold handling),
+  :931-1060 (start_turn); store.py:104-145 (write lock); app.js:924-929, 1041-1055
+  (compacting handling); chat.py:335-350 (prompt path), :70 (state compacting flag).

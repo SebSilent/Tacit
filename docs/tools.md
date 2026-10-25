@@ -70,8 +70,11 @@ injects what you approved and retrieves nothing, so the tool could only ever ans
 **5. The archive reader follows its own switch.** `session_archive` is removed when the archive
 switch is off (`backend/agent.py:933-940`), and the same gate is enforced again at dispatch, because
 a model that remembers the name from an earlier turn can still emit it and a refusal it can read is
-the honest answer (`backend/agent.py:1783-1789`). The switch lives in Settings > Tools and its
-default is off, so an install that never turns it on pays nothing for it.
+the honest answer (`backend/agent.py:1796-1802`). The switch lives in Settings > Tools and its
+default is on — a fold the model cannot read back is the loss the person feels, and the reader is
+what makes a fold a reorganisation instead of a deletion (`backend/config.py:450-461`). It shipped
+off and paid nothing for it, which was the problem: the fold still happened. `TACIT_ARCHIVE_TOOL=0`
+pins it off for an install that wants neither.
 
 ## What the tools are told about themselves
 

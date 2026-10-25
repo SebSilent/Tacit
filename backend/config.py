@@ -146,6 +146,28 @@ COMPACT_KEEP_TAIL = int(os.environ.get("TACIT_COMPACT_KEEP", "6"))
 # grew without anything ever re-measuring it, which is how one session reached
 # 1.9M prompt tokens with the dashboard's "saved by compaction" row still at zero.
 COMPACT_MID_TURN = os.environ.get("TACIT_COMPACT_MID_TURN", "1") not in ("0", "false", "")
+# The stored transcript's own trigger gets headroom over the wire's. The billed
+# measure answers for the request the provider will actually make, so it fires at
+# the plain fill target; the stored measure answers for a record that elision
+# merely serves from, and a store somewhat over the target does not make the
+# request over it — it makes elision stub more rows. Folding the store at the
+# plain target summarised records whose wire was fine, which is the loss that
+# made compaction feel like it ate work that was doing no harm: every fold is a
+# model call that replaces verbatim rows with a note. At 2.0 the fold waits until
+# roughly half the record is being stubbed every turn, the point where a summary
+# is the better trade. TACIT_STORE_COMPACT_FACTOR tunes it; 1.0 is the old
+# behaviour.
+STORE_COMPACT_FACTOR = float(os.environ.get("TACIT_STORE_COMPACT_FACTOR", "2.0"))
+# Interactive blocking calls run on their own pools, not the default executor:
+# asyncio.to_thread lands there too (git calls, project enrichment, the
+# updater), and the default pool is min(32, cpu + 4) threads. A few terminals
+# and a git clone hold their threads for minutes; the next turn start then
+# queues behind them and every session's prompt hangs with nothing running.
+# The split keeps the two long-latency kinds apart: a terminal that runs for
+# minutes cannot starve a turn start, and a compaction's summariser call
+# cannot starve a terminal.
+TURN_POOL_WORKERS = int(os.environ.get("TACIT_TURN_POOL", "12"))
+TERM_POOL_WORKERS = int(os.environ.get("TACIT_TERM_POOL", "8"))
 # Hard ceiling on tokens one turn may bill, 0 for none. Off by default like every
 # other constraint here; the fractions below are the always-on part, and they only
 # report.
@@ -420,7 +442,7 @@ def turn_sound() -> bool:
 
 
 def archive_tool() -> bool:
-    """Whether the agent may read a session's frozen archive. Off by default.
+    """Whether the agent may read a session's frozen archive. On by default.
 
     The archive itself is always written — it is the record that makes a
     compaction honest, and a record kept only when someone asks for it is a
@@ -428,11 +450,20 @@ def archive_tool() -> bool:
     the *reader*: the tool that lets an agent page back through what its own
     compactions folded away. Off, the schema is not offered and the call is
     refused; on, the agent can search and read its own past.
+
+    It shipped off because an agent that can page through its own past was
+    treated as a capability the person opts into. What that default bought was
+    the opposite of the archive's purpose: a fold still rewrote the transcript,
+    but the model had no way back, so every fold was a loss the person felt as
+    re-derivation and forgotten decisions — the exact complaint that reopened
+    this. The reader costs one tool schema in the wire; the loss it prevents is
+    the one compaction is blamed for. The Settings > Tools switch still turns
+    it off, and TACIT_ARCHIVE_TOOL=0 pins it off for an install.
     """
     v = prefs().get("archiveTool")
     if v is not None:
         return bool(v)
-    return os.environ.get("TACIT_ARCHIVE_TOOL", "0") not in ("0", "false", "")
+    return os.environ.get("TACIT_ARCHIVE_TOOL", "1") not in ("0", "false", "")
 
 
 def archive_tool_pinned() -> bool:

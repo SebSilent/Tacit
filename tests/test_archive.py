@@ -284,7 +284,17 @@ class TheReader(Isolated):
 
 
 class TheSwitch(Isolated):
-    """The reader is off by default, and off means refused at the call."""
+    """The switch is what makes the reader off, and off means refused at the call.
+
+    The default is on — a fold the model cannot read back is the loss the person
+    feels, and the reader is what makes a fold a reorganisation instead of a
+    deletion — so these tests set the pref off explicitly: they test the off
+    state, not the default. TheDefault below pins the default itself.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.save_prefs({"archiveTool": False})
 
     def test_the_schema_is_hidden_while_the_switch_is_off(self):
         self.assertNotIn(ARCHIVE_TOOL, {t["function"]["name"] for t in agent.tools_for()})
@@ -321,6 +331,28 @@ class TheSwitch(Isolated):
         self.assertFalse((config.SESSIONS_DIR / "s3.archive.jsonl").exists())
 
 
+class TheDefault(Isolated):
+    """The reader ships on: the archive is written for the model to read back.
+
+    It shipped off because an agent that can page through its own past was
+    treated as a capability the person opts into; what that default bought was
+    the opposite of the archive's purpose — folds still rewrote the transcript
+    and the model had no way back. The switch above still turns it off.
+    """
+
+    def test_the_schema_is_offered_with_no_pref_set(self):
+        self.assertIsNone(config.prefs().get("archiveTool"))
+        self.assertIn(ARCHIVE_TOOL, {t["function"]["name"] for t in agent.tools_for()})
+
+    def test_a_call_with_no_pref_set_reads_the_archive(self):
+        archive.append_rows("s4", self.rows_with_results(2), why="fold")
+        out = {}
+        for _ in agent.call_tool(ARCHIVE_TOOL, {"action": "search", "query": "cmd 1"},
+                                 {"session": "s4", "project": None}, out):
+            pass
+        self.assertIn("cmd 1", out["result"], out["result"])
+
+
 class TheSettingsSurface(Isolated):
     """Settings > Tools: the endpoints the archive toggle reads/writes.
 
@@ -353,7 +385,10 @@ class TheSettingsSurface(Isolated):
 
     def test_the_list_reports_the_switch_and_its_pin(self):
         d, row = self._archive_row()
-        self.assertFalse(row["enabled"])
+        # The row shows the state the switch owns, and the default is on: the
+        # archive is written for the model to read back, so the reader ships
+        # offered. The pin is still false — no env var has spoken.
+        self.assertTrue(row["enabled"])
         self.assertFalse(d["archiveToolPinned"])
 
     def test_the_toggle_moves_its_own_pref(self):
