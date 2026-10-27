@@ -1,6 +1,6 @@
 {
   "name": "tacit-browser-driver",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "versionSource": "Mirrors the VERSION file at the repo root, this is the Playwright driver's manifest, but it carries Tacit's release identity so the two cannot drift. scripts/bump_version.py writes both.",
   "private": true,
   "description": "Playwright driver for Tacit's browser tool. Optional, only needed for browser automation.",
