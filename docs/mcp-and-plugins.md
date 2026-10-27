@@ -24,7 +24,7 @@ explicitly activates it for a bounded number of turns (`backend/mcp_registry.py:
 `mcp_list_servers`, `mcp_search_tools`, `mcp_activate_tools` and `mcp_call`
 (`backend/agent.py:717-729`, handlers at `:542`, `:558`, `:571`, `:585`). They appear only when a server
 is configured, because with nothing in `mcp.json` they are four dead ends that cost tokens and invite
-calls that can only fail (`backend/agent.py:942-953`). Presence is the gate rather than connectivity: a
+calls that can only fail (`backend/agent.py:904-914`). Presence is the gate rather than connectivity: a
 configured but stopped server still gets them, because listing and searching are how the model learns
 what it could start.
 

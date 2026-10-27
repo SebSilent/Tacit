@@ -214,7 +214,7 @@ Tacit uses the strategy the endpoint actually supports.
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row matters most: prefix caching needs no markers there, and a server that has never seen
-`cache_control` may reject the body outright. Around the rest (`backend/config.py:881-887`): a rejection is
+`cache_control` may reject the body outright. Around the rest (`backend/config.py:995-1000`): a rejection is
 retried once without the markers, detected before any event streams, so nothing is half-sent and repeated;
 `TACIT_PROMPT_CACHE=off` turns marking off; and what is in force is reported with the hit rate observed.
 One measured run on an OpenAI-compatible endpoint reported **71.1%** of prompt tokens served from cache.
@@ -271,7 +271,7 @@ on disk, gives the salvage phase three rounds rather than one, and spends the la
 landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed cell is still a
 graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when the agent ends it.
 The repeat guard answers an identical call from cache after three runs and ends a turn after four blocked
-repeats (`backend/agent.py:796-805`), because one cell spent 26 of its 29 shell calls on refused repeats
+repeats (`backend/agent.py:797-806`), because one cell spent 26 of its 29 shell calls on refused repeats
 and ended with nothing written. The uncapped retry re-asks a round this harness's own output ceiling
 destroyed, so thinking is never billed as waste, and that one is not part of the delivery switch.
 

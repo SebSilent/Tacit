@@ -172,9 +172,9 @@ is bounded, because an unbounded "one more chance" is how a turn becomes two tur
 (`backend/agent.py:806-809`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
-blocked repeats in a row ends the turn early (`backend/agent.py:796-805`). It exists because one cell
+blocked repeats in a row ends the turn early (`backend/agent.py:797-806`). It exists because one cell
 spent 26 of its 29 shell calls on refused repeats and ended with nothing written
-(`backend/agent.py:801-804`, `:796-798`).
+(`backend/agent.py:802-805`, `:797-799`).
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch

@@ -13,8 +13,8 @@ Four settings are consulted in that order rather than stored as a plain constant
 | Delegation model | `TACIT_DELEGATE_MODEL` | `delegateModel` | `backend/config.py:384-395` |
 | Fallback model | `TACIT_FALLBACK_MODEL` | `fallbackModel` | `backend/config.py:398-411` |
 | Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:414-428` |
-| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:487-502` |
-| Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:518-535` |
+| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:543-558` |
+| Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:574-591` |
 
 The shell overlap case is the one the interface has to show, because a pinned environment variable
 makes the switch in **Skills & Tools** do nothing. `backend/config.py:456-463` exists to answer that
@@ -63,7 +63,7 @@ point.
 | `TACIT_TURN_TOKEN_BUDGET` | `0`, no ceiling | `backend/config.py:179` |
 | `TACIT_COST_WARN` | `0.25,0.5,0.75` | `backend/config.py:174` |
 | `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:79` |
-| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:498` |
+| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:554` |
 | `TACIT_TURN_WORKER` | `process` | `backend/config.py:428` |
 | `TACIT_TURN_POOL` | `12` | `backend/config.py:169` |
 | `TACIT_TERM_POOL` | `8` | `backend/config.py:170` |
@@ -155,10 +155,10 @@ swallow it.
 | `TACIT_VCS_TIMEOUT` | `120` | `backend/vcs.py:26` |
 | `TACIT_VCS_NAME` | none | `backend/vcs.py:177` |
 | `TACIT_VCS_EMAIL` | none | `backend/vcs.py:178` |
-| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:944` |
-| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:946` |
-| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:947` |
-| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:948` |
+| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:1000` |
+| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:1002` |
+| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:1003` |
+| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:1004` |
 
 The two git identity variables work only as a pair (`backend/vcs.py:176-180`), and they are read
 before the values stored in **Settings**, not after.
@@ -184,8 +184,8 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `thinking` | `backend/routers/api.py:72`, `:778` | reasoning level, written at `:794` |
 | `delegateModel` | `backend/config.py:395` | overridden by `TACIT_DELEGATE_MODEL` |
 | `fallbackModel` | `backend/config.py:411` | the model a session runs on when its own is gone; without it the turn fails and says so |
-| `deliverGuarantee` | `backend/config.py:487` | overridden by `TACIT_DELIVER_GUARANTEE` |
-| `shellOverlap` | `backend/config.py:518-535` | overridden by `TACIT_SHELL_OVERLAP` |
+| `deliverGuarantee` | `backend/config.py:557` | overridden by `TACIT_DELIVER_GUARANTEE` |
+| `shellOverlap` | `backend/config.py:574-591` | overridden by `TACIT_SHELL_OVERLAP` |
 | `turnSound` | `backend/config.py:432` | on by default |
 | `alertSound` | `backend/config.py:474` | off by default |
 | `allowVersionControl` | `backend/config.py:544` | absent means the agent may not run git |
@@ -204,7 +204,7 @@ silent.
 
 | File | Written by | Holds |
 |---|---|---|
-| `~/.tacit/models.json` | `backend/config.py:643`, seeded at `:284-285` | providers, models, the default ref |
+| `~/.tacit/models.json` | `backend/config.py:643`, seeded at `:305-306` | providers, models, the default ref |
 | `~/.tacit/.env` | `backend/config.py:33` | API keys, masked in the interface |
 | `~/.tacit/capabilities.json` | `backend/providers.py:195`, `:214` | the sandbox, memory and learning selections |
 | `~/.tacit/profiles.json` | `backend/profiles.py:105-106`, read at `:93-102` | your saved profiles and which is active |
