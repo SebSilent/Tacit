@@ -51,7 +51,7 @@ Cost and context live in Settings, not in a bar above the composer. The meter is
 Compaction is visible while it happens. The meter reads `compacting…` and the composer is disabled for
 the session doing it, so a prompt typed during a fold cannot land in the transcript the fold is
 rewriting (`static/app.js:1224-1231`, refused at `:1128`). The state arrives on the same socket as
-everything else, from `compacting_notice` in `backend/session_runtime.py:507`, and it is cleared when
+everything else, from `compacting_notice` in `backend/session_runtime.py:509`, and it is cleared when
 the fold is written, not when the model answers: a fold that reclaimed nothing clears too. The figure
 the meter shows afterwards is the surviving record, floored at what is actually stored, because the
 number that matters is what the next request will pay.

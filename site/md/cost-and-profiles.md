@@ -158,7 +158,7 @@ None of this was invented here.
 ### What the mechanics do, and why each is there
 
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
-  size actually is (`backend/agent.py:1139-1172`). It reads two measures and answers to the larger: the
+  size actually is (`backend/agent.py:1140-1173`). It reads two measures and answers to the larger: the
   *billed* prompt of the last provider call, at the plain fill target, and the *stored* record, at twice
   the target (`TACIT_STORE_COMPACT_FACTOR`). The store is what elision serves from — a store over the
   target means stubs in the wire, not an over-budget request — and folding it at the plain target
@@ -184,7 +184,7 @@ None of this was invented here.
 - **Compaction runs during a turn, not only between them** (`backend/agent.py:1565-1592`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
-- **The standing prompt and the task are pinned against elision** (`backend/agent.py:964-984`). Pinning
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:965-985`). Pinning
   only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
   question.
 
