@@ -1,4 +1,5 @@
 import collections
+from concurrent.futures import ThreadPoolExecutor
 import contextvars
 import fnmatch
 import inspect
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from . import (archive, audit, config, extras, guidance, mcp_registry, memory_modes,
                memory_store, metrics, model_settings, plugin_manager, sandbox,
-               skills, store)
+               skills, store, thinking)
 from . import tokens as token_mod
 from .ai import engine, prompts
 
@@ -1187,18 +1188,28 @@ def _msg_tokens(m: dict) -> int:
     return total
 
 
-def _tail_budget(trigger_tokens: int) -> int:
+def _tail_budget(trigger_tokens: int, target_tokens: int = 0) -> int:
     """Tokens of recent transcript to keep verbatim through a compaction.
 
-    A share of the region being folded, under an absolute ceiling.
-    The share is the rule and the ceiling only a backstop: an 8,000-token
-    ceiling bound for every window over 20k tokens and collapsed a 967,000-token
-    transcript to a summary plus 8k rows.
+    A share of the region being folded, under an absolute ceiling — and, when
+    the fill target is known, under a share of that too. The share is the rule
+    and the ceiling only a backstop: an 8,000-token ceiling bound for every
+    window over 20k tokens and collapsed a 967,000-token transcript to a
+    summary plus 8k rows.
+
+    The target share is the bound that was missing. A tail bounded only by the
+    region kept 200,000 tokens on a 200k window — the ceiling bound for every
+    region over 500k tokens — so the fold's own output re-filled the window it
+    emptied, the meter stayed pinned, and the trigger fired again next turn.
+    Bounded by both, a small record still folds (the region share governs) and
+    a large one leaves the window actually relieved (the target share governs).
     """
-    if trigger_tokens <= 0:
-        return config.COMPACT_TAIL_TOKENS
-    return max(500, min(config.COMPACT_TAIL_TOKENS,
-                        int(trigger_tokens * config.COMPACT_TAIL_SHARE)))
+    cap = config.COMPACT_TAIL_TOKENS
+    if trigger_tokens > 0:
+        cap = min(cap, int(trigger_tokens * config.COMPACT_TAIL_SHARE))
+    if target_tokens > 0:
+        cap = min(cap, int(target_tokens * config.COMPACT_TAIL_SHARE))
+    return max(500, cap)
 
 
 def _carries_reason(m: dict) -> bool:
@@ -1331,36 +1342,72 @@ def _fallback_summary(digest: str, error: str = "") -> str:
     return "\n".join(lines)[:8000]
 
 
-def _summarise(transcript: str, ref: str | None = None) -> tuple[str, str]:
+def _summarise(transcript: str, ref: str | None = None,
+               sref: str | None = None) -> tuple[str, str]:
     """Ask a model for the handover note. Returns (summary, error).
 
-    The model is the session's own, whatever it is: a fold that reads back as the
-    session's work has to be the work of the session's model. There is no separate
-    summariser any more, and there used to be an environment-only override with no
-    Settings surface, which is how a handover note got written by something nobody
-    had chosen. The transcript is capped so this call cannot itself overflow the
-    window it is trying to relieve.
+    The model is the summariser nominated in Settings > General, else the
+    session's own, else — only when that model is gone — the nominated fallback.
+    The fallback is a replacement for a missing model, not a cheap summariser.
+    The env-only override that once lived here was removed and stays removed: a
+    summary written by a model nobody could see was reported as the session's
+    own work. What replaced it is visible twice — the Settings control, and the
+    author named in every notice that reports a summary. A fold on a large
+    thinking model is minutes of latency, the one call a person waits on with
+    nothing else happening, so the call asks the model not to think and caps
+    what it may write back. The transcript is capped so this call cannot itself
+    overflow the window it is trying to relieve.
     """
     # The digest is oldest-first, so a leading slice keeps the oldest rows and
     # drops the newest — the ones just before the kept tail, usually the most
     # valuable context in the region. Keep the tail of the region instead.
     capped = transcript[-config.SUMMARY_INPUT_MAX_CHARS:]
+    # One shared resolution with the notice that reports the note: summariser
+    # setting, then the session's own model — which resolve_model lands on the
+    # nominated fallback for when it is gone — then the session's own ref raw,
+    # so the engine names the model it could not find. A caller that resolved
+    # already (the part fold does, once for every part) passes `sref` so all of
+    # a fold's calls name the same model even if the setting changes mid-fold.
+    sref = sref or config.summariser_ref(ref) or ref
+    # A handover note is a compression of text that is already distilled, not a
+    # reasoning task, and this is the one call whose latency a person waits on
+    # with nothing else happening. A model that thinks by default is the only
+    # kind this helps: `supports_off` is False for a model measured to have no
+    # off switch, and asking it anyway would be a claim the endpoint may reject.
+    effort = "none" if thinking.supports_off(sref) else None
     try:
-        res = engine.chat([
-            {"role": "system", "content": prompts.COMPACT},
-            {"role": "user", "content": capped},
-        # The session's own model, and nothing else. There is no separate
-        # nominatable summariser any more: an override with no Settings surface
-        # meant a handover note could be written by a model nobody had chosen.
-        ], ref=ref)
-    except engine.EngineError as e:
-        return _fallback_summary(capped, str(e)), str(e)
+        try:
+            res = _summarise_call(capped, sref, effort)
+        except engine.EngineError as e:
+            if not (effort and e.status == 400):
+                raise
+            # A provider that rejects the off switch — an o1-class model never
+            # probed for values — gets one retry at its own default: the note is
+            # worth one slow call more than a fold that silently degrades to the
+            # deterministic digest.
+            res = _summarise_call(capped, sref, None)
     except Exception as e:  # noqa: BLE001
         return _fallback_summary(capped, str(e)), str(e)
     summary = (res.get("content") or "").strip()
     if not summary:
         return _fallback_summary(capped, "the summariser returned nothing"), "empty summary"
     return summary, ""
+
+
+def _summarise_call(text: str, ref: str | None, effort: str | None) -> dict:
+    """One summariser request, with the bounds every caller of `_summarise` shares.
+
+    The token cap and the short timeout are what keep a fold from holding a turn
+    hostage: a note that runs to the model's full output ceiling is a note nobody
+    asked for, and a provider that cannot answer inside SUMMARY_TIMEOUT is not
+    going to answer at all — failing into the deterministic digest beats waiting
+    out the turn's own read timeout.
+    """
+    return engine.chat([
+        {"role": "system", "content": prompts.COMPACT},
+        {"role": "user", "content": text},
+    ], ref=ref, reasoning_effort=effort, max_tokens=config.SUMMARY_MAX_TOKENS,
+       timeout=config.SUMMARY_TIMEOUT)
 
 
 # A digest wider than one summariser call is folded in parts, each part
@@ -1407,19 +1454,33 @@ def _summarise_region(digest: str, ref: str | None = None) -> tuple[str, str]:
     parts = _chunk_digest(digest, cap)
     if len(parts) > _SUMMARY_PARTS_MAX:
         parts = parts[-_SUMMARY_PARTS_MAX:]
+    # Resolved once for the whole fold: every part and the merge name the same
+    # model, and the parts do not each re-read the settings files mid-flight.
+    sref = config.summariser_ref(ref) or ref
     if len(parts) == 1:
-        return _summarise(parts[0], ref)
-    notes, errors = [], []
-    for part in parts:
-        note, err = _summarise(part, ref)
-        if err:
-            errors.append(err)
-        notes.append(note)
+        return _summarise(parts[0], ref, sref)
+    # The parts are independent of each other; only the merge waits on all of
+    # them. Sequentially, a region at the parts cap was nine model calls back
+    # to back — minutes a person waits on with nothing else happening — for
+    # what a small pool finishes in the time of one part plus the merge.
+    notes: list[str] = [""] * len(parts)
+    errors: list[str] = [""] * len(parts)
+    workers = min(4, len(parts))
+    if workers <= 1:
+        for i, part in enumerate(parts):
+            notes[i], errors[i] = _summarise(part, ref, sref)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(_summarise, part, ref, sref) for part in parts]
+            for i, fut in enumerate(futs):
+                notes[i], errors[i] = fut.result()
     joined = "\n\n".join(notes)
-    if len(errors) == len(parts):
+    if all(errors):
         return joined, errors[0]
-    summary, err = _summarise(joined, ref)
-    return summary, err or (errors[0] if errors else "")
+    summary, err = _summarise(joined, ref, sref)
+    # The first part's error is not necessarily the first error: the parts run
+    # concurrently, so whichever one failed first is the one to report.
+    return summary, err or next((e for e in errors if e), "")
 
 
 def _digest_row(m: dict) -> str:
@@ -1476,7 +1537,18 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
     # share of the fill target kept 67k tokens on a 200k window whether the
     # record held 900k tokens or 9k, and on a small record the tail covered the
     # whole thing and the fold refused. The ceiling is the only absolute bound.
-    old, tail = _tail_split(rest, _tail_budget(_chars(rest) // 4),
+    # The fill target is passed as a second bound: a tail bounded only by the
+    # region kept 200k tokens on a 200k window — the ceiling bound for every
+    # region over 500k — so the fold's own output re-filled the window it
+    # emptied, the meter stayed pinned, and the trigger fired again next turn.
+    ctx = (rec.get("usage") or {}).get("context") or {}
+    window = int(ctx.get("window") or 0)
+    if window:
+        target_tokens = config.context_fill_target(window)
+    else:
+        target_tokens = (context_budget(rec.get("model") or ref)
+                         // token_mod.CHARS_PER_TOKEN)
+    old, tail = _tail_split(rest, _tail_budget(_chars(rest) // 4, target_tokens),
                             keep_reason=model_reasons(ref))
     if not old:
         return None
@@ -1490,6 +1562,19 @@ def compact_history(rec: dict, ref: str | None = None, force: bool = False) -> d
     # is digested along with everything else and the new note refines it rather
     # than stacking a second summary on top of the first.
     reclaimed = _prune_old_output(old)
+    # The prune is often the whole job: clearing the bodies of old tool results
+    # can bring the record back under budget on its own, and paying a model to
+    # summarise what the prune already reclaimed is minutes of latency for
+    # nothing. Fold only when the prune did not clear enough — or when the wire
+    # itself is over the fill target, which a prune alone cannot relieve.
+    pruned = list(msgs[:pin]) + old + tail
+    billed = int(ctx.get("tokens") or 0)
+    if (not force and reclaimed and billed <= target_tokens
+            and stored_tokens(pruned) <= target_tokens * config.STORE_COMPACT_FACTOR):
+        rec["messages"] = pruned
+        return {"compacted": 0, "kept": len(tail), "chars_before": before,
+                "chars_after": _chars(pruned), "pruned_chars": reclaimed,
+                "archived": archived, "pruned_only": True, "error": ""}
     summary, err = _summarise_region("\n\n".join(_digest_row(m) for m in old), ref)
     rec["messages"] = (list(msgs[:pin])
                        + [{"role": "summary", "content": summary}] + tail)
@@ -1591,11 +1676,23 @@ def compact_messages(messages: list[dict], ref: str | None = None,
         return None
     trigger = (int(budget_chars) // token_mod.CHARS_PER_TOKEN
                if budget_chars else config.COMPACT_TAIL_TOKENS)
-    old, tail = _tail_split(rest, _tail_budget(trigger), keep_reason=model_reasons(ref))
+    old, tail = _tail_split(rest, _tail_budget(trigger, trigger),
+                            keep_reason=model_reasons(ref))
     if not old:
         return None
     before = wire_chars(messages)
     reclaimed = _prune_old_output(old)
+    # The prune is often the whole job here too: if clearing the bodies of old
+    # tool results brings the wire back under budget, no model call is needed.
+    # The pruned rows are wire-only — the stored record keeps the full bodies
+    # and the parent rebuilds the transcript from it — so nothing is lost that
+    # the next turn would not have elided anyway.
+    pruned = pin + old + tail
+    if reclaimed and budget_chars and wire_chars(pruned) <= int(budget_chars):
+        messages[:] = pruned
+        return {"compacted": 0, "kept": len(tail), "chars_before": before,
+                "chars_after": wire_chars(pruned), "pruned_chars": reclaimed,
+                "pruned_only": True, "error": ""}
     summary, err = _summarise_region("\n\n".join(_digest_wire(m) for m in old), ref)
     messages[:] = (pin
                    + [{"role": "system",
@@ -2836,6 +2933,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield {"type": "notify", "level": "info",
                        "message": (f"compacted {info['compacted']} earlier steps mid-turn "
                                    f"({info['chars_before']} → {info['chars_after']} chars)")}
+            elif info and info.get("pruned_only"):
+                # A prune that sufficed on its own: no model call was made, so
+                # it does not count against the cap, but the wire did shrink
+                # and the person watching should see why the pause was short.
+                yield {"type": "notify", "level": "info",
+                       "message": (f"pruned {info['pruned_chars']} characters of old "
+                                   "tool output mid-turn; no summary needed")}
             elif info and info.get("error"):
                 # A summariser that failed once will fail again next step; count
                 # it so the turn is not billed three more attempts.

@@ -194,7 +194,7 @@
     // Tools are managed on the Skills & Tools tab only (one home per setting);
     // General fetches the server status, which now also reports the MCP
     // helper gate so the automatic on/off is visible where it is configured.
-    const [pf, vcs, dg, snd, au, srv, procs, lim, fb] = await Promise.all([
+    const [pf, vcs, dg, snd, au, srv, procs, lim, fb, sm] = await Promise.all([
       api('/api/profiles'),
       api('/api/harness/version-control'),
       api('/api/harness/deliver-guarantee'),
@@ -204,6 +204,7 @@
       api('/api/processes').catch(() => ({ processes: [] })),
       api('/api/harness/limits').catch(() => null),
       api('/api/harness/fallback-model').catch(() => null),
+      api('/api/harness/summariser-model').catch(() => null),
     ]);
 
     // The caps one turn pays, with the bounds the server clamps to, so the form
@@ -241,19 +242,35 @@
     const fbOk = !!(fb && fb.ok);
     const fbList = fbOk ? (fb.models || []) : [];
     const fbRef = fbOk ? String(fb.fallback_model || '') : '';
-    const fbChosen = fbList.find((m) => m.id === fbRef) || null;
-    const fbProviders = [];
-    fbList.forEach((m) => { if (fbProviders.indexOf(m.provider) < 0) fbProviders.push(m.provider); });
-    // A ref saved by hand, or set in the environment, that the registry no longer
-    // lists. Showing it is the point: the picker must report what is stored, not
-    // what would resolve, or the broken value stays invisible.
-    const fbStale = !!(fbRef && !fbChosen);
-    const fbProvider = (fbChosen && fbChosen.provider)
-      || (fbStale ? fbRef.partition('/')[0] : '');
-    if (fbStale && fbProviders.indexOf(fbProvider) < 0) fbProviders.push(fbProvider);
-    const fbModels = fbList.filter((m) => m.provider === fbProvider);
-    const fbOpt = (v, label, on) =>
-      `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+    const smOk = !!(sm && sm.ok);
+    const smList = smOk ? (sm.models || []) : [];
+    const smRef = smOk ? String(sm.summariser_model || '') : '';
+    // The two selects of one picker row, shared by the fallback and summariser
+    // rows: provider first, then that provider's models. A ref saved by hand, or
+    // set in the environment, that the registry no longer lists is shown as
+    // itself — the picker must report what is stored, not what would resolve, or
+    // the broken value stays invisible.
+    const pickerRow = (id, list, ref, emptyLabel) => {
+      const chosen = list.find((m) => m.id === ref) || null;
+      const providers = [];
+      list.forEach((m) => { if (providers.indexOf(m.provider) < 0) providers.push(m.provider); });
+      const stale = !!(ref && !chosen);
+      const provider = (chosen && chosen.provider) || (stale ? ref.split('/')[0] : '');
+      if (stale && providers.indexOf(provider) < 0) providers.push(provider);
+      const models = list.filter((m) => m.provider === provider);
+      const opt = (v, label, on) =>
+        `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+      return `
+          <select class="ctl-select as-sel" id="${id}Provider" aria-label="Provider">
+            ${opt('', emptyLabel, !ref)}
+            ${providers.map((p) => opt(p, p, p === provider && !!ref)).join('')}
+          </select>
+          <select class="ctl-select as-sel" id="${id}Model" aria-label="Model">
+            ${opt('', emptyLabel, !ref)}
+            ${stale ? opt(ref, ref + ' · not in the registry', true) : ''}
+            ${models.map((m) => opt(m.id, m.name || m.id, m.id === ref)).join('')}
+          </select>`;
+    };
     const fallbackHtml = !fbOk ? '' : `
       <div class="tool-row" data-perm="fallback-model">
         <span class="tool-name">Fallback model</span>
@@ -261,16 +278,22 @@
           instead; with no fallback the turn stops and says which model it could not find, instead of
           quietly paying for a different one. <code>TACIT_FALLBACK_MODEL</code> outranks what is saved
           here.</span>
-        <div class="as-row as-pickers">
-          <select class="ctl-select as-sel" id="fbProvider" aria-label="Fallback provider">
-            ${fbOpt('', '(no fallback)', !fbRef)}
-            ${fbProviders.map((p) => fbOpt(p, p, p === fbProvider && !!fbRef)).join('')}
-          </select>
-          <select class="ctl-select as-sel" id="fbModel" aria-label="Fallback model">
-            ${fbOpt('', '(no fallback)', !fbRef)}
-            ${fbStale ? fbOpt(fbRef, fbRef + ' · not in the registry', true) : ''}
-            ${fbModels.map((m) => fbOpt(m.id, m.name || m.id, m.id === fbRef)).join('')}
-          </select>
+        <div class="as-row as-pickers">${pickerRow('fb', fbList, fbRef, '(no fallback)')}
+        </div>
+      </div>`;
+    // The model that writes compaction notes. Empty means the session's own model,
+    // which is the honest default — but a fold on a large thinking model is minutes
+    // of latency a person waits on with nothing else happening, and a small fast
+    // model nominated here is how that wait is bought down. The note's author is
+    // named in every notice that reports a summary, so the choice stays visible.
+    const summariserHtml = !smOk ? '' : `
+      <div class="tool-row" data-perm="summariser-model">
+        <span class="tool-name">Summariser model</span>
+        <span class="tool-desc">The session's own model by default. Compaction runs on this one instead;
+          a small fast model keeps a fold to seconds where a thinking model spends minutes. If the
+          session's model is gone, the fallback model writes the note instead. The note's author is
+          named in the notice that reports it.</span>
+        <div class="as-row as-pickers">${pickerRow('sm', smList, smRef, '(the session\'s own)')}
         </div>
       </div>`;
 
@@ -342,6 +365,8 @@
       </div>
 
       ${fallbackHtml}
+
+      ${summariserHtml}
 
       <div class="ho-section">Interface</div>
       <div class="tool-row ${sndOn ? '' : 'off'}" data-perm="turn-sound">
@@ -522,6 +547,27 @@
         await saveFallback(first ? first.id : '');
       });
       fbSel.addEventListener('change', async () => { await saveFallback(fbSel.value); });
+    }
+
+    // The summariser picker, wired the same way: the provider picks its first
+    // model, and an empty choice means the session's own model writes the notes.
+    const smProv = panel.querySelector('#smProvider');
+    const smSel = panel.querySelector('#smModel');
+    const saveSummariser = async (ref) => {
+      const r = await post('/api/harness/summariser-model', { summariser_model: ref });
+      if (!r.ok) { note(r.error || 'could not save that', true); return; }
+      note(r.summariser_model
+           ? `summariser model: ${esc(r.summariser_model)}`
+           : 'no summariser: compaction notes are written by the session\'s own model');
+      renderGeneral();
+    };
+    if (smProv && smSel) {
+      smProv.addEventListener('change', async () => {
+        if (!smProv.value) { await saveSummariser(''); return; }
+        const first = smList.find((m) => m.provider === smProv.value);
+        await saveSummariser(first ? first.id : '');
+      });
+      smSel.addEventListener('change', async () => { await saveSummariser(smSel.value); });
     }
 
     panel.querySelector('[data-act="toggle-sound"]').addEventListener('click', async e => {

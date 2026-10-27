@@ -133,14 +133,35 @@ COMPACT_TAIL_SHARE = float(os.environ.get("TACIT_COMPACT_TAIL_SHARE", "0.4"))
 # alone brings the transcript back under budget and the summary call is skipped.
 COMPACT_PRUNE_KEEP_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_KEEP", "400"))
 COMPACT_PRUNE_MIN_CHARS = int(os.environ.get("TACIT_COMPACT_PRUNE_MIN", "1200"))
-# Summarising runs on the session's own model, and a deterministic digest is the
-# floor when that call fails. There used to be a `TACIT_COMPACT_MODEL` override
-# here with no Settings surface: a summary could be written by a model nobody had
-# chosen from any panel, which is the same fault as the silent model substitution
-# removed from `resolve_model`. The one nominated backup is `fallbackModel`, in
-# Settings > General, and it is named in every notice that reports a summary.
+# Summarising runs on the session's own model unless a summariser is nominated in
+# Settings > General, and a deterministic digest is the floor when that call fails.
+# The override was removed once because it lived only in the environment: a summary
+# could be written by a model nobody had chosen from any panel, which is the same
+# fault as the silent model substitution removed from `resolve_model`. But the
+# removal made the default the session's own model, and a fold on a large thinking
+# model then took minutes — the same minutes other harnesses spend in seconds,
+# because their compaction step runs on a small fast model. So the choice is back,
+# with the surface it always should have had: `summariserModel` in Settings, named
+# in every notice that reports a summary. The one nominated backup is
+# `fallbackModel`, in the same panel.
 # The summariser call must not itself overflow the window it is relieving.
 SUMMARY_INPUT_MAX_CHARS = int(os.environ.get("TACIT_SUMMARY_INPUT_MAX", "160000"))
+# A handover note is a compression of text that is already distilled, not a
+# reasoning task, and the summariser call is the one call in this program whose
+# latency a person waits on with nothing else happening. A thinking model left at
+# its own default spent minutes on reasoning the note does not need — measured on
+# one provider, a *tiny* probe question drew 7,147 reasoning characters, and the
+# digest this call reads is forty times that probe. The call therefore asks the
+# model not to think, and caps what it may write back: a note that runs to the
+# model's full output ceiling is a note nobody asked for, and the cap is what keeps
+# a slow provider from holding a turn hostage to it.
+SUMMARY_MAX_TOKENS = int(os.environ.get("TACIT_SUMMARY_MAX_TOKENS", "4000"))
+# The same reasoning, applied to the wait. The turn's own calls get the full
+# TIMEOUT because a long generation is the work; the summariser's call is
+# bookkeeping, and a provider that cannot answer it inside this window is not
+# going to answer it at all — failing into the deterministic digest beats holding
+# the turn for the full read timeout.
+SUMMARY_TIMEOUT = float(os.environ.get("TACIT_SUMMARY_TIMEOUT", "180"))
 COMPACT_KEEP_TAIL = int(os.environ.get("TACIT_COMPACT_KEEP", "6"))
 # Compaction used to be checked once, before a turn began. A 134-call turn then
 # grew without anything ever re-measuring it, which is how one session reached
@@ -409,6 +430,41 @@ def fallback_model() -> str:
     if v:
         return v
     return str(os.environ.get("TACIT_FALLBACK_MODEL") or "").strip()
+
+
+def summariser_model() -> str:
+    """The model that writes compaction notes. '' for the session's own.
+
+    The same shape as :func:`fallback_model`: a choice made in Settings, and
+    nothing else. `TACIT_COMPACT_MODEL` was removed once for living only in the
+    environment — a summary could then be written by a model nobody had chosen
+    from any panel — and a read of it may not come back. This is the one way to
+    move a fold off the session's own model while that model still works: the
+    fallback is a replacement for a gone model, not a cheap summariser. See
+    :func:`summariser_ref` for the full resolution a fold actually follows.
+    """
+    return str(prefs().get("summariserModel") or "").strip()
+
+
+def summariser_ref(ref: str | None) -> str:
+    """The ref that writes a compaction note for a session running on `ref`.
+
+    The summariser nominated in Settings, else the session's own model — which
+    :func:`resolve_model` already lands on the nominated fallback for, so a gone
+    model is replaced without a second resolution. The fallback is a replacement
+    for a missing model, not a cheap summariser: moving a fold to it while the
+    session model is alive would put the work on a model nobody nominated for
+    the job. '' when nothing resolves; the caller then passes the session's own
+    ref unchanged and lets the engine name the model it could not find.
+
+    Both the fold and the notice that reports it resolve through here, because
+    the two resolving differently is how a notice comes to name a model that did
+    not write the note.
+    """
+    chosen = summariser_model()
+    if chosen:
+        return chosen
+    return str((resolve_model(ref) or {}).get("ref") or "")
 
 
 def turn_worker_mode() -> str:

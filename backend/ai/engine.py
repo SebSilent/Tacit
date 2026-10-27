@@ -107,15 +107,25 @@ def _thinking_key(model: dict) -> str:
 
 
 def chat(messages: list[dict], *, ref: str | None = None, tools=None,
-         temperature=None, max_tokens=None) -> dict:
+         temperature=None, max_tokens=None, reasoning_effort=None,
+         timeout: float | None = None) -> dict:
+    """One non-streaming call.
+
+    ``reasoning_effort`` and ``timeout`` exist for the compaction summariser: it
+    is the one call whose latency a person waits on with nothing else happening,
+    so it asks the model not to think and does not wait out the full read timeout.
+    A turn's own calls leave both unset and get the model's default and TIMEOUT.
+    """
     model = _target(ref)
     if anthropic.flavour(model) == "anthropic":
-        return _chat_anthropic(model, messages, tools, temperature, max_tokens)
+        return _chat_anthropic(model, messages, tools, temperature, max_tokens,
+                               reasoning_effort, timeout)
     url = f"{model['baseUrl']}/chat/completions"
     try:
-        with httpx.Client(timeout=TIMEOUT) as client:
+        with httpx.Client(timeout=timeout or TIMEOUT) as client:
             r = client.post(url, headers=_headers(model), json=_payload(
-                model, messages, False, tools, temperature, max_tokens))
+                model, messages, False, tools, temperature, max_tokens,
+                reasoning_effort))
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
@@ -141,7 +151,8 @@ def chat(messages: list[dict], *, ref: str | None = None, tools=None,
 
 
 def _chat_anthropic(model: dict, messages: list[dict], tools, temperature,
-                    max_tokens) -> dict:
+                    max_tokens, reasoning_effort=None,
+                    timeout: float | None = None) -> dict:
     """One non-streaming Messages API call, in the same shape `chat` returns.
 
     This is the path the compaction summariser uses, so a Claude user gets cached
@@ -152,10 +163,10 @@ def _chat_anthropic(model: dict, messages: list[dict], tools, temperature,
     want_cache = anthropic.cache_enabled(model)
     for use_cache in ([True, False] if want_cache else [False]):
         body = anthropic.payload(model, messages, False, tools, temperature,
-                                 max_tokens, None, cache=use_cache)
+                                 max_tokens, reasoning_effort, cache=use_cache)
         body.pop("_cache_breakpoints", None)
         try:
-            with httpx.Client(timeout=TIMEOUT) as client:
+            with httpx.Client(timeout=timeout or TIMEOUT) as client:
                 r = client.post(url, headers=anthropic.headers(model),
                                 json=anthropic.wire_body(body))
                 if r.status_code >= 400:

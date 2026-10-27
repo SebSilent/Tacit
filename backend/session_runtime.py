@@ -498,10 +498,12 @@ def summariser_name(ref: str | None) -> str:
 
     Named in every notice that reports one, because a summary written by a model
     nobody picked is precisely the thing this program does not get to hide. The
-    resolution may land on the Settings fallback when the session's own model is
-    gone, and then the notice says so.
+    resolution mirrors `_summarise` exactly — summariser setting, then the
+    session's own model, then the fallback when that model is gone — because a
+    notice that names the session model while a fallback wrote the note hides
+    the one fact the notice exists to carry.
     """
-    return (config.resolve_model(ref) or {}).get("ref") or ref or "the session model"
+    return config.summariser_ref(ref) or ref or "the session model"
 
 
 def compacting_notice(bus, sid: str):
@@ -549,17 +551,20 @@ def compact_now(rec: dict, *, force: bool = False, notice=None) -> dict | None:
         u["compacting"] = False
         if notice:
             notice(False)
-    if not info or not info.get("compacted"):
+    if not info:
         return info
     saved = max(0, token_mod.estimate_tokens("x" * int(info.get("chars_before") or 0))
                 - token_mod.estimate_tokens("x" * int(info.get("chars_after") or 0)))
-    metrics.bump(rec, saved_compaction=saved)
-    _lower_context(rec, saved)
+    if saved:
+        metrics.bump(rec, saved_compaction=saved)
+        _lower_context(rec, saved)
+        info["saved_tokens"] = saved
     # Named in the notice, because which model wrote the handover note is a fact
     # about the session and not an implementation detail: the transcript is the
-    # only place a person can see that the Settings fallback wrote it.
-    info["saved_tokens"] = saved
-    info["model"] = summariser_name(ref)
+    # only place a person can see that the Settings fallback wrote it. A
+    # prune-only fold wrote no note, so there is no model to name.
+    if info.get("compacted"):
+        info["model"] = summariser_name(ref)
     return info
 
 
@@ -900,6 +905,14 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
                                      f"({info['chars_before']} \u2192 "
                                      f"{info['chars_after']} chars), written by "
                                      f"{info['model']}")})
+        elif info and info.get("pruned_only"):
+            # The prune reclaimed the budget without a model call. The record
+            # still changed, so it is saved and said here for the same reason:
+            # a reload mid-turn must not come back showing the old fill.
+            store.save(rec)
+            bus.publish({"type": "notify", "level": "info", "sid": sid,
+                         "message": (f"pruned {info['pruned_chars']} characters of "
+                                     "old tool output; no summary needed")})
 
         # Stored only when it is not the person, so an ordinary row stays
         # exactly the row it always was. It cannot reach the model: the wire

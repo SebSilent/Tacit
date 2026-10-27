@@ -727,7 +727,9 @@ async def ws_session(ws: WebSocket, sid: str):
                     store.save(rec)
                     await ws.send_text(_json({
                         "type": "rpc_response", "command": "compact",
-                        "ok": bool(info and info.get("compacted")), "data": info, "sid": rec["id"]}))
+                        "ok": bool(info and (info.get("compacted")
+                                             or info.get("pruned_only"))),
+                        "data": info, "sid": rec["id"]}))
                 finally:
                     _tell(False)
                     session_state.end(rec["id"])

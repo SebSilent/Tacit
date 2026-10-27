@@ -1215,7 +1215,11 @@ class TestCompactionMechanics(Isolated):
         rows = [f"user: row {i} " + "y" * 120 for i in range(40)]
         agent._summarise_region("\n\n".join(rows), ref="p/m")
         self.assertEqual(len(seen), agent._SUMMARY_PARTS_MAX + 1)
-        self.assertIn("row 39", seen[-2])       # the newest part is summarised
+        # The parts run concurrently, so the order the stub sees the calls in
+        # is the scheduler's, not the submission's. What the fold promises is
+        # which rows reach the summariser, not the order they were observed.
+        self.assertTrue(any("row 39" in s for s in seen[:-1]),
+                        "the newest part is summarised")
         self.assertFalse(any("row 0 " in s for s in seen[:-1]),
                          "the oldest parts were dropped, not summarised")
 
@@ -1231,7 +1235,10 @@ class TestCompactionMechanics(Isolated):
         def flaky(messages, **kw):
             calls["n"] += 1
             seen.append(messages[1]["content"])
-            if calls["n"] == 1:
+            # Fail by content, not by call order: the parts run concurrently,
+            # so which call is first is the scheduler's choice, and the fold's
+            # promise has to hold whichever part is the one that fails.
+            if "part 0 " in messages[1]["content"]:
                 raise agent.engine.EngineError("HTTP 503: part down")
             return {"content": "note: " + messages[1]["content"][:400]}
         agent.engine.chat = flaky
@@ -1241,7 +1248,8 @@ class TestCompactionMechanics(Isolated):
         self.assertIn("503", err)
         self.assertIn("summariser was unavailable", summary)
         self.assertEqual(len(seen), 3)          # two parts plus the merge call
-        self.assertIn("part 26", seen[1])       # the healthy part was summarised
+        self.assertTrue(any("part 26" in s for s in seen[:-1]),
+                        "the healthy part was summarised")
         self.assertIn("part 26", seen[2])       # and its note reached the merge
         self.assertIn("summariser was unavailable", seen[2])
 
@@ -1581,6 +1589,22 @@ class TestModelResolution(Isolated):
         self.assertEqual(session_runtime.summariser_name("zeta/gone"), "beta/two")
         self.assertEqual(session_runtime.summariser_name("alpha/one"), "alpha/one")
 
+    def test_the_fold_follows_the_same_resolution_the_notice_names(self):
+        # The notice and the call resolving differently is how a notice comes to
+        # name a model that did not write the note; both go through one helper.
+        config.save_prefs({"fallbackModel": "beta/two"})
+        seen = []
+        orig = agent.engine.chat
+        agent.engine.chat = lambda m, **kw: (seen.append(kw.get("ref")),
+                                             {"content": "s"})[1]
+        self.addCleanup(setattr, agent.engine, "chat", orig)
+        agent._summarise("digest", ref="zeta/gone")
+        self.assertEqual(seen[0], "beta/two",
+                         "a gone session model is replaced by the fallback")
+        agent._summarise("digest", ref="alpha/one")
+        self.assertEqual(seen[1], "alpha/one",
+                         "a live session model writes its own note")
+
 
 # ── the backup a person can see and choose, not one the code picks for them ──
 class TestFallbackIsAChoice(Isolated):
@@ -1650,18 +1674,26 @@ class TestFallbackIsAChoice(Isolated):
                       "the General tab never asks the route what is stored")
         self.assertIn("post('/api/harness/fallback-model'", src,
                       "the picker has no way to save")
-        self.assertIn('id="fbProvider"', src)
-        self.assertIn('id="fbModel"', src)
+        # The picker markup is shared with the summariser row, so the ids are
+        # templated; what is pinned is that the fallback row renders it.
+        self.assertIn('id="${id}Provider"', src)
+        self.assertIn('id="${id}Model"', src)
+        self.assertIn("pickerRow('fb'", src,
+                      "the fallback row renders the shared provider/model picker")
         self.assertIn("(no fallback)", src,
                       "the empty choice has to be selectable, not just absent")
         self.assertIn("not in the registry", src,
                       "a stored ref the registry lost must still be shown")
 
     def test_no_hidden_model_writes_the_summary(self):
-        """The summariser runs on the session's model, with no env-only override.
+        """The summariser is a model a person nominated, never one only code knew.
 
         `TACIT_COMPACT_MODEL` was a second model nobody could see in Settings, and a
-        fold written by it was reported as the session's own work.
+        fold written by it was reported as the session's own work. It stays removed —
+        a comment may name the thing it says was removed, a read of it may not. The
+        choice that replaced it is visible twice: `summariserModel` in Settings, and
+        the author named in every notice that reports a summary, with the nominated
+        fallback as the second choice and the session's own model last.
         """
         cfg = Path(config.__file__).read_text(encoding="utf-8")
         # A comment may name the thing it says was removed; a read of it may not.
@@ -1671,11 +1703,15 @@ class TestFallbackIsAChoice(Isolated):
                          Path("backend/agent.py").read_text(encoding="utf-8"))
         src = Path("backend/agent.py").read_text(encoding="utf-8")
         start = src.index("def _summarise")
-        body = src[start:start + 1400]
-        self.assertIn("ref=ref", body,
-                      "the fold has to be written by the session's own model")
-        self.assertNotIn("model_list()", body,
+        end = src.index("def _summarise_call")
+        # The fold's model comes from the one shared resolution, not from code
+        # picking here: a summariser that read the registry would be the hidden
+        # choice again under another name.
+        self.assertIn("config.summariser_ref(ref) or ref", src[start:end])
+        self.assertNotIn("model_list()", src[start:end],
                          "a summariser that reads the registry picks a model itself")
+        # The ref the resolution landed on is the one the engine call carries.
+        self.assertIn("ref=ref", src[end:end + 800])
 
 
 # ── the fold is visible while it runs, and the composer shuts for it ───

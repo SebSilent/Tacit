@@ -879,6 +879,23 @@ async def set_fallback_model(request: Request):
     return _ok(fallback_model=config.fallback_model())
 
 
+@router.get("/api/harness/summariser-model")
+async def get_summariser_model():
+    """The model that writes compaction notes. Empty = the session's own."""
+    return _ok(summariser_model=config.summariser_model(),
+               models=config.model_list())
+
+
+@router.post("/api/harness/summariser-model")
+async def set_summariser_model(request: Request):
+    body = await request.json()
+    ref = str(body.get("summariser_model") or "").strip()
+    if ref and not config.known_model(ref):
+        return _fail("unknown model")
+    config.save_prefs({"summariserModel": ref})
+    return _ok(summariser_model=config.summariser_model())
+
+
 @router.get("/api/harness/deliver-guarantee")
 async def get_deliver_guarantee():
     """Whether the turn is forced to land the file the task names. On by default."""
