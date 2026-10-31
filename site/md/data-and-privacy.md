@@ -2,7 +2,7 @@
 
 Everything Tacit knows about you is in one directory, and the whole product is a Python program
 serving plain pages over it. There are no accounts, no telemetry and no tracking
-(`README.md:5-7`). Nothing leaves the machine except the requests you send to the model provider you
+(`README.md:11-13`). Nothing leaves the machine except the requests you send to the model provider you
 configured.
 
 ## Where it lives

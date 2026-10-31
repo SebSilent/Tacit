@@ -2,6 +2,12 @@
 
 **The coding agent where nothing is hidden and nothing moves without you.**
 
+![license: MIT](assets/badges/license.svg)
+![runtime: Python 3.10+](assets/badges/runtime.svg)
+![architecture: Local-First / No DB](assets/badges/architecture.svg)
+![build: Zero Build Step](assets/badges/build.svg)
+![privacy: No Tracking](assets/badges/privacy.svg)
+
 Tacit is a coding agent you run yourself and use in your browser. It reads your files, runs commands,
 edits code, searches the web, and connects to external tools. Requests go to a model provider you
 configure; everything else stays on your machine. No accounts, no telemetry, no service to install.
@@ -10,13 +16,43 @@ The application is one Python program serving plain web pages: no build step, no
 database. That is a position rather than an accident. A coding harness is the part of the stack you are
 supposed to be able to read, and a platform inside it is the part you cannot.
 
-One turn costs a fixed amount before your question is read: 974 characters of standing instructions plus
-every tool description the session is offered. The pair to remember is
-768 tokens on Minimal and 2,039 on Default, and a test re-derives both from the code on every run.
+> **The number to remember.** One turn costs a fixed amount before your question is read:
+> 974 characters of standing instructions plus every tool description the session is offered. The pair
+> to remember is 768 tokens on Minimal and 2,039 on Default, and a test re-derives both from the code on
+> every run.
 
 ![A turn streaming in the Tacit interface](assets/demo.gif)
 
-If you want to see the demo: [demo.html](https://sebsilent.github.io/Tacit/demo.html).
+**See it before you install it:** [demo.html](https://sebsilent.github.io/Tacit/demo.html), the interface
+running a scripted turn, live in your browser. Do not treat it as evidence of anything.
+
+---
+
+## At a glance
+
+- **What it is:** a self-hosted coding agent with a browser interface
+- **What it runs on:** Python 3.10 or newer, and nothing else that is required
+- **What it stores:** plain files under `~/.tacit`, with no database
+- **What it sends:** requests to the model provider you configured, and nothing else
+- **What a turn costs:** ~768 to ~2,264 tokens of preamble, measured and published
+- **What it hides:** nothing, since every decision lands in a file you can read
+
+### What Tacit is, and what it refuses to be
+
+Every row below has a line behind it. The right column names the section that carries the citation.
+
+| Property | Tacit | Where it is decided |
+|---|:---:|---|
+| Runs on your machine, in your browser | ✓ | [Quick start](#quick-start) |
+| Database to install | ✗ | [Architecture](docs/architecture.md) |
+| Build step or frontend toolchain | ✗ | [Contributing](CONTRIBUTING.md) |
+| Accounts, sign-in, or a service to install | ✗ | [Security and control](#security-privacy-and-control) |
+| Telemetry, analytics, or tracking | ✗ | [Data and privacy](docs/data-and-privacy.md) |
+| Another agent harness required or contacted | ✗ | [Quick start](#quick-start) |
+| Fixed cost of a turn published, and re-measured by a test | ✓ | [What a turn costs](#what-a-turn-costs-against-the-alternatives) |
+| A turn you can kill, because it is a process | ✓ | [Architecture](docs/architecture.md) |
+| Optional capabilities on by default | ✗ | [Memory and learning](docs/memory-and-learning.md) |
+| Versioned releases | ✗ | [Status and known limits](#status-and-known-limits) |
 
 ---
 
@@ -70,7 +106,7 @@ an install: [docs/install.md](docs/install.md).
 
 ## The interface, briefly
 
-```
+```text
 +--------------+---------------------------------+------------------+
 |  Sessions    |  Workspace · Mode · Model       |   Assistant      |
 |              +---------------------------------+  (goal · run)    |
@@ -80,15 +116,27 @@ an install: [docs/install.md](docs/install.md).
 +--------------+---------------------------------+------------------+
 ```
 
-Two conversations rather than one. The main agent works in your project and its tool cards carry the real
-output. The **Assistant** on the right reads that session and helps with the work around the work: drafting
-a prompt, questioning an approach, explaining what just happened. The main agent never sees it and is not
-told an Assistant exists, and the Assistant's goal never becomes the agent's task. Its read access is a set
-of switches with the token price shown before anything is sent, and its counter sits above its thread, so a
-second conversation is never a hidden second bill.
+**Two conversations rather than one.** The main agent works in your project and its tool cards carry the
+real output. The **Assistant** on the right reads that session and helps with the work around the work:
+drafting a prompt, questioning an approach, explaining what just happened. The main agent never sees it
+and is not told an Assistant exists, and the Assistant's goal never becomes the agent's task. Its read
+access is a set of switches with the token price shown before anything is sent, and its counter sits above
+its thread, so a second conversation is never a hidden second bill.
 
-The capture above is the interface running a scripted turn, live in your browser: look at it before you
-install anything, and do not treat it as evidence of anything.
+**Where the code lives.**
+
+```text
+Tacit/
+├── backend/            the server, the agent loop, and every policy decision
+│   ├── ai/             provider transports and the prompt segments
+│   ├── plugins/        bundled plugins, one file each
+│   └── routers/        thin HTTP and WebSocket surfaces, one per domain
+├── static/             the frontend, served as-is from config.STATIC_DIR
+├── docs/               the documentation set, indexed at docs/index.md
+├── scripts/            the checkers, the site build, and the two measurement scripts
+└── tests/              the offline suite, plus helpers.py and fake_mcp_server.py
+```
+
 [docs/interface.md](docs/interface.md) covers the regions, snapshots and restart;
 [docs/settings.md](docs/settings.md) says which tab owns which switch and which file it writes.
 
@@ -172,16 +220,16 @@ ships, which is read, write, edit, shell, grep, list and glob.
 |---|---|---|
 | Tool schemas | **2,001 chars** | 4,626 chars |
 | System prompt | **974 chars** | 1,352 chars |
-| **Fixed cost per turn** | **~768 tokens** | **~1,600** |
+| **Fixed cost per turn** | **~768 tokens** | ~1,600 |
 
 Two things account for the gap: Pi's descriptions are longer (its `read` takes the same three parameters and
 costs 182 tokens against 67), and the standing prompt is smaller to begin with. Pi's `grep` exposes more
 options than Tacit's, so that one cell is not a fair fight.
 
-**What this does not prove.** A smaller fixed cost is not a lower API bill and not a higher solve rate. It
-is one term in a sum: total spend is the preamble times the number of steps plus the transcript, and a
-harness that sends less per step but takes more steps can lose. It is also the term a person can control,
-which is why it is measured and published rather than asserted.
+> **What this does not prove.** A smaller fixed cost is not a lower API bill and not a higher solve rate. It
+> is one term in a sum: total spend is the preamble times the number of steps plus the transcript, and a
+> harness that sends less per step but takes more steps can lose. It is also the term a person can control,
+> which is why it is measured and published rather than asserted.
 
 ### The six built-in profiles
 
@@ -194,13 +242,17 @@ which is why it is measured and published rather than asserted.
 | **power-memory** | 23 | none | full, budgeted | off | `default` + the memory tools + budget |
 | **full** | 23 | tacit-micro | full, budgeted | off | `default` + the memory tools + budget |
 
-The tool count moves with the memory mode, because memory is a capability the profile selects rather than a
-plugin it enables: `explicit` is offered the propose tool only, `jit` and `full` also get the search tool.
-No profile turns learning on, not even proposing: a profile sets cost and containment, and does not decide
-what Tacit is allowed to remember on its own. **minimal** is the one for a small model or a tight window,
-and what you give up is browsing, sub-agents, plan mode, research and snapshots. You can save the current
-configuration under your own name. The presets matter less than the habit: the cost of a configuration
-should be knowable before you adopt it, not discovered later in a bill or a truncated conversation.
+**The tool count moves with the memory mode,** because memory is a capability the profile selects rather
+than a plugin it enables: `explicit` is offered the propose tool only, `jit` and `full` also get the search
+tool.
+
+**No profile turns learning on, not even proposing:** a profile sets cost and containment, and does not
+decide what Tacit is allowed to remember on its own.
+
+**minimal** is the one for a small model or a tight window, and what you give up is browsing, sub-agents,
+plan mode, research and snapshots. You can save the current configuration under your own name. The presets
+matter less than the habit: the cost of a configuration should be knowable before you adopt it, not
+discovered later in a bill or a truncated conversation.
 
 ### Caching, because a long session is the whole bill
 
@@ -238,8 +290,8 @@ input plus output, cache reads excluded, counted the way OpenBench counts them. 
 
 | Profile | Solved | Tokens per solve | Wall seconds per cell |
 |---|---|---|---|
-| Default | 6/6 | 106,526 | 530 |
-| Minimal | 5/6 | 82,814 | 418 |
+| Default | 6/6 | 106,522 | 530 |
+| Minimal | 5/6 | 82,841 | 418 |
 
 Schemelike is graded on Linux only so far: its checker reads `os.O_NONBLOCK`, which Windows Python does not
 provide.
@@ -259,21 +311,24 @@ provide.
 An errored cell is a run where the arm's own plumbing decided the outcome, and its tokens still got spent.
 That column is what a token table cannot show.
 
-**Read the scope with the result.** These rows come from one model, one endpoint, one machine, twenty cells
-of it. Three trials per task is enough to show a plumbing failure and not enough to rank harnesses on a
-hard task. Tacit solved 9/9 on Linux where the published arms managed 8/9 or fewer, which says these three
-tasks, on this model, did not break this loop. It does not generalize, and the Windows Minimal row at 5/6
-is the counterexample already in the table.
+> **Read the scope with the result.** These rows come from one model, one endpoint, one machine, twenty
+> cells of it. Three trials per task is enough to show a plumbing failure and not enough to rank harnesses
+> on a hard task. Tacit solved 9/9 on Linux where the published arms managed 8/9 or fewer, which says these
+> three tasks, on this model, did not break this loop. It does not generalize, and the Windows Minimal row
+> at 5/6 is the counterexample already in the table.
 
-**Three harness behaviours changed these scores, and they are here so you can discount them.** The delivery
-guarantee, on by default, finishes a write the turn started and missed when it is about to end with nothing
-on disk, gives the salvage phase three rounds rather than one, and spends the last minutes of wall budget
-landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed cell is still a
-graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when the agent ends it.
-The repeat guard answers an identical call from cache after three runs and ends a turn after four blocked
-repeats (`backend/agent.py:797-806`), because one cell spent 26 of its 29 shell calls on refused repeats
-and ended with nothing written. The uncapped retry re-asks a round this harness's own output ceiling
-destroyed, so thinking is never billed as waste, and that one is not part of the delivery switch.
+**Three harness behaviours changed these scores, and they are here so you can discount them.**
+
+- **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
+  to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
+  minutes of wall budget landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed
+  cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
+  the agent ends it.
+- **The repeat guard** answers an identical call from cache after three runs and ends a turn after four
+  blocked repeats (`backend/agent.py:797-806`), because one cell spent 26 of its 29 shell calls on refused
+  repeats and ended with nothing written.
+- **The uncapped retry** re-asks a round this harness's own output ceiling destroyed, so thinking is never
+  billed as waste, and that one is not part of the delivery switch.
 
 **Run it yourself; that is the point of publishing it.** A three-trial run of one task lands before your
 coffee is cold. The cells this table wants next: any first-party or fp8 route for kimi and qwen, DeepSeek
@@ -379,25 +434,28 @@ guard the architecture rather than a feature are `test_turn_worker.py`, `test_se
 `test_isolation.py`, `test_engine.py`, `test_docs.py`, `test_frontend_weight.py`, and `test_claims.py`,
 which enforces each behaviour this README claims, including the agent loop end to end.
 
-Two rules are executable rather than editorial. **The documentation is a specification:**
-`tests/test_docs.py` checks that every `TACIT_*` name in a doc is read by code, that every `path:line`
-citation points at a real non-blank line inside a real file, that relative links resolve, and that every
-page in `docs/` is reachable from the index. **The prose has a denylist:** `scripts/check_prose.py` fails on
-em dashes, hollow adjectives and throat-clearing openers. If you cannot point at the line you do not know
-the answer, and you do not write the sentence: that is why the figures here carry a method instead of an
-adjective. [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout and the house rules.
+Two rules are executable rather than editorial.
+
+- **The documentation is a specification:** `tests/test_docs.py` checks that every `TACIT_*` name in a doc
+  is read by code, that every `path:line` citation points at a real non-blank line inside a real file, that
+  relative links resolve, and that every page in `docs/` is reachable from the index.
+- **The prose has a denylist:** `scripts/check_prose.py` fails on em dashes, hollow adjectives and
+  throat-clearing openers. If you cannot point at the line you do not know the answer, and you do not write
+  the sentence: that is why the figures here carry a method instead of an adjective.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the layout and the house rules.
 
 ---
 
 ## Status and known limits
 
-Working and covered by tests: agent turns against any OpenAI-compatible endpoint, sub-agents, plan mode,
+**Working and covered by tests:** agent turns against any OpenAI-compatible endpoint, sub-agents, plan mode,
 skills, compaction, background processes, snapshots with restore, the terminal, providers, sessions, token
 accounting and the dashboard, capability profiles, session isolation, the killable turn worker, MCP over
 stdio and HTTP with lazy activation, plugins, isolation, budgeted memory, approval-first learning, one-time
 migration from an export you point at, the self-update transport, and the per-session Assistant.
 
-What is not finished:
+**What is not finished:**
 
 - **Windows has no isolation primitive.** `mechanism: none` is the answer there, and the timeout plus the
   change report are all that is enforced.

@@ -1,7 +1,7 @@
 # Contributing
 
 Tacit is one Python program serving plain web pages. There is no build step, no frontend toolchain,
-and no database to install (`README.md:9-10`). That is the first thing to know before you change
+and no database to install (`README.md:15-16`). That is the first thing to know before you change
 anything: a contribution that adds a compile step, a package.json dependency for the app itself, or a
 service to start breaks the property the product is built on.
 
@@ -12,7 +12,7 @@ python -m unittest discover -s tests -t .
 ```
 
 The suite runs offline. It needs no network, no real model, no container daemon and no benchmark
-runner, and Tacit installs neither (`README.md:376-377`).
+runner, and Tacit installs neither (`README.md:431-432`).
 
 ## Layout
 
@@ -121,15 +121,15 @@ Node, so it is run by hand and never from `unittest`, which stays offline and in
 
 The benchmark table wants more arms on the same cells: any first-party or fp8 route for kimi and qwen,
 DeepSeek and Qwen as the model, an Apple silicon lane, and a rerun on whatever hardware you have
-(`README.md:278-280`). Tuning is welcome and is part of the point, since the profiles and prefs are the
-tuning surface (`README.md:281-282`).
+(`README.md:333-336`). Tuning is welcome and is part of the point, since the profiles and prefs are the
+tuning surface (`README.md:336-337`).
 
 One concrete port is named in the README: schemelike is graded on Linux only because its checker reads
-`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:244-245`), and a Windows port of that
-checker is on the list of cells the table wants next (`README.md:280-281`).
+`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:296-297`), and a Windows port of that
+checker is on the list of cells the table wants next (`README.md:335-336`).
 
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
-(`README.md:282-283`). Every row must carry the checker's output verbatim, the byte counts and sha256
+(`README.md:337-338`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
 somebody else can re-run (`docs/testing-and-benchmarks.md:153-155`).
 

@@ -107,7 +107,7 @@ something in it, so an unused task list costs nothing (`:8-12`).
 may still have it listed as enabled, so a retired feature cannot come back as a row in Settings, a tool in
 the prompt, or a line in a cost estimate. Memory moved into the backend, where one switch decides both
 what is injected and what the agent may call (`backend/plugin_manager.py:45-46`,
-`backend/agent.py:886-900`, `README.md:197-198`).
+`backend/agent.py:886-900`, `README.md:245-247`).
 
 ## What a profile does to both
 
