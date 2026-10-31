@@ -22,7 +22,7 @@ schemas. `cost_of` returns those five numbers separately rather than one total, 
 which part of the bill moved (`backend/profiles.py:204-208`).
 
 The published figures are in the README: 974 characters of standing instructions, about 768 tokens on
-Minimal and 2,039 on Default (`README.md:13-15`). A test reads the table back out of the README and
+Minimal and 2,039 on Default (`README.md:19-21`). A test reads the table back out of the README and
 re-measures it against `cost_of`, because 1,889 stayed published for a while after the schemas grew
 past it and nothing noticed.
 
@@ -62,7 +62,7 @@ change it (`:83`).
 `CORE_TOOLS` is `read_file`, `write_file`, `edit_file`, `run_shell`, `grep_files`, `list_files` and
 `glob_files` (`backend/profiles.py:18-19`). `tools: None` means the whole registry
 (`:37`, `:129-130`). No profile turns learning on, because a profile sets cost and containment and does
-not decide what Tacit is allowed to remember on its own (`README.md:199-200`).
+not decide what Tacit is allowed to remember on its own (`README.md:249-250`).
 
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
