@@ -42,7 +42,7 @@ General also holds the profile selector, the permission list, the server section
 
 ## Sounds
 
-Four chimes, two switches, both switches server settings rather than per-device ones because they describe the machine: a person who silenced it wants every device pointed at this install to stay silent. `turnSound` is **on** by default and covers the two that announce finished work, `done` and `error`. `alertSound` is **off** by default and covers the two that fire *during* work: `warn`, the budget warning, and `tick`, one per cycle of a loop that can run for hours unattended. Sound that repeats by itself is the kind a person reaches for the mute on, so it starts silent and is opted into. The **General** tab's Interface section auditions all four in order, past both switches, on purpose: you clicked to hear them. The switches are `turnSound` and `alertSound` in `prefs.json`, read at `backend/config.py:413` and `:426`, and there is no environment variable for either.
+Four chimes, two switches, both switches server settings rather than per-device ones because they describe the machine: a person who silenced it wants every device pointed at this install to stay silent. `turnSound` is **on** by default and covers the two that announce finished work, `done` and `error`. `alertSound` is **off** by default and covers the two that fire *during* work: `warn`, the budget warning, and `tick`, one per cycle of a loop that can run for hours unattended. Sound that repeats by itself is the kind a person reaches for the mute on, so it starts silent and is opted into. The **General** tab's Interface section auditions all four in order, past both switches, on purpose: you clicked to hear them. The switches are `turnSound` and `alertSound` in `prefs.json`, read at `backend/config.py:440` and `:483`, and there is no environment variable for either.
 
 ## The dashboard
 
@@ -51,7 +51,7 @@ Cost and context live in Settings, not in a bar above the composer. The meter is
 Compaction is visible while it happens. The meter reads `compacting…` and the composer is disabled for
 the session doing it, so a prompt typed during a fold cannot land in the transcript the fold is
 rewriting (`static/app.js:1224-1231`, refused at `:1128`). The state arrives on the same socket as
-everything else, from `compacting_notice` in `backend/session_runtime.py:507`, and it is cleared when
+everything else, from `compacting_notice` in `backend/session_runtime.py:509`, and it is cleared when
 the fold is written, not when the model answers: a fold that reclaimed nothing clears too. The figure
 the meter shows afterwards is the surviving record, floored at what is actually stored, because the
 number that matters is what the next request will pay.

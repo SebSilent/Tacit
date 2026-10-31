@@ -137,12 +137,12 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:748-752`, `:867-871`), one capture per turn
+the server checkpoints the workspace (`backend/agent.py:778-782`, `:864-891`), one capture per turn
 rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:155-180`,
 `backend/config.py:50`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:170-174`, defined at `backend/config.py:206`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:175`). The skip test
+(`backend/extras.py:170-174`, defined at `backend/config.py:211`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:175`). The skip test
 looks only at parts inside the project, because testing absolute parts would skip everything whenever
 the project itself sat in a folder named `build/` or `checkpoints/` (`backend/extras.py:170-172`).
 
