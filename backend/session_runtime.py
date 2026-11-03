@@ -148,7 +148,7 @@ def _autonomy_off(sid: str, reason: str) -> bool:
     stops and will ask later what it stopped on.
     """
     was = autonomy_state(sid).get("enabled")
-    _autonomy_write(sid, enabled=False, reason=reason)
+    state = _autonomy_write(sid, enabled=False, reason=reason)
     if was:
         # publish resolves the bus's own loop, so this is safe to call from a
         # driver thread or from the event loop, and is a no-op when nobody is
@@ -156,6 +156,13 @@ def _autonomy_off(sid: str, reason: str) -> bool:
         try:
             turn_bus.publish(sid, {"type": "notify", "level": "info", "sid": sid,
                                    "message": f"autonomous mode stopped, {reason}"})
+            # And onto the Assistant's own channel. The pane refreshes its counter
+            # when a reply is saved, which happens *before* the gate runs, so a
+            # stop the gate decides on has no reply of its own to ride along with
+            # and the row above the thread would keep saying `running` over a run
+            # that is already over. The reason is the whole point of the row.
+            turn_bus.publish(sid, {"type": "assistant_autonomy", "sid": sid,
+                                   "autonomy": state}, channel="assistant")
         except Exception:  # noqa: BLE001
             pass
     return bool(was)
@@ -178,6 +185,8 @@ def _autonomy_note(sid: str, reason: str) -> dict:
         try:
             turn_bus.publish(sid, {"type": "notify", "level": "info", "sid": sid,
                                    "message": f"autonomous mode waiting, {reason}"})
+            turn_bus.publish(sid, {"type": "assistant_autonomy", "sid": sid,
+                                   "autonomy": state}, channel="assistant")
         except Exception:  # noqa: BLE001
             pass
     return state
@@ -281,12 +290,21 @@ def _autonomy_after_turn(sid: str, rec: dict, loop) -> None:
         _autonomy_note(sid, res.get("error") or "the Assistant could not start")
 
 
-def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
+def _autonomy_after_assistant(sid: str, rec: dict, loop, answer: str | None = None,
+                              status: str = "answered") -> None:
     """The Assistant answered: its last fenced block is the next agent prompt.
 
-    No block means the model had nothing to say about the work, which the
-    contract reads as "carry on", so the harness sends a bare continue rather
-    than ending a run the person started. A block of ``DONE`` ends it.
+    Nothing is invented here. The harness sends the block the Assistant wrote, or
+    it stops the run and says why, because the previous contract read an absent
+    block as "carry on" and filled the gap with a ``Continue.`` of its own. That
+    reading could not tell a deliberate shrug from a reply that had errored, been
+    stopped, or run out of tool rounds before it reached the answer, so the run
+    kept buying whole agent turns on instructions nobody had written.
+
+    `answer` is the reply this run produced, and `status` is how it ended
+    (`assistant.run_turn` documents them). A caller that watched no run may leave
+    `answer` as None and get the last stored reply instead, which is the older
+    behaviour and the only way a test or a recovery path can drive this.
     """
     state = autonomy_state(sid)
     if not state.get("enabled"):
@@ -300,22 +318,27 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop) -> None:
         # never stopped. Returning WITHOUT disabling is the whole point: a
         # manual question must not cost the run its remaining budget.
         return
-    rows = (store.get(sid) or {}).get("assistant") or []
-    answer = ""
-    for row in reversed(rows):
-        if row.get("role") == "assistant" and str(row.get("content") or "").strip():
-            answer = row.get("content") or ""
-            break
-    prompt = assistant.extract_prompt(answer).strip()
-    if prompt.upper() in ("DONE", "`DONE`", "**DONE**"):
+    if answer is None:
+        rows = (store.get(sid) or {}).get("assistant") or []
+        answer = str(rows[-1].get("content") or "") if rows else ""
+    direction = assistant.directive(answer)
+    if direction["kind"] == "done":
         _autonomy_off(sid, "the Assistant reported the Goal met")
         return
+    if direction["kind"] == "none":
+        # Silence, reported as silence. The reason names the failure the person
+        # can act on (a reply that did not arrive is not the same problem as a
+        # reply that forgot the block), and the pane shows it as `stopped - ...`.
+        _autonomy_off(sid, assistant.CUT_REASONS.get(status)
+                      or "the Assistant sent no block to hand over")
+        return
+    prompt = direction["text"]
     ok, why = assistant.budget_left(state)
     if not ok:
         _autonomy_off(sid, why)
         return
     try:
-        out = start_turn(sid, rec, prompt or assistant.CONTINUE_PROMPT, loop=loop,
+        out = start_turn(sid, rec, prompt, loop=loop,
                      origin="autonomous")
     except Exception as exc:  # noqa: BLE001
         # An exception is not a hiccup: the spawn itself threw, so there is no
@@ -797,22 +820,50 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                 pass
 
 
+def _reply_text(trace: list) -> str:
+    """The answer this reply ended with, or "" when it never got to one.
+
+    The LAST step, and only a step that ran no tools. A step that ended on a tool
+    call is a round of reading rather than an answer, and its narration is not
+    something the agent should be acting on. Nothing here reaches back into the
+    stored history either: a cycle that produced no answer must not hand the
+    previous cycle's block over again, which is the second way this harness used
+    to run work the Assistant had not asked for.
+    """
+    if not trace:
+        return ""
+    last = trace[-1] if isinstance(trace[-1], dict) else {}
+    if last.get("tools"):
+        return ""
+    return str(last.get("text") or "")
+
+
 def _drive_assistant(sid: str, rec: dict, mini: dict, text: str, cfg: dict,
                      trace: list, run: dict, bus: "turn_bus.TurnBus") -> None:
     """The assistant reply's driver: same shape as the turn's, its own channel."""
     stop = run["stop"]
     worker = run.get("worker")
+    # How the reply ended, as the reply itself reported it. "" means no terminal
+    # event ever arrived, which is a worker that died, and is a reason to stop the
+    # run rather than a licence to carry on with whatever is on screen.
+    status = ""
     try:
         stream = (worker.events() if worker is not None else
                   assistant.run_turn(mini, text, cfg, stop=stop, trace=trace))
         for ev in stream:
-            if ev.get("type") == "trace":
+            kind = ev.get("type")
+            if kind == "trace":
                 # Kill-safe: the worker re-sends its cumulative trace, so the
                 # last one seen is the most complete.
                 trace[:] = list(ev.get("steps") or [])
                 continue
-            bus.publish({**ev, "type": "assistant_" + str(ev.get("type")), "sid": sid})
+            if kind == "done":
+                status = str(ev.get("status") or "cut")
+            elif kind == "error":
+                status = "error"
+            bus.publish({**ev, "type": "assistant_" + str(kind), "sid": sid})
     except Exception as exc:  # noqa: BLE001
+        status = "error"
         bus.publish({"type": "assistant_error", "message": str(exc), "sid": sid})
     finally:
         if worker is not None and worker.alive():
@@ -841,9 +892,15 @@ def _drive_assistant(sid: str, rec: dict, mini: dict, text: str, cfg: dict,
         # The handoff: whatever the Assistant ended with becomes the next agent
         # turn. Skipped when the person stopped this reply by hand, a Stop on
         # the Assistant is a full stop, not a suggestion to carry on.
+        #
+        # The reply is handed over as the text this run produced, with the status
+        # this run reported, because the gate cannot go looking for "the last
+        # message with content in it" and expect to find this cycle's answer: that
+        # search is what read a truncated reply as the previous cycle's direction.
         if not stop.is_set():
             try:
-                _autonomy_after_assistant(sid, rec, run.get("loop"))
+                _autonomy_after_assistant(sid, rec, run.get("loop"),
+                                          answer=_reply_text(trace), status=status)
             except Exception:  # noqa: BLE001
                 pass
 

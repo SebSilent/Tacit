@@ -16,7 +16,7 @@ from unittest import mock
 from backend import config
 
 ALL_ENV = ("TACIT_MAX_STEPS", "TACIT_SUBAGENT_STEPS", "TACIT_RESEARCH_STEPS",
-           "TACIT_TURN_TOKEN_BUDGET")
+           "TACIT_ASSISTANT_STEPS", "TACIT_TURN_TOKEN_BUDGET")
 
 
 class BudgetPrecedence(unittest.TestCase):
@@ -35,15 +35,18 @@ class BudgetPrecedence(unittest.TestCase):
                          config.SUBAGENT_MAX_STEPS)
         self.assertEqual(self.with_sources({}, {}, config.research_steps),
                          config.RESEARCH_MAX_STEPS)
+        self.assertEqual(self.with_sources({}, {}, config.assistant_steps),
+                         config.ASSISTANT_MAX_STEPS)
         self.assertEqual(self.with_sources({}, {}, config.turn_token_budget),
                          config.TURN_TOKEN_BUDGET)
 
     def test_saved_value_beats_the_constant(self):
         prefs = {"maxSteps": 40, "subagentSteps": 20, "researchSteps": 9,
-                 "turnTokenBudget": 250000}
+                 "assistantSteps": 24, "turnTokenBudget": 250000}
         self.assertEqual(self.with_sources({}, prefs, config.limits),
                          {"max_steps": 40, "subagent_steps": 20,
-                          "research_steps": 9, "turn_token_budget": 250000})
+                          "research_steps": 9, "assistant_steps": 24,
+                          "turn_token_budget": 250000})
 
     def test_environment_beats_the_saved_value(self):
         # The same precedence every other harness switch follows: a pinned deploy
@@ -78,9 +81,22 @@ class BudgetPrecedence(unittest.TestCase):
 
     def test_bounds_are_published(self):
         bounds = config.limit_bounds()
-        self.assertEqual(set(bounds), {"max_steps", "subagent_steps",
-                                       "research_steps", "turn_token_budget"})
+        self.assertEqual(set(bounds), {"max_steps", "subagent_steps", "research_steps",
+                                       "assistant_steps", "turn_token_budget"})
         self.assertEqual(bounds["max_steps"], {"min": 1, "max": 200})
+
+    def test_the_assistant_budget_is_its_own_number(self):
+        """The pane's cap used to be `TOOL_LIMIT = 6` inside assistant.py, which no
+        setting could raise and which cut replies off mid-read. It is a budget now,
+        and it stays well under the main loop's, because the figure that runs out in
+        the pane is the one that costs an answer rather than a step."""
+        self.assertEqual(self.with_sources({}, {}, config.assistant_steps), 16)
+        self.assertLess(self.with_sources({}, {}, config.assistant_steps),
+                        self.with_sources({}, {}, config.max_steps))
+        self.assertEqual(self.with_sources({"TACIT_ASSISTANT_STEPS": "30"},
+                                           {"assistantSteps": 4}, config.assistant_steps), 30)
+        self.assertEqual(self.with_sources({}, {"assistantSteps": 999},
+                                           config.assistant_steps), 60)
 
 
     def test_the_constants_are_still_the_last_resort(self):
@@ -98,7 +114,7 @@ class BudgetPrecedence(unittest.TestCase):
 class BudgetCallSites(unittest.TestCase):
     """Every place that spends a budget has to ask for it, not read the constant."""
 
-    MODULES = ("agent.py", "plan.py", "research.py", "headless.py")
+    MODULES = ("agent.py", "plan.py", "research.py", "headless.py", "assistant.py")
 
     def test_no_call_site_reads_a_constant_directly(self):
         # A site that reads `config.AGENT_MAX_STEPS` ignores whatever the panel
@@ -109,8 +125,19 @@ class BudgetCallSites(unittest.TestCase):
             with open(os.path.join(root, name), encoding="utf-8") as handle:
                 src = handle.read()
             for constant in ("config.AGENT_MAX_STEPS", "config.SUBAGENT_MAX_STEPS",
-                             "config.RESEARCH_MAX_STEPS", "config.TURN_TOKEN_BUDGET"):
+                             "config.RESEARCH_MAX_STEPS", "config.ASSISTANT_MAX_STEPS",
+                             "config.TURN_TOKEN_BUDGET"):
                 self.assertNotIn(constant, src, f"{name} still reads {constant}")
+
+    def test_the_assistant_loop_asks_for_its_budget(self):
+        """`assistant.py` had its cap as a module constant of its own, so the file
+        that spends the budget was the one file that never read the setting."""
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "backend")
+        with open(os.path.join(root, "assistant.py"), encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertIn("config.assistant_steps()", src,
+                      "the pane's rounds must come from the tunable budget")
 
 
 if __name__ == "__main__":

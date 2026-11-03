@@ -230,6 +230,8 @@
           'The same cap, applied to one delegated task.')}
         ${budgetField('research_steps', 'Steps per research aspect',
           'The same cap, applied to one aspect of a research sweep.')}
+        ${budgetField('assistant_steps', 'Steps per Assistant reply',
+          'Reads the side pane may take with its tools armed, before it is asked to answer without them.')}
         ${budgetField('turn_token_budget', 'Token cap per turn',
           'Tokens one turn may bill before it stops and reports. 0 means no cap.')}
         <button class="ho-btn small" id="limSave">Save</button>
@@ -492,7 +494,8 @@
     const limSave = panel.querySelector('#limSave');
     if (limSave) limSave.addEventListener('click', async () => {
       const body = {};
-      for (const key of ['max_steps', 'subagent_steps', 'research_steps', 'turn_token_budget']) {
+      for (const key of ['max_steps', 'subagent_steps', 'research_steps',
+                         'assistant_steps', 'turn_token_budget']) {
         const el = panel.querySelector('#lim-' + key);
         if (el) body[key] = el.value;
       }

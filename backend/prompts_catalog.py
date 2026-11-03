@@ -176,6 +176,15 @@ def catalog(project: str | None = None, sid: str = "") -> dict:
             _row("CONTINUE_PROMPT", assistant.CONTINUE_PROMPT, "assistant.py:CONTINUE_PROMPT"),
             _row("AUTONOMY_PERSONA", assistant.AUTONOMY_PERSONA,
                  "assistant.py:AUTONOMY_PERSONA"),
+            # The two sentences that only exist because the pane has a step budget,
+            # and the reason a run stops on a reply: all three are instructions the
+            # person is entitled to read before the model spends them.
+            _row("Round budget", assistant.ROUNDS_ON, "assistant.py:ROUNDS_ON"),
+            _row("Rounds running low", assistant._STEPS_LEFT, "assistant.py:_STEPS_LEFT"),
+            _row("Closing round", assistant._CLOSING, "assistant.py:_CLOSING"),
+            _row("Why a run stops",
+                 "\n".join(f"{k}: {v}" for k, v in sorted(assistant.CUT_REASONS.items())),
+                 "assistant.py:CUT_REASONS"),
         ]))
     except Exception:  # noqa: BLE001
         pass

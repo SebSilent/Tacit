@@ -1251,6 +1251,127 @@ class TestAssistant(Isolated):
         self.assertEqual(rec["assistant"][0]["content"], "remember me")
 
 
+class TestAssistantRounds(Isolated):
+    """The Assistant's own step budget, and the answer it has to arrive at.
+
+    With its tools armed the side pane is a read-only agent, and it used to be
+    capped at six rounds by a constant nobody could raise, with nothing said to
+    the model about it. Two failures came out of that, and they are the same
+    failure: a reply that stopped on a tool result with no answer after it, and a
+    harness that read the silence as the Assistant approving the run.
+    """
+
+    def _rec(self, tools=True):
+        return {"id": "s1", "title": "t", "project": None, "model": "p/m", "mode": "agent",
+                "messages": [{"role": "user", "content": "make it work"},
+                             {"role": "assistant", "content": "done"}],
+                "assistantSettings": dict(assistant.DEFAULTS, tools=tools)}
+
+    def _script(self, rounds):
+        """Point stream_chat at a scripted list of rounds, recording each call.
+
+        `seen` is what makes the assertions honest: it holds the messages and the
+        tool schemas of every round, so a test can ask what the model was told and
+        whether the closing round really had nothing armed.
+        """
+        seen = []
+        queue = list(rounds)
+
+        def fake(messages, ref=None, tools=None, reasoning_effort=None, **kw):
+            seen.append({"messages": messages, "tools": tools})
+            events = queue.pop(0) if queue else [{"type": "text", "delta": "late answer"}]
+            if isinstance(events, Exception):
+                raise events
+            return iter(events)
+
+        orig_stream, orig_tool = assistant.engine.stream_chat, assistant._run_read_tool
+        assistant.engine.stream_chat = fake
+        assistant._run_read_tool = lambda name, args, rec: "the file contents"
+        self.addCleanup(setattr, assistant.engine, "stream_chat", orig_stream)
+        self.addCleanup(setattr, assistant, "_run_read_tool", orig_tool)
+        return seen
+
+    @staticmethod
+    def _read(cid="c1"):
+        return [{"type": "text", "delta": "let me look"},
+                {"type": "tool_calls", "calls": [
+                    {"id": cid, "name": "read_file", "arguments": '{"path": "a.py"}'}]}]
+
+    @staticmethod
+    def _say(text):
+        return [{"type": "text", "delta": text}]
+
+    def _run(self, rec, rounds, **kw):
+        seen = self._script(rounds)
+        trace = []
+        events = list(assistant.run_turn(rec, "what now?", trace=trace, **kw))
+        return events, trace, seen
+
+    def test_the_budget_follows_the_switch_that_arms_tools(self):
+        bare = assistant.step_budget(dict(assistant.DEFAULTS))
+        armed = assistant.step_budget({**assistant.DEFAULTS, "tools": True})
+        self.assertEqual(bare, assistant.BARE_ROUNDS,
+                         "a reply with nothing armed cannot spend rounds")
+        self.assertEqual(armed, config.assistant_steps())
+        self.assertGreater(armed, 6, "six rounds is what the tool-using pane died at")
+
+    def test_a_reply_that_keeps_reading_still_ends_with_an_answer(self):
+        """Out of rounds is not out of reply: one tool-less round writes the answer."""
+        rec = self._rec()
+        rounds = [self._read(f"c{i}") for i in range(config.assistant_steps())]
+        events, trace, seen = self._run(rec, rounds + [self._say("Here: the parser is fine.")])
+        done = [e for e in events if e["type"] == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["status"], "closed",
+                         "the truncation has to be reported, not hidden")
+        self.assertIsNone(seen[-1]["tools"], "the closing round arms nothing")
+        self.assertEqual(trace[-1]["text"], "Here: the parser is fine.")
+        self.assertEqual(trace[-1]["tools"], [])
+
+    def test_the_model_is_told_how_many_rounds_are_left(self):
+        """It is not enough to give the pane more rope; the reply has to know its length."""
+        def notes(call):
+            return [m["content"] for m in call["messages"]
+                    if m.get("role") == "system" and "rounds left in this reply"
+                    in str(m.get("content"))]
+
+        rec = self._rec()
+        events, _trace, seen = self._run(
+            rec, [self._read("c1"), self._read("c2"), self._say("done thinking")], max_steps=4)
+        self.assertEqual(notes(seen[0]) + notes(seen[1]), [],
+                         "a reply with most of its budget left pays for no warning")
+        self.assertIn("2 of 4", notes(seen[2])[0],
+                      "the round that could still be the last one says so")
+        self.assertEqual([e["status"] for e in events if e["type"] == "done"], ["answered"])
+
+    def test_a_failed_reply_says_so_instead_of_looking_like_a_shrug(self):
+        rec = self._rec()
+        events, _trace, _seen = self._run(
+            rec, [assistant.engine.EngineError("provider went away")])
+        done = [e for e in events if e["type"] == "done"]
+        self.assertEqual(done[0]["status"], "error")
+        self.assertTrue([e for e in events if e["type"] == "error"])
+
+    def test_a_clean_reply_needs_no_closing_round(self):
+        rec = self._rec()
+        events, _trace, seen = self._run(rec, [self._say("```\nCONTINUE\n```")])
+        self.assertEqual([e["status"] for e in events if e["type"] == "done"], ["answered"])
+        self.assertEqual(len(seen), 1, "an answer that arrived must not be asked for again")
+
+    def test_the_budget_is_stated_in_the_instruction_it_is_priced_with(self):
+        """What the model is told about its own rounds is part of the standing
+        instruction, so the cost panel has to be counting the same string."""
+        rec = self._rec()
+        cfg = {**assistant.DEFAULTS, "tools": True}
+        prompt = assistant.system_prompt(rec, cfg)
+        self.assertIn(str(config.assistant_steps()), prompt)
+        self.assertEqual(assistant.preview(rec, cfg)["tokens"]["persona"],
+                         tokens.estimate_tokens(assistant.instruction_block(rec, cfg)))
+        self.assertNotIn("rounds of tool calls",
+                         assistant.system_prompt(rec, dict(assistant.DEFAULTS)),
+                         "a pane with nothing armed is not promised rounds")
+
+
 class TestSessionSummaries(Isolated):
     """Long-term memory: a whole session becomes one recallable note."""
 
@@ -2842,14 +2963,59 @@ class TestAutonomyState(unittest.TestCase):
 
     def test_extract_prompt_contract(self):
         self.assertEqual(assistant.extract_prompt("prose with no block at all"), "",
-                         "no block is the 'carry on' signal, not an error")
+                         "no block is the absence of a direction, not a direction")
         self.assertEqual(assistant.extract_prompt(""), "")
         self.assertEqual(assistant.extract_prompt("```\nDONE\n```"), assistant.DONE)
         self.assertEqual(assistant.extract_prompt("```python\nContinue.\n```"),
-                         assistant.CONTINUE_PROMPT, "an info-string fence is still a block")
+                         "Continue.", "an info-string fence is still a block")
         self.assertEqual(assistant.extract_prompt("```\nhanded over mid-stream"),
                          "handed over mid-stream",
                          "a reply cut off should still deliver its instruction")
+
+    def test_a_block_is_the_only_channel(self):
+        """`directive`, the four answers the harness may act on.
+
+        The failure this pins is the one the pane showed as a mystery: the reply
+        was cut off, said nothing, and the run carried on anyway. Silence is now
+        read as silence, and only the two words the Assistant wrote itself move
+        the loop.
+        """
+        for answer, kind in (
+            ("Here is my read.\n\n```\nFix the clamp and re-run.\n```", "prompt"),
+            ("On course.\n\n```\nCONTINUE\n```", "continue"),
+            ("On course.\n\n```text\nContinue.\n```", "continue"),
+            ("On course.\n\n```\n**DONE**\n```", "done"),
+            ("On course, nothing to add.", "none"),
+            ("", "none"),
+            ("```", "none"),
+        ):
+            with self.subTest(answer=answer):
+                self.assertEqual(assistant.directive(answer)["kind"], kind)
+
+    def test_continue_is_the_assistants_word_and_not_the_harnesss(self):
+        """What `continue` hands over, and what `none` hands over nothing of."""
+        self.assertEqual(assistant.directive("```\nCONTINUE\n```")["text"],
+                         assistant.CONTINUE_PROMPT)
+        self.assertEqual(assistant.directive("prose with no block")["text"], "",
+                         "there is no fallback prompt to invent")
+        # A block that says more than the sentinel is a direction, verbatim.
+        self.assertEqual(assistant.directive("```\nCONTINUE, but re-run the tests first\n```")
+                         ["kind"], "prompt")
+
+    def test_the_sentinel_survives_the_punctuation_models_add(self):
+        for spelling in ("DONE", "`DONE`", "**DONE**", "done.", "Done"):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(assistant.directive(f"```\n{spelling}\n```")["kind"], "done")
+        for spelling in ("CONTINUE", "Continue.", "carry on", "KEEP GOING"):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(assistant.directive(f"```\n{spelling}\n```")["kind"],
+                                 "continue")
+
+    def test_every_stop_reason_says_what_failed(self):
+        """A run that stops on a reply must name the reply's ending, not just its silence."""
+        for status in ("error", "cut", "stopped"):
+            self.assertIn(status, assistant.CUT_REASONS)
+            self.assertTrue(assistant.CUT_REASONS[status])
 
     def test_delete_message_bounds(self):
         rec = {"assistant": [{"role": "user", "content": "a"},
@@ -3017,10 +3183,15 @@ class TestAutonomyLaunchGate(Isolated):
         store.patch(sid, assistant=[{"role": "assistant", "content": answer}])
         return sid
 
-    def _drive(self, sid, *, start=None, running=False):
+    def _drive(self, sid, *, start=None, running=False, answer=None, status="answered"):
         """Run the gate once. Returns (launches, events): what the agent was asked
         for, and what the bus heard. ``start`` is the whole reply start_turn gives
-        back, so a refusal is a return value and not an exception."""
+        back, so a refusal is a return value and not an exception.
+
+        ``answer`` is the reply this run produced, which is how the driver hands it
+        over; left as None it falls back to the stored last row, the path a caller
+        that watched no run takes.
+        """
         sr = self._rt()
         launches, events = [], []
 
@@ -3043,7 +3214,7 @@ class TestAutonomyLaunchGate(Isolated):
         sr.start_turn = fake_start
         sr.turn_running = lambda s: running
         sr.turn_bus = FakeBus()
-        sr._autonomy_after_assistant(sid, store.get(sid), None)
+        sr._autonomy_after_assistant(sid, store.get(sid), None, answer=answer, status=status)
         return launches, events
 
     def _ticks(self, events):
@@ -3103,6 +3274,68 @@ class TestAutonomyLaunchGate(Isolated):
         self.assertEqual(launches, [], "a met Goal must not start another turn")
         self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"])
         self.assertEqual(self._ticks(events), [])
+
+    def test_no_block_ends_the_run_and_sends_nothing(self):
+        """The bug the person watched: the reply cut off, and the harness sent a
+        "Continue." of its own and bought a whole agent turn with it.
+
+        Silence is not a direction. The run ends, the reason says so, and the
+        agent is never asked for work nobody wrote down.
+        """
+        sid = self._armed(answer="The tests still cover the parser. Nothing to add.")
+        launches, events = self._drive(sid)
+        self.assertEqual(launches, [], "the harness invented a prompt here")
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertFalse(st["enabled"])
+        self.assertIn("no block", st["reason"])
+        self.assertEqual(st["cycles"], 0, "a cycle that never launched spent budget")
+        self.assertEqual(self._ticks(events), [])
+
+    def test_continue_is_the_assistants_word_or_it_is_not_sent(self):
+        """The carry-on still exists, and it arrives only when the reply writes it."""
+        sid = self._armed(answer="On course.\n\n```\nCONTINUE\n```")
+        launches, _events = self._drive(sid)
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(launches[0]["text"], assistant.CONTINUE_PROMPT,
+                         "the Assistant's word, expanded to the sentence the agent reads")
+        self.assertTrue(assistant.autonomy_of(store.get(sid))["enabled"],
+                        "an explicit carry-on is the run going on, not ending")
+
+    def test_a_reply_that_never_arrived_ends_the_run_with_the_reason(self):
+        """Status is what separates a shrug from a failure, and both are stops."""
+        for status, word in (("error", "failed"), ("cut", "ran out of steps"),
+                             ("stopped", "stopped")):
+            sid = self._armed(answer="")
+            launches, _events = self._drive(sid, answer="", status=status)
+            with self.subTest(status=status):
+                self.assertEqual(launches, [])
+                st = assistant.autonomy_of(store.get(sid))
+                self.assertFalse(st["enabled"])
+                self.assertIn(word, st["reason"].lower())
+
+    def test_a_silent_cycle_does_not_replay_the_last_one_that_spoke(self):
+        """The second half of the same bug: with no reply this cycle, the gate used
+        to walk back through the stored history and hand over the *previous*
+        cycle's block again, so the agent re-ran finished work."""
+        sid = self._armed(answer="```text\nthe direction from the cycle before\n```")
+        launches, _events = self._drive(sid, answer="", status="cut")
+        self.assertEqual(launches, [], "a stale row is not this cycle's direction")
+        self.assertFalse(assistant.autonomy_of(store.get(sid))["enabled"])
+
+    def test_the_reply_the_gate_reads_is_the_one_this_run_wrote(self):
+        """`_reply_text`, the driver's side of the same rule.
+
+        A step that ended on a tool call is a round of reading, not an answer,
+        and its narration must never be what the agent is told to do.
+        """
+        from backend import session_runtime as sr
+        self.assertEqual(sr._reply_text([]), "", "a worker that died wrote nothing")
+        self.assertEqual(sr._reply_text([{"text": "let me look", "tools": [
+                            {"name": "read_file", "result": "x"}]}]), "",
+                         "a cut-off round is not an answer")
+        self.assertEqual(sr._reply_text([{"text": "first", "tools": []},
+                                         {"text": "```\nDONE\n```", "tools": []}]),
+                         "```\nDONE\n```", "the last step is the reply")
 
     def test_an_exhausted_budget_never_reaches_the_agent(self):
         sid = self._armed(max_cycles=1)

@@ -60,7 +60,8 @@ form that works."""
 
 # The capability clause, and it is DERIVED rather than written into PERSONA.
 # `tools` is a per-session switch (DEFAULTS:29, off by default), and `run_turn`
-# arms the read-only set when it is on (assistant.py:500). So one fixed sentence
+# arms the read-only set when it is on (`run_turn`, the `tools = read_tools()`
+# line). So one fixed sentence
 # about what the Assistant may do is a false claim half the time, which is the
 # contradiction this replaced: the prompt said it could not act while the request
 # carried the tools that let it look. The house rule elsewhere in this project is
@@ -81,22 +82,36 @@ the call itself. The conversation history is still your main material; reach for
 a tool when it is not enough, and say what you read rather than presenting it as
 if you knew it."""
 
+# The budget, stated where the model can plan against it. It is part of the
+# capability clause rather than a note on the last round only because the honest
+# question for a reader with a limited number of reads is how much it may spend
+# before it starts, and because a limit nobody mentions is a limit the model only
+# discovers by being cut off.
+ROUNDS_ON = """You get {n} rounds of tool calls for this reply, and you will be told
+when two are left. Spend them on what changes your answer, and leave room to write
+it down: a reply that runs out mid-read has no answer in it, and the harness will
+not write one for you."""
+
 
 def persona_block(cfg: dict | None = None) -> str:
     """PERSONA plus the capability clause that is true for this configuration.
 
     One function, because two places need the same answer: `system_prompt` sends
     it and `preview` prices it. Pricing a different string from the one that is
-    sent is exactly how a cost panel starts lying."""
+    sent is exactly how a cost panel starts lying. With tools armed the clause
+    carries the round budget too, because that number is a property of the switch
+    and the model cannot plan against a limit it has never been told."""
     cfg = cfg or dict(DEFAULTS)
-    return PERSONA + "\n\n" + (CAPABILITY_ON if cfg.get("tools") else CAPABILITY_OFF)
+    if not cfg.get("tools"):
+        return PERSONA + "\n\n" + CAPABILITY_OFF
+    return PERSONA + "\n\n" + CAPABILITY_ON + "\n\n" + ROUNDS_ON.format(n=step_budget(cfg))
 
 
 # The conversational task contract, and it is gated on AUTONOMY rather than on
 # rec["mode"]. `mode` is "agent" or "chat" (store.py:53, config.py:253) and says
 # what the MAIN pane does; it is not a filter on what the Assistant's reply is
 # used for. What does decide that is the loop: when it is armed,
-# _autonomy_after_assistant (session_runtime.py:286) reads the LAST fenced block
+# _autonomy_after_assistant (session_runtime.py) reads the LAST fenced block
 # out of the reply and hands it to the agent, and the same block is where the
 # stop word lives. A "plain prose, blocks only when asked" instruction applied
 # THERE would suppress the very block the handoff and the stop signal are parsed
@@ -142,7 +157,42 @@ def instruction_block(rec: dict, cfg: dict | None = None) -> str:
 
 # No preset list here. What the Assistant may be told to think with comes from the
 # model it is using, discovered and cached on that model: see backend/thinking.py.
-TOOL_LIMIT = 6
+
+# Rounds, not a ceiling to be proud of. A reply with no tools armed cannot take
+# more than one: it has nothing to call, so the first round is the answer, and the
+# second is slack for a provider that streams a stray call. A reply with tools
+# armed is a read-only agent, and it gets the budget the person set in
+# **Settings > General > Turn budget**, because six rounds is what a tool-using
+# Assistant ran out of on the way to an answer it never got to write.
+BARE_ROUNDS = 2
+
+
+def step_budget(cfg: dict | None = None) -> int:
+    """How many model rounds this configuration entitles the reply to."""
+    cfg = cfg or dict(DEFAULTS)
+    return max(BARE_ROUNDS, config.assistant_steps()) if cfg.get("tools") else BARE_ROUNDS
+
+
+# Step awareness, in the same shape as the agent's own `guidance.for_step`: a
+# block appended at the point of use, only when it is true and only when it is
+# worth paying for. A model that does not know it is running out keeps working as
+# if it had time, and the round it is cut off in is the round that held the answer.
+_STEPS_LEFT = ("{left} of {steps} rounds left in this reply. The answer is the only part the run "
+               "reads, so spend what is left on it: look up only what changes your answer, and end "
+               "with the block your instructions ask for.")
+_CLOSING = ("Your rounds are spent, so answer now without another tool call. Say what you found, "
+            "and end with exactly one fenced block: the next prompt for the agent, the single word "
+            "CONTINUE if it should carry on as it is, or DONE if the Goal is met.")
+
+
+def step_note(step: int, steps: int, *, armed: bool) -> str:
+    """What this round is told about the rounds after it, or "" for nothing."""
+    if not armed:
+        return ""
+    left = steps - step
+    if left > 2:
+        return ""
+    return _STEPS_LEFT.format(left=left, steps=steps)
 
 
 def settings_of(rec: dict) -> dict:
@@ -378,37 +428,65 @@ MAX_LAUNCH_FAILURES = 2
 
 # The block the harness sends the Assistant at the end of every autonomous
 # turn. A fixed string, so the pane shows the same prompt it really sent.
+#
+# It asks for a block every cycle, and that is the change. The previous wording
+# told the Assistant it could leave the block out and the run would carry on,
+# which made silence a direction: a reply that errored, that ran out of rounds,
+# or that never arrived at all was indistinguishable from a reply that had
+# considered the work and approved it, and the harness spent a whole agent turn
+# on the difference. Silence is now a stop, and the word for approval is written
+# down like everything else the Assistant wants the agent to act on.
 CYCLE_PROMPT = ("The agent's turn just ended. Read what happened and say, in a "
-                "line or two, whether it moves the Goal along. Put a fenced "
-                "block with a prompt for the agent only if it needs direction "
-                "it would not otherwise have; if the run is on course, leave "
-                "the block out and it carries on. When the Goal is fully met, "
-                "put exactly DONE in the block.")
+                "line or two, whether it moves the Goal along. Then end with one "
+                "fenced block, because that block is the only thing the harness "
+                "reads: the next prompt for the agent, or the single word CONTINUE "
+                "if it should carry on as it is, or DONE when the Goal is met. A "
+                "reply with no block ends the run, and nothing you did not write "
+                "will be sent in your name.")
 
-# What the harness sends when the Assistant answered with no prompt at all:
-# no block means it saw nothing wrong with carrying on.
+# What the harness sends when the Assistant's block is the carry-on word. The
+# word is the Assistant's; this is only the sentence the agent reads, so the
+# pane can show one string for both.
+CONTINUE = "CONTINUE"
 CONTINUE_PROMPT = "Continue."
+CONTINUE_WORDS = frozenset({"CONTINUE", "CONT", "CARRY ON", "KEEP GOING", "PROCEED"})
 
 DONE = "DONE"
+DONE_WORDS = frozenset({"DONE", "COMPLETE", "FINISHED", "GOAL MET"})
 
-# The autonomous contract, and what it deliberately does NOT say. The reply used
-# to be required to end in a fenced block every single time, which made the
-# Assistant a prompt generator that never answered anything: a person asking it
-# a question got a code block back. It is still the Assistant, brief, talking
-# to the person, and the block is now an offer, not a tax. The one block that
-# must never be left out is DONE, because it is the only thing the harness reads
-# as a stop; prose saying "the goal is met" means nothing to the loop.
+# Why a reply that left no block behind left none, in the words the pane shows.
+# `run_turn` reports how it ended; the person reading "stopped" needs to know
+# whether that means the model forgot the block, the provider failed, or the
+# reply ran out of rounds, because each of those is a different thing to fix.
+CUT_REASONS = {
+    "error": "the Assistant's reply failed",
+    "cut": "the Assistant ran out of steps without writing an answer",
+    "stopped": "the Assistant's reply was stopped",
+}
+
+# The autonomous contract. The block is a tax here on purpose, and it is a
+# different arrangement from the conversational one, where a block is an offer:
+# in autonomous mode somebody's budget and unattended machine time are read out
+# of this reply, so the harness needs a field it can parse rather than a prose
+# hint it would have to guess at. What it must never do is guess. The contract
+# used to say that leaving the block out *was* the carry-on signal, and the
+# harness honoured it, so every reply that failed, timed out or ran out of
+# rounds spent another agent turn on a prompt nobody wrote. Three words cover
+# every decision the loop can take, and a reply that offers none of them ends
+# the run with that reason in the pane.
 AUTONOMY_PERSONA = """You are running autonomously: the person is not watching live, and the
 agent acts on exactly what you hand it. You are still the Assistant, still answering the person in
-your own pane, so stay brief and do not turn every reply into a prompt.
+your own pane, so stay brief and do not dress every reply up as a report.
 
-Add a fenced code block only when the agent needs direction it would not otherwise have: the next
-step, a correction, something to stop doing. If the work is on course and the agent should simply
-carry on, say so in a line and leave the block out, the harness lets the run continue, and a run
-that needs no steering does not need steering from you.
+End every reply with exactly one fenced block, because that block is the only thing the harness can
+read. It holds one of three things: the next prompt for the agent, when it needs direction it would
+not otherwise have; the single word `CONTINUE`, when the work is on course and the agent should carry
+on as it is; or the single word `DONE`, when the Goal is fully met.
 
-One exception, and it is not optional: when the Goal is fully met, end with a fenced block holding
-exactly `DONE`. That block is the only thing that stops the run. Saying it in prose does nothing."""
+A reply with no block ends the run, and that is the correct outcome rather than a failure: the
+harness will not invent a direction you did not write, and it will not spend a turn of the person's
+budget reading a shrug as approval. Prose saying the Goal is met stops nothing, and prose saying the
+work looks fine carries on nothing. Put it in the block or it does not happen."""
 
 
 def goal_of(rec: dict) -> str:
@@ -530,11 +608,12 @@ def goal_block(rec: dict) -> dict:
 
 
 def extract_prompt(text: str) -> str:
-    """The last fenced block in an Assistant reply: the prompt to hand the agent.
+    """The last fenced block in an Assistant reply, verbatim, or "" for none.
 
-    Empty string when the reply has no block, which the caller reads as
-    "nothing to say, carry on". The *last* block, because the persona puts the
-    handoff at the end and a reply may well quote something else earlier.
+    The *last* block, because the persona puts the handoff at the end and a reply
+    may well quote something else earlier. No block is not a signal: it is the
+    absence of one, and `directive` is what turns that into a decision the harness
+    is allowed to act on.
     """
     body = str(text or "")
     blocks: list[str] = []
@@ -558,6 +637,46 @@ def extract_prompt(text: str) -> str:
         # a reply cut off mid-stream should not cost the whole turn's work.
         blocks.append("\n".join(current).strip())
     return blocks[-1] if blocks else ""
+
+
+def _word(block: str) -> str:
+    """A block reduced to the one word it holds, for the two sentinel checks.
+
+    Markdown and punctuation are stripped because a model that means DONE writes
+    `DONE`, **DONE** or DONE. on the way there, and a sentinel that only matches
+    one spelling is a sentinel that quietly stops working.
+    """
+    return " ".join(str(block or "").upper().split()).strip("`*_\"' .")
+
+
+def directive(answer: str) -> dict:
+    """What this reply authorises the harness to do, as `{"kind", "text"}`.
+
+    Four answers, and only two of them start work:
+
+    - `prompt`: the block is the next thing the agent should act on, verbatim.
+    - `continue`: the block held the carry-on word, so the run goes on with no
+      steering. The Assistant chose that, in its own reply, in the same channel it
+      uses for every other instruction.
+    - `done`: the Goal is met, so the run stops.
+    - `none`: the reply has no block, so the harness has nothing. That is not
+      permission to carry on, which is the reading used here before, and the
+      reason a truncated or failed reply launched a whole agent turn on a
+      "Continue." nobody had written.
+
+    A block that is more than a sentinel word is the prompt, verbatim: an
+    assistant that writes "CONTINUE, but re-run the tests first" hands over that
+    sentence rather than having it collapsed into a bare carry-on.
+    """
+    block = extract_prompt(answer).strip()
+    if not block:
+        return {"kind": "none", "text": ""}
+    word = _word(block)
+    if word in DONE_WORDS:
+        return {"kind": "done", "text": block}
+    if word in CONTINUE_WORDS:
+        return {"kind": "continue", "text": CONTINUE_PROMPT}
+    return {"kind": "prompt", "text": block}
 
 
 def append(rec: dict, role: str, content: str, extra: dict | None = None) -> dict:
@@ -595,8 +714,22 @@ def _run_read_tool(name: str, args: dict, rec: dict) -> str:
 
 
 def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = None,
-             stop=None, max_steps: int = TOOL_LIMIT, trace: list | None = None):
-    """Stream a reply from the Assistant. Yields the same event shapes as the agent."""
+             stop=None, max_steps: int | None = None, trace: list | None = None):
+    """Stream a reply from the Assistant. Yields the same event shapes as the agent.
+
+    The last event is always ``done``, and it carries ``status``, because the
+    autonomous harness has to be able to tell a finished answer from a cut-off
+    one: `answered` once the model stops calling tools and says something, `closed`
+    when it spent every round on tools and the tool-less closing round wrote the
+    answer, `error` when a call failed, `stopped` when the person pressed Stop, and
+    `cut` when it ended with no answer at all. A reply that never finished has no
+    business handing work to the agent, which is the decision this field feeds.
+
+    The rounds themselves are the other half. With tools armed this reply is a
+    read-only agent and it is budgeted like one (`config.assistant_steps`), it is
+    told how many rounds it has left the way the main loop is, and it is never
+    simply stopped mid-read with a tool result on screen and no answer after it.
+    """
     cfg = cfg or settings_of(rec)
     messages = messages_for(rec, cfg)
     messages.append({"role": "user", "content": text})
@@ -605,46 +738,83 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
     # perfectly sensible split, so both are per-session settings.
     ref = resolve_model(rec, cfg) or ref
     reasoning = config.reasoning_for(resolve_thinking(rec, cfg))
+    steps = max(1, int(max_steps or step_budget(cfg)))
+    # The same trim the agent loop makes before every round. A bigger budget is
+    # only safe if the transcript it fills still fits the model's window.
+    budget = agent.context_budget(ref)
+    armed = bool(tools)
+    state: dict = {}
+    used = 0
 
-    for _step in range(max(1, max_steps)):
-        calls: list[dict] = []
-        step_text: list[str] = []
-        step_reason: list[str] = []
+    def _round(ask: list[dict], schemas):
+        """One model round. Yields its events; leaves its result in `state`."""
+        state.clear()
+        text_parts: list[str] = []
+        reason_parts: list[str] = []
+        state.update({"text": "", "reason": "", "calls": [], "error": "", "stopped": False})
         try:
-            stream = engine.stream_chat(messages, ref=ref, tools=tools or None,
+            stream = engine.stream_chat(ask, ref=ref, tools=schemas,
                                         reasoning_effort=reasoning)
         except Exception as exc:  # noqa: BLE001
-            yield {"type": "error", "message": str(exc)}
-            yield {"type": "done"}
+            state["error"] = str(exc)
             return
         try:
             for ev in stream:
                 if stop is not None and stop.is_set():
-                    yield {"type": "notify", "message": "stopped", "level": "info"}
-                    yield {"type": "done"}
+                    state["stopped"] = True
                     return
-                if ev["type"] == "text":
-                    step_text.append(ev["delta"])
+                kind = ev["type"]
+                if kind == "text":
+                    text_parts.append(ev["delta"])
                     yield {"type": "text", "delta": ev["delta"]}
-                elif ev["type"] == "reason":
-                    step_reason.append(ev["delta"])
+                elif kind == "reason":
+                    reason_parts.append(ev["delta"])
                     yield {"type": "reason", "delta": ev["delta"]}
-                elif ev["type"] == "usage":
+                elif kind == "usage":
                     yield {"type": "usage", "usage": ev["usage"]}
-                elif ev["type"] == "tool_calls":
-                    calls = ev["calls"]
+                elif kind == "tool_calls":
+                    state["calls"] = ev["calls"]
         except engine.EngineError as exc:
-            yield {"type": "error", "message": str(exc)}
-            yield {"type": "done"}
+            state["error"] = str(exc)
+        finally:
+            # In the `finally`, not after the loop, because the stop path returns
+            # out of the middle of it: a reply the person stopped still has text
+            # in it, and the pane and the trace should both show what arrived.
+            state["text"] = "".join(text_parts)
+            state["reason"] = "".join(reason_parts)
+
+    def _finish(status: str) -> dict:
+        """The one terminal event, carrying the tally the pane and the harness read."""
+        return {"type": "done", "status": status, "steps_used": used, "step_budget": steps}
+
+    for step in range(steps):
+        ask = agent.windowed(messages, budget)
+        note = step_note(step, steps, armed=armed)
+        if note:
+            # Appended at the point of use rather than folded into the standing
+            # prompt, like the agent's own step guidance: the cached prefix stays
+            # cached, and the sentence is only paid for on the steps it is true on.
+            ask = ask + [{"role": "system", "content": note}]
+        yield from _round(ask, tools or None)
+        used += 1
+        if state.get("stopped"):
+            yield {"type": "notify", "message": "stopped", "level": "info"}
+            yield _finish("stopped")
+            return
+        if state.get("error"):
+            yield {"type": "error", "message": state["error"]}
+            yield _finish("error")
             return
 
-        narration = "".join(step_text).strip()
-        thinking = agent.clean_reason("".join(step_reason)).strip()
+        narration = state["text"].strip()
+        thinking = agent.clean_reason(state["reason"]).strip()
+        calls = list(state.get("calls") or [])
 
         if not calls:
             if trace is not None:
                 trace.append({"text": narration, "reason": thinking, "tools": []})
-            break
+            yield _finish("answered")
+            return
 
         assistant_msg = {"role": "assistant", "content": narration, "tool_calls": [
             {"id": c["id"], "type": "function",
@@ -676,4 +846,30 @@ def run_turn(rec: dict, text: str, cfg: dict | None = None, ref: str | None = No
         if trace is not None:
             trace.append({"text": narration, "reason": thinking, "tools": step_tools})
 
-    yield {"type": "done"}
+    # The rounds are gone and the last one still ended on a tool call, which is
+    # the cut the person sees: a read on screen and no answer after it. Ask once
+    # more with nothing armed, so the only thing left to produce is the answer.
+    # One round, not a second budget, and it is reported on the way in.
+    if not armed:
+        yield _finish("cut")
+        return
+    yield {"type": "notify", "level": "warn",
+           "message": f"used all {steps} steps without answering, closing the reply without tools"}
+    yield from _round(agent.windowed(
+        messages + [{"role": "user", "content": _CLOSING}], budget), None)
+    used += 1
+    if state.get("stopped"):
+        yield {"type": "notify", "message": "stopped", "level": "info"}
+        yield _finish("stopped")
+        return
+    if state.get("error"):
+        yield {"type": "error", "message": state["error"]}
+        yield _finish("error")
+        return
+    closing = state["text"].strip()
+    if trace is not None:
+        trace.append({"text": closing,
+                      "reason": agent.clean_reason(state["reason"]).strip(), "tools": []})
+    # `closed` only when it actually said something. A closing round that comes
+    # back empty is the same nothing the harness must not act on.
+    yield _finish("closed" if closing else "cut")

@@ -494,6 +494,12 @@
         }
         break;
       }
+      case 'assistant_notify':
+        // The reply's own warnings: it spent its rounds and was asked to close
+        // without tools. Worth a line, because the alternative is a pane that
+        // looks like it simply stopped talking.
+        if (m.level === 'warn') toast(m.message || '', true);
+        break;
       case 'assistant_error':
         finishStream();
         toast('Assistant: ' + (m.message || 'failed'), true);

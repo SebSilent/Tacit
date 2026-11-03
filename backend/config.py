@@ -94,6 +94,11 @@ READ_OUTPUT_LIMIT = int(os.environ.get("TACIT_READ_OUTPUT_LIMIT", "48000"))
 SHELL_TIMEOUT = int(os.environ.get("TACIT_SHELL_TIMEOUT", "180"))
 
 SUBAGENT_MAX_STEPS = int(os.environ.get("TACIT_SUBAGENT_STEPS", "12"))
+# How many model rounds one Assistant reply may take when its read-only tools are
+# armed. It was a hardcoded 6 inside `assistant.py` (TOOL_LIMIT), which is not a
+# budget but a truncation: the round that runs out is the round that would have
+# written the answer. See `assistant_steps`.
+ASSISTANT_MAX_STEPS = int(os.environ.get("TACIT_ASSISTANT_STEPS", "16"))
 SUBAGENT_RESULT_LIMIT = int(os.environ.get("TACIT_SUBAGENT_RESULT_LIMIT", "4000"))
 SUBAGENT_MAX_DEPTH = int(os.environ.get("TACIT_SUBAGENT_DEPTH", "1"))
 
@@ -619,6 +624,7 @@ LIMIT_KEYS = {
     "max_steps": ("maxSteps", "TACIT_MAX_STEPS", "AGENT_MAX_STEPS", 1, 200),
     "subagent_steps": ("subagentSteps", "TACIT_SUBAGENT_STEPS", "SUBAGENT_MAX_STEPS", 1, 100),
     "research_steps": ("researchSteps", "TACIT_RESEARCH_STEPS", "RESEARCH_MAX_STEPS", 1, 40),
+    "assistant_steps": ("assistantSteps", "TACIT_ASSISTANT_STEPS", "ASSISTANT_MAX_STEPS", 1, 60),
     "turn_token_budget": ("turnTokenBudget", "TACIT_TURN_TOKEN_BUDGET",
                           "TURN_TOKEN_BUDGET", 0, 50000000),
 }
@@ -661,15 +667,26 @@ def research_steps() -> int:
     return _limit("research_steps")
 
 
+def assistant_steps() -> int:
+    """Model rounds one Assistant reply may take with its tools armed.
+
+    The side pane used to be capped by a constant nobody could raise. That cap is
+    what cut an autonomous run off mid-read: the reply ended on a tool result
+    instead of an answer, and the harness had to guess what the Assistant meant.
+    """
+    return _limit("assistant_steps")
+
+
 def turn_token_budget() -> int:
     """Tokens one turn may bill before it stops and reports. 0 means no cap."""
     return _limit("turn_token_budget")
 
 
 def limits() -> dict:
-    """The four budgets as one mapping, for the settings route."""
+    """The five budgets as one mapping, for the settings route."""
     return {"max_steps": max_steps(), "subagent_steps": subagent_steps(),
-            "research_steps": research_steps(), "turn_token_budget": turn_token_budget()}
+            "research_steps": research_steps(), "assistant_steps": assistant_steps(),
+            "turn_token_budget": turn_token_budget()}
 
 
 def limit_bounds() -> dict:
