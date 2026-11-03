@@ -63,7 +63,7 @@ The lifecycle is three steps (`backend/turn_worker.py:9-21`):
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:23-25`, `backend/config.py:406`).
+(`backend/turn_worker.py:23-25`, `backend/config.py:411`).
 
 ## What the server does at startup
 
@@ -114,12 +114,12 @@ frontend with no build step (`backend/main.py:175`).
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
   between turns (`backend/agent.py:1528`) and `compact_messages` does it inside a growing turn
   (`backend/agent.py:1663`), which is what `TACIT_COMPACT_MID_TURN` controls
-  (`backend/config.py:145-148`). A turn runs in its own process while its parent writes the
+  (`backend/config.py:150-153`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
   `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1586`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
-  (`backend/session_runtime.py:526`), because a hand compaction that moves neither the meter
+  (`backend/session_runtime.py:549`), because a hand compaction that moves neither the meter
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).
@@ -130,10 +130,10 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:989-992`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:1006-1009`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:987-988`).
+(`backend/config.py:1004-1005`).
 
 Next: [cost and profiles](cost-and-profiles.md).

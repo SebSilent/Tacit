@@ -22,7 +22,7 @@ Five of the optional systems default to off, and the code is the source of truth
 
 | System | Default off | In |
 |---|---|---|
-| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:496` |
+| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:501` |
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
 | Memory | `mode = "off"`, budget 120 | `backend/providers.py:26` |
@@ -36,13 +36,21 @@ The profile selector is here, not on a tab of its own. It shows each profile's m
 
 Project roots decide which folders the workspace picker offers. Tacit does not guess where your projects live, so the list starts empty: `TACIT_PROJECTS_ROOTS`, or `projectRoots` in `prefs.json`.
 
-Turn budget sets how long one reply runs: tool steps for the main loop, for a sub-agent, and for a
-research aspect, plus a token ceiling for the whole turn. The ceilings exist to keep a runaway turn
-from filling the context with tool results nobody asked for, so they are limits, not targets. Each
-field shows the default under the box; leaving a field empty puts the default back. A number the
-environment already set (`TACIT_MAX_STEPS`, `TACIT_SUBAGENT_STEPS`, `TACIT_RESEARCH_STEPS`,
+Turn budget sets how long one reply runs: tool steps for the main loop, for a sub-agent, for a
+research aspect, and for an Assistant reply with its tools armed, plus a token ceiling for the whole
+turn. The ceilings exist to keep a runaway turn from filling the context with tool results nobody
+asked for, so they are limits, not targets. Each field shows the default under the box; leaving a
+field empty puts the default back. A number the environment already set (`TACIT_MAX_STEPS`,
+`TACIT_SUBAGENT_STEPS`, `TACIT_RESEARCH_STEPS`, `TACIT_ASSISTANT_STEPS`,
 `TACIT_TURN_TOKEN_BUDGET`) is greyed out and carries a note saying so, because a control that looks
 editable and then ignores you is worse than one that is missing.
+
+The Assistant's own cap is the one that decides whether a side conversation gets to finish a thought.
+It was a constant inside `backend/assistant.py` for as long as the pane existed, six rounds, with
+nothing said to the model about it, so a reply that went to read something often ended on the read
+instead of on an answer. It is a budget now, it is stated in the pane's standing instruction, the
+model is told the rounds it has left, and when they run out one more round is asked with no tools
+armed so the answer still arrives (`backend/assistant.py:step_budget`).
 
 **Fallback model** is a provider and a model, or nothing at all, and nothing is the default
 (`static/platform.js:241-275`). It exists because `resolve_model` used to answer a ref this machine
@@ -51,7 +59,7 @@ something else, at that model's cost, quality and context window, and the transc
 about it. That substitution is gone. Now a session whose model is missing runs on the model you
 chose here, and with no choice it stops and names what it could not find
 (`backend/ai/engine.py:42-57`). The value is saved as `fallbackModel` in `prefs.json`
-(`backend/routers/api.py:852-866`) and read by `backend/config.py:371-384`, where
+(`backend/routers/api.py:852-866`) and read by `backend/config.py:376-389`, where
 `TACIT_FALLBACK_MODEL` outranks it. A ref that is stored but no longer in the registry is still shown,
 labelled `not in the registry`, because a picker that reports only what would resolve keeps the broken
 value invisible (`static/platform.js:247-253`). The compaction summariser is not nominatable and has

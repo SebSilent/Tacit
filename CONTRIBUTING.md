@@ -12,7 +12,7 @@ python -m unittest discover -s tests -t .
 ```
 
 The suite runs offline. It needs no network, no real model, no container daemon and no benchmark
-runner, and Tacit installs neither (`README.md:431-432`).
+runner, and Tacit installs neither (`README.md:434-435`).
 
 ## Layout
 
@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:746-751` both exist because a cached path made a redirected test write into the real
+`backend/config.py:763-768` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not
@@ -92,7 +92,7 @@ writer, and a session switch, a reconnect or any idle report clears it, so it ca
 turn is using; `openCard` is the record that does (`static/app.js:53`). Adopting "the last assistant bubble"
 instead put a new turn's deltas inside the previous answer, and only a reload drew it correctly, because
 the stored rows were never the problem. The ordering that makes it happen is in the runtime: the session is
-marked busy (`backend/session_runtime.py:877`) before the prompt is published (`:920`), so a view that arms
+marked busy (`backend/session_runtime.py:934`) before the prompt is published (`:977`), so a view that arms
 itself on the busy signal is holding the turn that just ended. `tests/test_transcript_card_flow.py` pins
 the structure, for the same reason the listener rule does.
 
@@ -121,15 +121,15 @@ Node, so it is run by hand and never from `unittest`, which stays offline and in
 
 The benchmark table wants more arms on the same cells: any first-party or fp8 route for kimi and qwen,
 DeepSeek and Qwen as the model, an Apple silicon lane, and a rerun on whatever hardware you have
-(`README.md:333-336`). Tuning is welcome and is part of the point, since the profiles and prefs are the
-tuning surface (`README.md:336-337`).
+(`README.md:336-339`). Tuning is welcome and is part of the point, since the profiles and prefs are the
+tuning surface (`README.md:339-340`).
 
 One concrete port is named in the README: schemelike is graded on Linux only because its checker reads
-`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:296-297`), and a Windows port of that
-checker is on the list of cells the table wants next (`README.md:335-336`).
+`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:299-300`), and a Windows port of that
+checker is on the list of cells the table wants next (`README.md:338-339`).
 
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
-(`README.md:337-338`). Every row must carry the checker's output verbatim, the byte counts and sha256
+(`README.md:340-341`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
 somebody else can re-run (`docs/testing-and-benchmarks.md:153-155`).
 

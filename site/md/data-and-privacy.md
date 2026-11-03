@@ -51,31 +51,31 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:883-901`):
+One rule, shared by every caller (`backend/config.py:900-918`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
 - a project that is named but missing counts as no project, because silently working in the home
   folder is worse than working in a scratch folder and stale paths arrive from stored sessions;
 - only then does the session get `~/.tacit/workspaces/<sanitized id>`, created on demand
-  (`backend/config.py:833-847`).
+  (`backend/config.py:850-864`).
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:888-891`). The scratch folder is why
+blocklist in the way (`backend/config.py:905-908`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:829-830`).
+an underscore and the result capped at 48 characters (`backend/config.py:846-847`).
 
 ## Deleting
 
 `remove_workspace` deletes one session's scratch folder when the session is removed, because a deleted
 session's files would otherwise sit in `workspaces/` forever: nothing else collects them, and they are
-the thing the model wrote while nobody had chosen a project for it (`backend/config.py:850-873`). It
+the thing the model wrote while nobody had chosen a project for it (`backend/config.py:867-890`). It
 refuses anything that is not a real per-session folder, since an empty id maps to the shared `default`
 and a path outside `WORKSPACES_DIR` is not Tacit's to delete, and it returns false rather than raising,
-because a failed cleanup must not make the delete look like it failed (`backend/config.py:857-873`).
+because a failed cleanup must not make the delete look like it failed (`backend/config.py:874-890`).
 
 The audit ledger is the exception. It is append-only and nothing in it is edited or removed, so the
 interface action that looks like clearing it is a rotation: the file is renamed, kept, and the rotation

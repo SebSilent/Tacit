@@ -121,7 +121,10 @@ real output. The **Assistant** on the right reads that session and helps with th
 drafting a prompt, questioning an approach, explaining what just happened. The main agent never sees it
 and is not told an Assistant exists, and the Assistant's goal never becomes the agent's task. Its read
 access is a set of switches with the token price shown before anything is sent, and its counter sits above
-its thread, so a second conversation is never a hidden second bill.
+its thread, so a second conversation is never a hidden second bill. In autonomous mode the Assistant steers
+the agent, and it does it in writing: the last fenced block of its reply is the only thing the next turn is
+built from, so a reply that failed, was stopped, or ran out of rounds ends the run with that reason in the
+pane instead of buying an agent turn with a "Continue." the harness wrote for itself.
 
 **Where the code lives.**
 
@@ -163,7 +166,7 @@ prompt grows with what you exercise rather than with what you installed.
 minus about 33,000 tokens, because the room the next turn needs is roughly constant. A fraction is wrong at
 both ends and this program had the wrong one: it compacted a 1M-token model at 650,000, discarding 350,000
 tokens of usable context, and an 8K model at 5,200, leaving too little to answer in
-(`backend/config.py:108`). The tail is kept by token budget, a pre-pass clears bulky tool output before the
+(`backend/config.py:113`). The tail is kept by token budget, a pre-pass clears bulky tool output before the
 summariser sees it, a failed summary still leaves a deterministic digest, compaction runs mid-turn as well
 as between turns, and the standing prompt and the task are pinned against elision.
 [docs/cost-and-profiles.md](docs/cost-and-profiles.md) has each mechanic with the line that implements it,
@@ -266,7 +269,7 @@ Tacit uses the strategy the endpoint actually supports.
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row matters most: prefix caching needs no markers there, and a server that has never seen
-`cache_control` may reject the body outright. Around the rest (`backend/config.py:995-1000`): a rejection is
+`cache_control` may reject the body outright. Around the rest (`backend/config.py:1012-1017`): a rejection is
 retried once without the markers, detected before any event streams, so nothing is half-sent and repeated;
 `TACIT_PROMPT_CACHE=off` turns marking off; and what is in force is reported with the hit rate observed.
 One measured run on an OpenAI-compatible endpoint reported **71.1%** of prompt tokens served from cache.
@@ -321,7 +324,7 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:456-464`, `backend/agent.py:806-809`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:461-469`, `backend/agent.py:806-809`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four

@@ -72,7 +72,7 @@ switch is off (`backend/agent.py:934-941`), and the same gate is enforced again 
 a model that remembers the name from an earlier turn can still emit it and a refusal it can read is
 the honest answer (`backend/agent.py:1796-1802`). The switch lives in Settings > Tools and its
 default is on — a fold the model cannot read back is the loss the person feels, and the reader is
-what makes a fold a reorganisation instead of a deletion (`backend/config.py:500-517`). It shipped
+what makes a fold a reorganisation instead of a deletion (`backend/config.py:505-522`). It shipped
 off and paid nothing for it, which was the problem: the fold still happened. `TACIT_ARCHIVE_TOOL=0`
 pins it off for an install that wants neither.
 
@@ -84,7 +84,7 @@ live only in the code.
 `run_shell` states the shell and the operating system it is running on, read from config at the
 moment the registry is built (`backend/agent.py:701-703`). `research` quotes
 its own budget, `RESEARCH_ASPECTS`, `RESEARCH_STEPS` and `RESEARCH_TIMEOUT`, taken from
-`backend/config.py:188`, `:198` and `:202` rather than written into the sentence, so the description
+`backend/config.py:193`, `:203` and `:207` rather than written into the sentence, so the description
 cannot drift away from the caps (`backend/agent.py:723-728`). `memory_add` says plainly that a
 proposal lands pending review and is injected nowhere until you approve it
 (`backend/agent.py:757-758`).
