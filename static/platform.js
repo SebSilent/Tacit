@@ -194,7 +194,7 @@
     // Tools are managed on the Skills & Tools tab only (one home per setting);
     // General fetches the server status, which now also reports the MCP
     // helper gate so the automatic on/off is visible where it is configured.
-    const [pf, vcs, dg, snd, au, srv, procs, lim, fb, sm] = await Promise.all([
+    const [pf, vcs, dg, snd, au, srv, procs, lim, fb, sm, sdo] = await Promise.all([
       api('/api/profiles'),
       api('/api/harness/version-control'),
       api('/api/harness/deliver-guarantee'),
@@ -205,6 +205,7 @@
       api('/api/harness/limits').catch(() => null),
       api('/api/harness/fallback-model').catch(() => null),
       api('/api/harness/summariser-model').catch(() => null),
+      api('/api/harness/sudo').catch(() => null),
     ]);
 
     // The caps one turn pays, with the bounds the server clamps to, so the form
@@ -324,6 +325,37 @@
     const profiles = (pf.profiles || []).map(profileRow).join('');
 
     const vcsOn = !!(vcs || {}).allow_version_control;
+    // Sudo is a Linux and macOS capability, and where the binary does not exist there is
+    // nothing to switch: the row is not rendered at all, rather than rendered to explain
+    // its own absence to every Windows install. Where it does exist the row has to keep
+    // two states apart, on with nothing saved and armed, because a plain switch would
+    // read "on" for a machine with the toggle up and no password to feed anything to.
+    const sd = sdo || {};
+    const sudoSaved = sd.saved_at ? new Date(sd.saved_at * 1000).toLocaleString() : 'never';
+    const sudoForm = (!sdo || !sd.available || !sd.enabled) ? '' : `
+      <div class="mcp-add">
+        <input class="mcp-in" id="sudoPass" type="password" spellcheck="false"
+               autocomplete="new-password"
+               placeholder="${sd.has_password ? 'replace the saved password' : 'sudo password'}">
+        <button class="ho-btn small" id="sudoSave">Save</button>
+        ${sd.has_password ? '<button class="ho-btn small danger" id="sudoClear">Forget</button>' : ''}
+        <span class="ho-sub sm">saved ${esc(sudoSaved)}</span>
+      </div>
+      <p class="hint sm">${esc(sd.protection || '')}</p>`;
+    const sudoRow = !sd.available ? '' : `
+      <div class="tool-row ${sd.enabled ? '' : 'off'}" data-perm="sudo">
+        <span class="tool-name">Sudo</span>
+        <span class="tool-desc">Off by default. When it is on and a password is saved, a
+          <code>sudo</code> command the agent runs is given that password, so a turn can
+          install a package or restart a service without anyone typing into a terminal the
+          agent does not have. That is root on this machine for the length of a turn, which
+          is why it starts off and why the password is not kept in the same file as the
+          sound switches.</span>
+        <button class="tgl ${sd.enabled ? 'on' : ''}" data-act="toggle-sudo" role="switch"
+                aria-checked="${sd.enabled ? 'true' : 'false'}" title="${sd.enabled ? 'Disable' : 'Enable'}">
+          <span class="tgl-knob"></span>
+        </button>
+      </div>${sudoForm}`;
     const dgOn = !!(dg || {}).deliver_guarantee;
     const sndOn = (snd || {}).turn_sound !== false;
     const alertOn = (snd || {}).alert_sound === true;
@@ -355,6 +387,7 @@
           <span class="tgl-knob"></span>
         </button>
       </div>
+      ${sudoRow}
       <div class="tool-row ${dgOn ? '' : 'off'}" data-perm="deliver-guarantee">
         <span class="tool-name">Delivery guarantee</span>
         <span class="tool-desc">On by default. When a turn would end without the file the task names,
@@ -517,6 +550,47 @@
       btn.closest('.tool-row').classList.toggle('off', !enable);
       note(enable ? 'the agent may now run version-control commands'
                   : 'version control is off for the agent');
+    });
+
+    // Both of these re-render the panel instead of updating the button in place,
+    // because the row's shape changes with its state: turning sudo on reveals the
+    // password field, and saving a password reveals the Forget button.
+    const sudoBtn = panel.querySelector('[data-act="toggle-sudo"]');
+    if (sudoBtn) sudoBtn.addEventListener('click', async () => {
+      const enable = !sudoBtn.classList.contains('on');
+      const r = await post('/api/harness/sudo', { enabled: enable });
+      if (!r.ok) { note(r.error || 'could not change that', true); return; }
+      note(r.armed ? 'sudo is armed: a sudo command gets the saved password'
+                   : (enable ? 'sudo is on and nothing is saved to feed it yet'
+                             : 'sudo is off: the agent gets no password'));
+      renderGeneral();
+    });
+
+    const saveSudoPassword = async () => {
+      const field = panel.querySelector('#sudoPass');
+      const pw = field ? field.value : '';
+      if (!pw) { note('type the password first', true); return; }
+      const r = await post('/api/harness/sudo', { password: pw });
+      // Wiped before anything is reported: a save that fails on a newline still put
+      // the secret in the DOM, and the panel is re-rendered either way.
+      if (field) field.value = '';
+      if (!r.ok) { note(r.error || 'could not save that', true); return; }
+      note(r.armed ? 'sudo password saved and encrypted: the switch is armed'
+                   : 'sudo password saved and encrypted');
+      renderGeneral();
+    };
+    const sudoSave = panel.querySelector('#sudoSave');
+    if (sudoSave) sudoSave.addEventListener('click', saveSudoPassword);
+    const sudoPass = panel.querySelector('#sudoPass');
+    if (sudoPass) sudoPass.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveSudoPassword();
+    });
+    const sudoForget = panel.querySelector('#sudoClear');
+    if (sudoForget) sudoForget.addEventListener('click', async () => {
+      const r = await post('/api/harness/sudo', { clear_password: true });
+      if (!r.ok) { note(r.error || 'could not clear that', true); return; }
+      note('sudo password forgotten; the switch itself is unchanged');
+      renderGeneral();
     });
 
     panel.querySelector('[data-act="toggle-dg"]').addEventListener('click', async e => {

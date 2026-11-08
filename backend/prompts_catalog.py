@@ -49,6 +49,7 @@ def catalog(project: str | None = None, sid: str = "") -> dict:
             _row("BASE", prompts.BASE, "ai/prompts.py:BASE"),
             _row("VCS rule, off", prompts._VCS_OFF, "ai/prompts.py:_VCS_OFF"),
             _row("VCS rule, on", prompts._VCS_ON, "ai/prompts.py:_VCS_ON"),
+            _row("SUDO rule, when armed", prompts.SUDO, "ai/prompts.py:SUDO"),
             _row("PROJECT", prompts.PROJECT, "ai/prompts.py:PROJECT"),
             _row("WORKSPACE", prompts.WORKSPACE, "ai/prompts.py:WORKSPACE"),
             _row("READONLY", prompts.READONLY, "ai/prompts.py:READONLY"),

@@ -20,7 +20,7 @@ runner, and Tacit installs neither (`README.md:434-435`).
 |---|---|
 | `backend/` | the server, the agent loop, and every policy decision |
 | `backend/routers/` | thin HTTP and WebSocket surfaces, one per domain (`backend/main.py:14`) |
-| `backend/ai/` | provider transports and the prompt segments (`backend/ai/prompts.py:9-56`) |
+| `backend/ai/` | provider transports and the prompt segments (`backend/ai/prompts.py:9-62`) |
 | `backend/plugins/` | bundled plugins, one file each |
 | `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:27`, `backend/main.py:175`) |
 | `tests/` | the suite, plus `tests/helpers.py` and `tests/fake_mcp_server.py` |
@@ -60,11 +60,11 @@ additionally gated on the learning mode, so with learning off its thread never s
 block, no worker.
 The memory tools are removed from the registry when the mode is off, and `memory_recall` is removed
 again when the mode cannot retrieve, because a tool that can only answer "not enabled" is a dead end with
-a schema attached (`backend/agent.py:893-907`).
+a schema attached (`backend/agent.py:905-919`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced
-(`backend/sandbox.py:521-536`). Windows has no isolation primitive in the base OS, and the correct fix for
+(`backend/sandbox.py:581-596`). Windows has no isolation primitive in the base OS, and the correct fix for
 that is the honest note plus the opt-in container backend, not a fake
 (`backend/sandbox.py:25-27`, `backend/providers.py:82-90`).
 
@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:763-768` both exist because a cached path made a redirected test write into the real
+`backend/config.py:769-774` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not

@@ -51,6 +51,12 @@ CHECKPOINT_DIR = HOME / "checkpoints"
 PID_FILE = HOME / "tacit.pid"
 PLUGINS_FILE = HOME / "plugins.json"
 PLUGINS_USER_DIR = HOME / "plugins"
+# The sudo password and the key that encrypts it, kept out of prefs.json on purpose:
+# prefs are read on almost every request and copied into bug reports, and a root
+# credential does not belong in either. See backend/secrets.py for what the encryption
+# is and, just as plainly, what it is not.
+SECRETS_FILE = HOME / "secrets.json"
+SECRET_KEY_FILE = HOME / "secret.key"
 MCP_FILE = HOME / "mcp.json"
 PROFILES_FILE = HOME / "profiles.json"
 FOLDERS_FILE = HOME / "folders.json"

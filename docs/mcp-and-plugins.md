@@ -16,20 +16,20 @@ explicitly activates it for a bounded number of turns (`backend/mcp_registry.py:
 
 | File | What it holds |
 |---|---|
-| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:54`, read at `backend/mcp_registry.py:51`, written at `:62`) |
+| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:60`, read at `backend/mcp_registry.py:51`, written at `:62`) |
 | `~/.tacit/mcp_audit.jsonl` | every external call, arguments redacted, capped at 500 rows (`backend/mcp_registry.py:14`, `:34`) |
 
 ## The four helpers
 
 `mcp_list_servers`, `mcp_search_tools`, `mcp_activate_tools` and `mcp_call`
-(`backend/agent.py:724-736`, handlers at `:542`, `:558`, `:571`, `:585`). They appear only when a server
+(`backend/agent.py:736-748`, handlers at `:554`, `:570`, `:583`, `:597`). They appear only when a server
 is configured, because with nothing in `mcp.json` they are four dead ends that cost tokens and invite
-calls that can only fail (`backend/agent.py:911-921`). Presence is the gate rather than connectivity: a
+calls that can only fail (`backend/agent.py:923-933`). Presence is the gate rather than connectivity: a
 configured but stopped server still gets them, because listing and searching are how the model learns
 what it could start.
 
 `mcp_call` is the cheap path. It costs no schema tokens, and a destructive tool requires `confirm=true`
-(`backend/agent.py:732-735`). Whether a tool looks destructive is a word list, not a guess: `delete`,
+(`backend/agent.py:744-747`). Whether a tool looks destructive is a word list, not a guess: `delete`,
 `remove`, `drop`, `destroy`, `kill`, `exec`, `shell`, `write`, `create`, `push`, `deploy`, `publish`,
 `rm `, `unlink`, `truncate`, `reset`, `overwrite`, `send`, `post`, `install`
 (`backend/mcp_registry.py:36-38`).
@@ -63,7 +63,7 @@ at most three times (`backend/mcp_registry.py:43-44`).
 
 The allow and deny lists are checked when a tool is *called*, not only when it is offered, which is why
 `mcp_call` is removed from read-only callers entirely: a model can hand itself `confirm=true`
-(`backend/agent.py:624-630`).
+(`backend/agent.py:636-642`).
 
 ## Plugins
 
@@ -84,7 +84,7 @@ under `~/.tacit/plugins/` (`backend/config.py:53`). Each plugin keeps a log capp
 (`backend/plugin_manager.py:37`).
 
 Plugin tools are appended to the registry at request time, never baked into the base list, and a failure
-there must never break an ordinary turn (`backend/agent.py:881-888`).
+there must never break an ordinary turn (`backend/agent.py:893-900`).
 
 ### The one bundled plugin
 
@@ -107,7 +107,7 @@ something in it, so an unused task list costs nothing (`:8-12`).
 may still have it listed as enabled, so a retired feature cannot come back as a row in Settings, a tool in
 the prompt, or a line in a cost estimate. Memory moved into the backend, where one switch decides both
 what is injected and what the agent may call (`backend/plugin_manager.py:45-46`,
-`backend/agent.py:893-907`, `README.md:248-250`).
+`backend/agent.py:905-919`, `README.md:248-250`).
 
 ## What a profile does to both
 

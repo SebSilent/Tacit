@@ -6,16 +6,16 @@ and "everything on" is one action with a known price (`backend/profiles.py:3-9`)
 
 ## What the fixed cost is made of
 
-The standing prompt is assembled in one function (`backend/ai/prompts.py:154-182`):
+The standing prompt is assembled in one function (`backend/ai/prompts.py:160-196`):
 
 | Part | Source | When it appears |
 |---|---|---|
-| Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:49-56`) for a delegated run |
-| The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:159` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
-| Project scope | `backend/ai/prompts.py:27-31`, added at `:161-162` | when the session has a usable project (`backend/config.py:697`) |
-| Scratch-workspace notice | `backend/ai/prompts.py:33-38`, added at `:163-168` | when there is no usable project and a session id, so the model is told where it is working |
-| Read-only or chat notice | `backend/ai/prompts.py:40-44`, added at `:173-176` | per mode |
-| Skill index | added at `backend/ai/prompts.py:177-181` | only when skills exist; bodies are fetched on demand by the `skill` tool |
+| Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:55-62`) for a delegated run |
+| The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:165` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
+| Project scope | `backend/ai/prompts.py:33-37`, added at `:167-168` | when the session has a usable project (`backend/config.py:703`) |
+| Scratch-workspace notice | `backend/ai/prompts.py:39-44`, added at `:169-174` | when there is no usable project and a session id, so the model is told where it is working |
+| Read-only or chat notice | `backend/ai/prompts.py:46-50`, added at `:179-182` | per mode |
+| Skill index | added at `backend/ai/prompts.py:191-195` | only when skills exist; bodies are fetched on demand by the `skill` tool |
 
 On top of that sits the tool schemas, then plugin tools, then memory, then any eagerly injected MCP
 schemas. `cost_of` returns those five numbers separately rather than one total, so a reader can see
@@ -67,7 +67,7 @@ not decide what Tacit is allowed to remember on its own (`README.md:252-253`).
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
 (`backend/profiles.py:128-136`, `:194-199`). At request time a fresh install with no MCP server is
-offered 16, because the four MCP helpers are also removed (`backend/agent.py:856-859`). The first
+offered 16, because the four MCP helpers are also removed (`backend/agent.py:868-871`). The first
 figure is what the profile owns; the second is what the model sees.
 
 Memory is priced from the mode, not from a plugin, because one switch decides both what is injected and
@@ -99,7 +99,7 @@ as" and "what would this cost" the same computation (`backend/profiles.py:229-24
 
 The routes are five: list, current, apply, capture, delete (`backend/routers/profiles.py:19-48`). The
 list carries the active name, the current state, the memory budget and whether the figures are exact
-(`:19-23`). Profiles are stored in `~/.tacit/profiles.json` (`backend/config.py:55`).
+(`:19-23`). Profiles are stored in `~/.tacit/profiles.json` (`backend/config.py:61`).
 
 ## The budget that memory gets
 
@@ -144,7 +144,7 @@ None of this was invented here.
   Tacit used a flat 0.65 and was wrong at both ends: it compacted a 1M-token model at 650,000, throwing
   away 350,000 tokens of usable context, and an 8K model at 5,200, leaving too little to answer in.
   Adopting the reserve model is worth 317,000 extra usable tokens on a 1M window, and the triggers now
-  agree with Claude Code's (`backend/config.py:109-119`).
+  agree with Claude Code's (`backend/config.py:115-125`).
 - **The compaction mechanics are Hermes'.** Its `context_compressor.py` was ahead of what was here: a
   token-budget tail rather than a fixed message count, a cheap pre-pass that clears old tool output
   before paying a model to summarise it, iterative summaries that refine one handover note instead of
@@ -158,7 +158,7 @@ None of this was invented here.
 ### What the mechanics do, and why each is there
 
 - **The trigger counts the whole transcript**, tool results and reasoning included, which is where the
-  size actually is (`backend/agent.py:1154-1187`). It reads two measures and answers to the larger: the
+  size actually is (`backend/agent.py:1166-1199`). It reads two measures and answers to the larger: the
   *billed* prompt of the last provider call, at the plain fill target, and the *stored* record, at twice
   the target (`TACIT_STORE_COMPACT_FACTOR`). The store is what elision serves from — a store over the
   target means stubs in the wire, not an over-budget request — and folding it at the plain target
@@ -166,25 +166,25 @@ None of this was invented here.
   fold: every fold is a model call that replaces verbatim rows with a note. The billed measure keeps no
   headroom because it describes the request the provider will actually make.
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
-  of each result plus the fact that there was more (`backend/agent.py:1274-1302`). It shrinks what the
+  of each result plus the fact that there was more (`backend/agent.py:1286-1314`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
-- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:129-131`). Six
+- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:135-137`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
   note falls into the region being summarised rather than being pinned
-  (`backend/agent.py:1490-1494`).
+  (`backend/agent.py:1502-1506`).
 - **A region too wide for one summariser call is summarised in parts**: each part is summarised on its
   own and the part notes are merged into the one note, so the far end of a very long region is not
-  silently absent from it (`backend/agent.py:1374-1423`).
+  silently absent from it (`backend/agent.py:1386-1435`).
 - **A failed summary still leaves a note**: a deterministic digest of the paths touched, the calls that
-  failed and the most recent activity (`backend/agent.py:1308-1332`).
+  failed and the most recent activity (`backend/agent.py:1320-1344`).
 - **The note is framed as a record, not an instruction.** A handover that reads as a task list gets
   acted on, which is how a compacted session restarts work it already finished.
-- **Compaction runs during a turn, not only between them** (`backend/agent.py:1579-1606`). Checking the
+- **Compaction runs during a turn, not only between them** (`backend/agent.py:1591-1618`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
-- **The standing prompt and the task are pinned against elision** (`backend/agent.py:979-999`). Pinning
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:991-1011`). Pinning
   only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
   question.
 
@@ -212,7 +212,7 @@ injected, and what was avoided by lazy loading, budgeting, compaction and delega
 schemas, then four savings counters, one per avoidance mechanism (`backend/metrics.py:22-25`).
 
 Two ceilings stop a turn from running away. `TACIT_TURN_TOKEN_BUDGET` is a hard token ceiling that
-defaults to no ceiling at all (`backend/config.py:157`), and `TACIT_COST_WARN` is the set of window
+defaults to no ceiling at all (`backend/config.py:163`), and `TACIT_COST_WARN` is the set of window
 fractions at which a turn tells you what it is costing (`:149`). Compaction is decided against a
 reserve model rather than a flat fraction by default: `TACIT_CONTEXT_RESERVE` leaves 33,000 tokens free
 for the next turn's work (`:108`) and `TACIT_CONTEXT_FILL_FLOOR` refuses to compact below half the

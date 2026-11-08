@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .. import (agent, anthropic, config, folders, hosting, mcp_registry, memory_modes,
                 memory_store, metrics, plugin_manager, project_context, session_runtime,
-                session_state, skills, store, vcs)
+                session_state, skills, store, sudo, vcs)
 from .. import tokens as token_mod
 from ..ai import engine, prompts
 
@@ -843,6 +843,52 @@ async def set_version_control(request: Request):
     body = await request.json()
     config.save_prefs({"allowVersionControl": bool(body.get("allow"))})
     return _ok(allow_version_control=config.allow_vcs())
+
+
+# One route with three actions, because the panel is one row: a switch, a password and a
+# save. Splitting them would let a half-finished change sit in the store, enabled with
+# nothing to feed, which is the state the panel has to describe anyway.
+MAX_PASSWORD_CHARS = 4096
+
+
+@router.get("/api/harness/sudo")
+async def get_sudo():
+    """The sudo switch and what it can do. Never the password."""
+    return _ok(**sudo.status())
+
+
+@router.post("/api/harness/sudo")
+async def set_sudo(request: Request):
+    body = await request.json()
+    if "enabled" in body:
+        if not sudo.available():
+            return _fail(f"there is no sudo on {config.OS} to enable. This switch is for "
+                         "Linux and macOS")
+        sudo.set_enabled(bool(body.get("enabled")))
+    if body.get("clear_password"):
+        sudo.clear_password()
+    elif body.get("password") is not None:
+        pw = str(body.get("password"))
+        if pw == "":
+            # Not `clear_password`, whatever a form that submits an empty box means.
+            # Two ways to say "remove it" and one way to say "set this" is the shape
+            # that ends with a password removed by accident.
+            return _fail("an empty password saves nothing. Use Forget to remove the "
+                         "saved one")
+        elif "\n" in pw or "\r" in pw:
+            # Not a hygiene rule. `sudo -S` reads exactly one line, so a password
+            # containing one is unsuppliable by construction, and the failure would
+            # surface as "incorrect password" from a credential that is correct.
+            return _fail("the sudo password cannot contain a newline: sudo reads one "
+                         "line from stdin")
+        elif len(pw) > MAX_PASSWORD_CHARS:
+            return _fail(f"the sudo password is longer than {MAX_PASSWORD_CHARS} "
+                         "characters")
+        else:
+            sudo.set_password(pw)
+    # The answer is the status, not the input: nothing that came in on this request is
+    # echoed back, so a password cannot round-trip into a log or a screen.
+    return _ok(**sudo.status())
 
 
 @router.get("/api/harness/delegate-model")

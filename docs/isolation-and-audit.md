@@ -36,7 +36,7 @@ including Windows, which is the reason it is offered at all (`backend/sandbox.py
 Nothing is faked to fill that gap. The isolation ladder is stated plainly in the module header
 (`backend/sandbox.py:21-27`), and a run on Windows carries a note saying that this system offers no
 isolation primitive Tacit can use, that the timeout and the change report still apply, and that
-nothing here is pretending otherwise (`backend/sandbox.py:529-532`).
+nothing here is pretending otherwise (`backend/sandbox.py:589-592`).
 
 ## What a run reports back
 
@@ -45,20 +45,20 @@ Every result has the same shape (`backend/sandbox.py:283-294`): `ok`, `backend`,
 `requested`, and `duration_ms`.
 
 `enforced` is computed per run, not per platform: a limit counts as enforced only when the platform
-can apply it and the box asked for it (`backend/sandbox.py:511-520`). `requested` records what the
-settings asked for (`backend/sandbox.py:543`), so a reader can compare the two. Where they disagree,
+can apply it and the box asked for it (`backend/sandbox.py:571-580`). `requested` records what the
+settings asked for (`backend/sandbox.py:605`), so a reader can compare the two. Where they disagree,
 a note says which guarantee is missing: network not cut off and proxy variables advisory only
-(`backend/sandbox.py:521-523`), the project not mountable read-only (`:524-525`), CPU or memory limits
+(`backend/sandbox.py:581-583`), the project not mountable read-only (`:584-585`), CPU or memory limits
 not enforced (`:533-536`).
 
 `changed` comes from scanning the project root before and after and diffing the two
-(`backend/sandbox.py:501`, `:510`). That report is produced whatever the backend, which is why a
+(`backend/sandbox.py:561`, `:570`). That report is produced whatever the backend, which is why a
 command that rewrote the tree on Windows still tells you what it rewrote.
 
 ## The timeout is enforced, not reported
 
 `GRACE_SECONDS` is 10 (`backend/sandbox.py:297`), and a timed-out run returns exit code 124 with the
-output it printed before the kill (`backend/sandbox.py:540-541`).
+output it printed before the kill (`backend/sandbox.py:602-603`).
 
 Killing only the direct child is not enough. On Windows a `.bat` or `cmd /c` wrapper leaves its
 grandchildren running, and they keep the captured pipe open, so the reader blocks long after the
@@ -83,11 +83,11 @@ because that probe is the only portable way to cut the network off (`backend/san
 
 The image, the pull policy and the PID ceiling are read from the capability registry rather than the
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
-false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:573`, `:585-587`). A missing
+false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:635`, `:647-649`). A missing
 image is not fetched unless you allowed it, and the refusal names the runtime and the command to run
-by hand (`backend/sandbox.py:663-666`). `--pids-limit` is passed on the command line
-(`backend/sandbox.py:609`). Docker is tried before Podman and both are accepted, because which one a
-person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:554-560`).
+by hand (`backend/sandbox.py:725-728`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:671`). Docker is tried before Podman and both are accepted, because which one a
+person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:616-622`).
 
 ## The container backend, checked against a real daemon
 
@@ -107,9 +107,34 @@ the exact `docker pull` command that would fetch it, and installing it is your c
 commit. No live-daemon test is shipped, which means the results above are not re-run automatically, and
 a person with a daemon who wants them re-run is doing a useful thing by reporting the difference.
 
+## Root elevation
+
+`sudo` is off, and it is a capability only two of the three backends can even talk about. The switch
+is honoured where the binary exists (`backend/sudo.py:177`), which means Linux and macOS.
+
+| Backend | Supplies the saved password | What happens to a `sudo` command there |
+|---|---|---|
+| `none` | yes (`backend/sandbox.py:496`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:537`) |
+| `tacit-micro` | no (`backend/sandbox.py:597`) | fails at once, with a note saying this backend does not supply it |
+| `container` | no (`backend/sandbox.py:761`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
+
+Both sandboxed backends leave stdin at `DEVNULL`, so an unanswered `sudo` fails immediately instead of
+hanging until the turn timeout. Failing fast is not the same as being explained, which is why the note
+exists: a model that reads only `sudo: a password is required` spends its next steps trying to type
+into a pipe.
+
+The command is rewritten to `sudo -S -p ''` before it runs (`backend/sudo.py:134`), so the password can
+only arrive on stdin and sudo can never open a terminal and wait. One password line is fed per command
+that actually asks, not one per turn: `sudo apt-get update && sudo apt-get install` runs two commands as
+root, and a pipe closed after the first read leaves the second asking. `sudo` counted only in command position,
+so `echo sudo` is not an elevation site and does not get the credential.
+
+The prompt says elevation is armed only while it is (`backend/ai/prompts.py:27`). A model that was never
+given the capability is not told the password exists.
+
 ## The audit ledger
 
-One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:58`,
+One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:64`,
 `backend/audit.py:62-64`). The point is not debugging: a claim about what a system did should be
 checkable afterwards, so each row records which backend ran something, under which mode, how much it
 cost, and whether it was blocked (`backend/audit.py:3-10`).
@@ -137,16 +162,16 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:785-789`, `:864-891`), one capture per turn
+the server checkpoints the workspace (`backend/agent.py:797-801`, `:876-903`), one capture per turn
 rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:155-180`,
 `backend/config.py:50`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:170-174`, defined at `backend/config.py:216`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:175`). The skip test
+(`backend/extras.py:170-174`, defined at `backend/config.py:222`) and files larger than `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:175`). The skip test
 looks only at parts inside the project, because testing absolute parts would skip everything whenever
 the project itself sat in a folder named `build/` or `checkpoints/` (`backend/extras.py:170-172`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:624-629`).
+person (`backend/agent.py:636-641`).
 
 Next: [data and privacy](data-and-privacy.md).

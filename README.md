@@ -157,7 +157,7 @@ rather than a fork.
 **Capabilities load when they are used, not when they are installed.** Skills and knowledge are listed by
 name and fetched only when the agent asks (`backend/skills.py:50`). An MCP server's tool descriptions stay
 out of the prompt: the agent gets four helpers to search, activate and call, and with no server configured
-even those schemas are withdrawn (`backend/agent.py:857-859`). Your project's instruction files are indexed
+even those schemas are withdrawn (`backend/agent.py:869-871`). Your project's instruction files are indexed
 by name and size instead of inlined, at 110 characters plus 40 per entry
 (`backend/project_context.py:191-194`). A server with fifty tools costs nothing until one is used, so the
 prompt grows with what you exercise rather than with what you installed.
@@ -166,7 +166,7 @@ prompt grows with what you exercise rather than with what you installed.
 minus about 33,000 tokens, because the room the next turn needs is roughly constant. A fraction is wrong at
 both ends and this program had the wrong one: it compacted a 1M-token model at 650,000, discarding 350,000
 tokens of usable context, and an 8K model at 5,200, leaving too little to answer in
-(`backend/config.py:113`). The tail is kept by token budget, a pre-pass clears bulky tool output before the
+(`backend/config.py:119`). The tail is kept by token budget, a pre-pass clears bulky tool output before the
 summariser sees it, a failed summary still leaves a deterministic digest, compaction runs mid-turn as well
 as between turns, and the standing prompt and the task are pinned against elision.
 [docs/cost-and-profiles.md](docs/cost-and-profiles.md) has each mechanic with the line that implements it,
@@ -269,7 +269,7 @@ Tacit uses the strategy the endpoint actually supports.
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row matters most: prefix caching needs no markers there, and a server that has never seen
-`cache_control` may reject the body outright. Around the rest (`backend/config.py:1012-1017`): a rejection is
+`cache_control` may reject the body outright. Around the rest (`backend/config.py:1018-1023`): a rejection is
 retried once without the markers, detected before any event streams, so nothing is half-sent and repeated;
 `TACIT_PROMPT_CACHE=off` turns marking off; and what is in force is reported with the hit rate observed.
 One measured run on an OpenAI-compatible endpoint reported **71.1%** of prompt tokens served from cache.
@@ -324,11 +324,11 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:461-469`, `backend/agent.py:813-816`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:467-475`, `backend/agent.py:825-828`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four
-  blocked repeats (`backend/agent.py:804-813`), because one cell spent 26 of its 29 shell calls on refused
+  blocked repeats (`backend/agent.py:816-825`), because one cell spent 26 of its 29 shell calls on refused
   repeats and ended with nothing written.
 - **The uncapped retry** re-asks a round this harness's own output ceiling destroyed, so thinking is never
   billed as waste, and that one is not part of the delivery switch.

@@ -18,23 +18,25 @@ directory itself (`backend/config.py:29-30`). The defaults are your home and `~/
 | `prefs.json` | `backend/config.py:34` | interface and behaviour preferences, listed in [configuration](configuration.md) |
 | `models.json` | `backend/config.py:32` | providers, base URLs, model list, the default ref |
 | `.env` | `backend/config.py:33` | API keys |
-| `capabilities.json` | `backend/config.py:57` | the sandbox, memory and learning selections |
-| `profiles.json` | `backend/config.py:55` | your saved profiles and which is active |
-| `mcp.json` | `backend/config.py:54` | MCP servers, allow and deny lists |
+| `secrets.json` | `backend/secrets.py:175`, read at `:192` | encrypted values, one per name |
+| `secret.key` | `backend/secrets.py:63` | the 32-byte key those values are encrypted under, `0600` |
+| `capabilities.json` | `backend/config.py:63` | the sandbox, memory and learning selections |
+| `profiles.json` | `backend/config.py:61` | your saved profiles and which is active |
+| `mcp.json` | `backend/config.py:60` | MCP servers, allow and deny lists |
 | `mcp_audit.jsonl` | written at `backend/mcp_registry.py:119`, read at `:133-135` | every external tool call; arguments are summarized to 160 characters (`:125-130`) and an `env` field is redacted (`:115-116`) |
 | `plugins.json` | `backend/config.py:52` | which plugins are enabled |
 | `plugins/` | `backend/config.py:53` | user-installed plugins |
-| `learning.json` | `backend/config.py:59` | proposals as artifacts, bounded at 200 rows (`backend/learning.py:38`) |
-| `memory.db` | `backend/config.py:60` | durable memory, one SQLite file |
+| `learning.json` | `backend/config.py:65` | proposals as artifacts, bounded at 200 rows (`backend/learning.py:38`) |
+| `memory.db` | `backend/config.py:66` | durable memory, one SQLite file |
 | `skills/` and `knowledge/` | `backend/config.py:41-42` | markdown you or Tacit wrote, read on demand |
 | `evidence.jsonl` | `backend/config.py:43` | citable facts recorded during turns |
 | `workspaces/` | `backend/config.py:40` | one scratch folder per session with no project |
 | `checkpoints/` | `backend/config.py:50` | workspace snapshots, one folder per turn that wrote |
 | `plans/` | `backend/config.py:49` | plan artifacts |
-| `folders.json` | `backend/config.py:56` | the folder list the workspace picker shows |
+| `folders.json` | `backend/config.py:62` | the folder list the workspace picker shows |
 | `benchmarks.json` | `backend/config.py:48` | per-model settings; the name predates its current use (`:44-47`) |
 | `github.json` | `backend/config.py:35` | the connected GitHub account |
-| `audit.jsonl` | `backend/config.py:58` | the ledger |
+| `audit.jsonl` | `backend/config.py:64` | the ledger |
 | `tacit.pid` | `backend/config.py:51` | the server's process id |
 
 ## What a session is made of
@@ -51,31 +53,31 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:900-918`):
+One rule, shared by every caller (`backend/config.py:906-924`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
 - a project that is named but missing counts as no project, because silently working in the home
   folder is worse than working in a scratch folder and stale paths arrive from stored sessions;
 - only then does the session get `~/.tacit/workspaces/<sanitized id>`, created on demand
-  (`backend/config.py:850-864`).
+  (`backend/config.py:856-870`).
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:905-908`). The scratch folder is why
+blocklist in the way (`backend/config.py:911-914`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:846-847`).
+an underscore and the result capped at 48 characters (`backend/config.py:852-853`).
 
 ## Deleting
 
 `remove_workspace` deletes one session's scratch folder when the session is removed, because a deleted
 session's files would otherwise sit in `workspaces/` forever: nothing else collects them, and they are
-the thing the model wrote while nobody had chosen a project for it (`backend/config.py:867-890`). It
+the thing the model wrote while nobody had chosen a project for it (`backend/config.py:873-896`). It
 refuses anything that is not a real per-session folder, since an empty id maps to the shared `default`
 and a path outside `WORKSPACES_DIR` is not Tacit's to delete, and it returns false rather than raising,
-because a failed cleanup must not make the delete look like it failed (`backend/config.py:874-890`).
+because a failed cleanup must not make the delete look like it failed (`backend/config.py:880-896`).
 
 The audit ledger is the exception. It is append-only and nothing in it is edited or removed, so the
 interface action that looks like clearing it is a rotation: the file is renamed, kept, and the rotation
@@ -85,9 +87,21 @@ is recorded as the first entry of the new ledger (`backend/audit.py:115-134`). Y
 ## Keys and secrets
 
 A provider key goes to `~/.tacit/.env`, is masked in the interface, and the agent's own file tools
-refuse the path: `DENY_NAMES` is `{".env", "models.json"}` and `DENY_PARTS` is `.git`, `__pycache__`,
-`node_modules`, `.venv`, `venv` (`backend/agent.py:21-22`, enforced at `:47-51`). A protected name is
-refused whether the call would read or write it (`backend/agent.py:47-48`).
+refuse the path: `DENY_NAMES` is `{".env", "models.json", "secrets.json", "secret.key"}` and
+`DENY_PARTS` is `.git`, `__pycache__`, `node_modules`, `.venv`, `venv` (`backend/agent.py:24-25`,
+enforced at `:46-51`). A protected name is refused whether the call would read or write it
+(`backend/agent.py:50`).
+
+**The sudo password is stored encrypted, and that is a smaller claim than it sounds.**
+`secrets.json` holds it under an HMAC-SHA256 keystream with an encrypt-then-MAC tag, and `secret.key`
+holds the key, created `0600` (`backend/secrets.py:63`). No crypto package was added, because the
+runtime is three packages (`requirements.txt:3-5`). What that buys: the password is not in
+`prefs.json`, not in any transcript, and not in the `.env` and `prefs.json` copies the updater keeps.
+What it does not buy: anything reading both files as this user can decrypt it, and the agent runs as
+this user. Its own file tools are stopped by the name list above, and `run_shell` cannot reach
+`~/.tacit` at all, because a shell without a project is rooted in a scratch folder rather than in your
+home (`backend/config.py:856-870`), so `cat ~/.tacit/secret.key` comes back `outside the project`. A
+process running as your user with no such rule in the way is not stopped by this.
 
 The ledger masks on the way in rather than on the way out, at any depth, and the MCP layer redacts
 before it writes its own log (`backend/audit.py:26-44`, `backend/mcp_registry.py:26-27`).

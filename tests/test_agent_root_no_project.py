@@ -171,7 +171,12 @@ class DenyListStillApplies(Isolated):
         self.assertEqual(p.parent, self.scratch / "Documents")
 
     def test_the_deny_list_is_named_and_short(self):
-        self.assertEqual(agent.DENY_NAMES, {".env", "models.json"})
+        """Four names, each one a file holding a credential the agent has no reason to
+        read: the provider keys, the model list that carries their base URLs, and the two
+        files the sudo password is encrypted under. `tests/test_sudo.py` checks the pair
+        that grew, so this one still fails if either is dropped."""
+        self.assertEqual(agent.DENY_NAMES,
+                         {".env", "models.json", "secrets.json", "secret.key"})
         self.assertEqual(agent.DENY_PARTS,
                          {".git", "__pycache__", "node_modules", ".venv", "venv"})
 

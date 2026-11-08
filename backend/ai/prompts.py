@@ -24,6 +24,12 @@ Rules:
 - Report what you actually did, including anything that failed.
 {vcs}"""
 
+SUDO = """- Root elevation is armed on this machine: a `sudo` command in `run_shell` is handed the
+  saved password and runs without anyone typing anything. That is capability, not
+  instruction. Use it only where the task genuinely needs root, never to work around a
+  permission error you could answer by changing the approach, and say in your reply which
+  commands ran as root."""
+
 PROJECT = """Working project: {project}
 
 Relative paths resolve against that directory. Treat it as the scope of this task and prefer
@@ -174,6 +180,14 @@ def system_prompt(project: str | None = None, readonly: bool = False,
         parts.append(CHAT)
     elif readonly:
         parts.append(READONLY)
+    # The sudo rule appears when the machine can actually do it, which is the same
+    # reasoning as the version-control line above: a model told it has root will reach
+    # for it, and one told it has root when it does not spends the turn finding out.
+    # When it is off the block is not in the prompt at all, so nothing is paid for a
+    # capability nobody turned on.
+    from .. import sudo as _sudo
+    if not chat and not readonly and _sudo.armed():
+        parts.append(SUDO)
     if not chat:
         from .. import skills as _skills
         listing = _skills.index()

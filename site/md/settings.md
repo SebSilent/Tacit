@@ -9,9 +9,9 @@ Nine tabs, four of them visible until you ask for the rest. Every one of them wr
 | **Skills & Tools** | Skills, knowledge, the tool list with a cost figure per tool | `~/.tacit/skills/`, `~/.tacit/knowledge/`, `prefs.json` |
 | **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones | this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`) |
 | **Capabilities** | Sandbox backend, container image, PID ceiling, turn timeout | `capabilities.json` |
-| **Learning** | The mode selector, the proposal queue, the analyzer | `learning.json` (`backend/config.py:59`) |
+| **Learning** | The mode selector, the proposal queue, the analyzer | `learning.json` (`backend/config.py:65`) |
 | **MCP** | Servers, allow and deny lists, Direct MCP, the audit log | `~/.tacit/mcp.json`, `mcp_audit.jsonl` |
-| **Memory** | The mode switch, the token budget, every entry with its provenance | `memory.db` (`backend/config.py:60`), budget in `prefs.json` |
+| **Memory** | The mode switch, the token budget, every entry with its provenance | `memory.db` (`backend/config.py:66`), budget in `prefs.json` |
 | **Plugins** | Each plugin, what it contributes, what it costs, enabled or not | `plugins.json` |
 
 The last five are hidden behind the `advanced` checkbox (`static/platform.js:51-72`). Nothing else about them changes: a hidden tab is still the only place to edit the thing it owns.
@@ -22,7 +22,8 @@ Five of the optional systems default to off, and the code is the source of truth
 
 | System | Default off | In |
 |---|---|---|
-| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:501` |
+| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:507` |
+| Sudo elevation | `sudoEnabled` absent from `prefs.json`, and no password stored | `backend/sudo.py:189` |
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
 | Memory | `mode = "off"`, budget 120 | `backend/providers.py:26` |
@@ -53,19 +54,23 @@ model is told the rounds it has left, and when they run out one more round is as
 armed so the answer still arrives (`backend/assistant.py:step_budget`).
 
 **Fallback model** is a provider and a model, or nothing at all, and nothing is the default
-(`static/platform.js:241-275`). It exists because `resolve_model` used to answer a ref this machine
+(`static/platform.js:242-276`). It exists because `resolve_model` used to answer a ref this machine
 no longer has with the first model in the registry: a session pointed at a removed provider ran on
 something else, at that model's cost, quality and context window, and the transcript said nothing
 about it. That substitution is gone. Now a session whose model is missing runs on the model you
 chose here, and with no choice it stops and names what it could not find
 (`backend/ai/engine.py:42-57`). The value is saved as `fallbackModel` in `prefs.json`
-(`backend/routers/api.py:852-866`) and read by `backend/config.py:376-389`, where
+(`backend/routers/api.py:898-912`) and read by `backend/config.py:382-395`, where
 `TACIT_FALLBACK_MODEL` outranks it. A ref that is stored but no longer in the registry is still shown,
 labelled `not in the registry`, because a picker that reports only what would resolve keeps the broken
-value invisible (`static/platform.js:247-253`). The compaction summariser is not nominatable and has
+value invisible (`static/platform.js:248-254`). The compaction summariser is not nominatable and has
 no hidden backup either: it writes the summary on the session's own model.
 
-Permissions lists what the agent may do without asking, including the version control switch. Server shows the host and port and holds the restart. The updater checks `VERSION` against the repository and, when you press it, replaces the checkout and runs `pip install -r requirements.txt` again. It never runs `npm install` and never pulls a browser build: those stay yours to decide.
+Permissions lists what the agent may do without asking, including the version control switch and, on
+Linux and macOS only, the sudo switch: a checkbox, a password field, and a line saying what storing it
+does and does not protect. It stays off until you save a password, and a command that asks for
+elevation with nothing saved fails with the reason in its output rather than hanging on a prompt
+(`backend/sudo.py:134`). Server shows the host and port and holds the restart. The updater checks `VERSION` against the repository and, when you press it, replaces the checkout and runs `pip install -r requirements.txt` again. It never runs `npm install` and never pulls a browser build: those stay yours to decide.
 
 ## Providers
 
@@ -87,7 +92,7 @@ The analyzer runs on a daemon thread named `tacit-analyzer` (`backend/analyzer.p
 
 One switch, four modes: `off` (default), `explicit`, `jit`, `full` (`backend/memory_modes.py:7-13`). The budget is a hard cap on the rendered block, default 120 tokens, and an entry that does not fit is deferred rather than silently dropped. Every entry carries its provenance and is editable, and a pinned entry survives a prune.
 
-`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:426-436`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:438-444`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:445-447`).
+`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:438-448`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:450-456`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:457-459`).
 
 ## MCP
 

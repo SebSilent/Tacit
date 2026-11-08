@@ -21,7 +21,7 @@ four: an item that is injected can be pointed at, explained, and measured (`:15-
 `RETRIEVAL_MODES` is `jit` and `full` (`backend/memory_modes.py:29`). That set is why the tool list
 moves: under `explicit` a recall tool could only ever answer "retrieval is not enabled", which is a dead
 end with a schema attached, so it is not offered (`backend/memory_modes.py:26-28`,
-`backend/agent.py:927-938`).
+`backend/agent.py:939-950`).
 
 Memory is not a plugin and has not been for some time. It used to be, and the plugin's switch decided
 what the agent could call while the memory mode decided what was injected, so the two could disagree
@@ -31,7 +31,7 @@ switch in **Settings > Memory** decides both.
 
 ## The store
 
-One SQLite file at `~/.tacit/memory.db` (`backend/config.py:60`, opened at
+One SQLite file at `~/.tacit/memory.db` (`backend/config.py:66`, opened at
 `backend/memory_store.py:92`). Four design rules, in the module's own order
 (`backend/memory_store.py:5-14`):
 
@@ -65,15 +65,15 @@ retrieval (`backend/memory_modes.py:25`). An injected item is wrapped with the r
 (`backend/memory_modes.py:59-61`), which is what makes "why is this in my prompt" answerable.
 
 When the agent calls `memory_recall` the request goes through the mode rather than around it, which is
-what makes a hit count as used and push its expiry out (`backend/agent.py:426-436`). Under `explicit`
+what makes a hit count as used and push its expiry out (`backend/agent.py:438-448`). Under `explicit`
 and `off` the tool answers with the rule that applied instead of an empty result the model would read as
-"no memory" (`backend/agent.py:438-444`), and every retrieval is audited with its mode, count, token
-cost and a truncated query (`backend/agent.py:445-447`).
+"no memory" (`backend/agent.py:450-456`), and every retrieval is audited with its mode, count, token
+cost and a truncated query (`backend/agent.py:457-459`).
 
 ## Proposing a memory
 
 `memory_add` does not write to the prompt. It creates a record whose source is `agent_suggestion` and
-which is injected nowhere until you approve it (`backend/agent.py:745-750`). The review lives in the
+which is injected nowhere until you approve it (`backend/agent.py:757-762`). The review lives in the
 memory panel, and the budget applies after approval, not before.
 
 ## Learning, and where a rule can go
@@ -124,8 +124,8 @@ Skills are markdown files with optional front matter, read from `~/.tacit/skills
 supplies a name and a description; without it the file's stem and its first non-empty line are used
 (`backend/skills.py:6-18`, `:33-34`).
 
-Only the index goes into the prompt, capped at 24 entries (`backend/config.py:208`), and the body is
-fetched by the `skill` tool when the model actually wants it (`backend/agent.py:692-693`, `:510`). That
+Only the index goes into the prompt, capped at 24 entries (`backend/config.py:214`), and the body is
+fetched by the `skill` tool when the model actually wants it (`backend/agent.py:704-705`, `:522`). That
 is the lazy-loading rule the cost figures depend on.
 
 Next: [MCP and plugins](mcp-and-plugins.md).

@@ -14,11 +14,14 @@ from pathlib import Path
 
 from . import (archive, audit, config, extras, guidance, mcp_registry, memory_modes,
                memory_store, metrics, model_settings, plugin_manager, sandbox,
-               skills, store, thinking)
+               skills, store, sudo, thinking)
 from . import tokens as token_mod
 from .ai import engine, prompts
 
-DENY_NAMES = {".env", "models.json"}
+# The two files the sudo password lives in are protected with the rest. This stops the
+# casual read, and `backend/secrets.py` says in plain terms why it stops nothing
+# determined: the agent runs as the same user that can read both.
+DENY_NAMES = {".env", "models.json", "secrets.json", "secret.key"}
 DENY_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 BLOCKED_BINARIES = {"git", "gh", "gitk", "tig", "hub"}
 MAX_LIST = 300
@@ -359,6 +362,15 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
                     ", ".join(names)
         for note in (res.get("notes") or [])[:2]:
             body += f"\n[{res['backend']}] {note}"
+    if sudo.uses_sudo(cmd) and not sudo.armed():
+        # The command ran as written and sudo answered it however it is configured to.
+        # Saying which answer that was is the difference between the model moving on and
+        # spending four steps trying to type into a terminal that has no keyboard. A
+        # backend that has the switch on but does not feed it carries its own note from
+        # the sandbox, so this one stays out of that case.
+        body += ("\n[sudo] Tacit supplied no password: the switch is off, or it is on with "
+                 "nothing saved. If this failed asking for one, that is why. Settings > "
+                 "Tools, Sudo.")
     clipped = _clip(body)
     hint = _dump_hint(cmd, clipped)
     # A clipped file dump already gets a precise sentence naming read_file and the

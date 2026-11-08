@@ -38,7 +38,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import audit, config, providers
+from . import audit, config, providers, sudo
 
 IS_POSIX = os.name != "nt"
 SCAN_LIMIT = 4000
@@ -402,7 +402,8 @@ def _run_streamed(proc, timeout: int, on_output) -> tuple[int, str, str, bool]:
 
 
 def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False,
-                  preexec_fn=None, on_output=None) -> tuple[int, str, str, bool]:
+                  preexec_fn=None, on_output=None, stdin_data: str | None = None
+                  ) -> tuple[int, str, str, bool]:
     """Run a command and capture it, with a timeout that actually returns.
 
     Returns ``(code, stdout, stderr, timed_out)``; a timeout reports exit 124, the
@@ -413,6 +414,11 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     ``on_output(kind, text)`` is optional and only ever called from a reader
     thread. Leaving it None keeps `communicate()`, the one path every non-viewed
     command has always taken.
+
+    ``stdin_data`` is the one exception to the DEVNULL rule below, and it exists for
+    exactly one caller: `backend/sudo.py`, which feeds a password to `sudo -S`. It is
+    written and the pipe closed straight away, so a command that reads stdin after sudo
+    has taken its line still gets an immediate EOF rather than a hang.
     """
     # stdin is DEVNULL, never inherited. A turn runs in the worker process, whose
     # stdin is the parent's control pipe carrying {"cancel": true} and steer lines.
@@ -425,6 +431,8 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     kwargs: dict = {"cwd": cwd, "stdin": subprocess.DEVNULL,
                     "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
                     "text": True, "env": env}
+    if stdin_data is not None:
+        kwargs["stdin"] = subprocess.PIPE
     if shell:
         kwargs["shell"] = True
     if preexec_fn is not None:
@@ -433,12 +441,21 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
         # Its own process group, so the whole tree can be signalled at once.
         kwargs["start_new_session"] = True
     proc = subprocess.Popen(argv if not shell else argv, **kwargs)
+    if stdin_data is not None:
+        # Written from its own thread on the streamed path, because a child that
+        # prints its output before it reads its input would fill the pipe and wait
+        # for a reader that is busy waiting for the write. The close is what makes
+        # this an EOF and not a hang.
+        if on_output is not None:
+            threading.Thread(target=_write_stdin, args=(proc, stdin_data),
+                             daemon=True).start()
     if on_output is not None:
         # A caller that wants it live. The captured path below stays untouched so
         # every command nobody is watching behaves exactly as it always did.
         return _run_streamed(proc, timeout, on_output)
     try:
-        out, err = proc.communicate(timeout=timeout)
+        out, err = proc.communicate(timeout=timeout,
+                                    input=stdin_data if stdin_data is not None else None)
         return proc.returncode, out or "", err or "", False
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
@@ -458,10 +475,34 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
         return 1, "", f"ERROR: {exc}", False
 
 
+def _write_stdin(proc, data: str) -> None:
+    """Hand a command its stdin, then close it. Runs on its own thread.
+
+    A failure here is the child's report, not this one's: a command that exits before
+    reading leaves a closed pipe, and whatever it wrote to stderr and its exit code say
+    what happened."""
+    try:
+        proc.stdin.write(data)
+        proc.stdin.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) -> dict:
     started = time.time()
-    code, out, err, timed_out = _run_captured(cmd, cwd=str(root), timeout=limit, shell=True,
-                                              on_output=on_output)
+    # Elevation is supplied here and nowhere else. This is the one backend that runs the
+    # command on this machine as this user, which is all `sudo` means; the other two
+    # report that they do not supply it rather than letting the command hang on a prompt.
+    run = sudo.prepare(cmd)
+    code, out, err, timed_out = _run_captured(run["command"], cwd=str(root), timeout=limit,
+                                              shell=True, on_output=on_output,
+                                              stdin_data=run["stdin"])
+    sudo_note = None
+    if run["elevated"]:
+        sudo_note = (f"sudo: the saved password was supplied to {run['fed']} command(s). "
+                     "They ran as root.")
+    elif run.get("error"):
+        sudo_note = f"sudo: {run['error']}"
     if timed_out:
         partial = (out or "").strip()
         note = (f"ERROR: timed out after {limit}s. That is this shell's cap, not the task's "
@@ -475,8 +516,12 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
             # attempt needs, diffs collected, candidates ranked. This used to be discarded, so a
             # 90%-done computation looked identical to a hung no-op.
             res["stdout"] = partial[-2000:]
+        if sudo_note:
+            # A command that hung after being handed a root password is the one timeout
+            # where what it was elevated for changes what the next attempt should be.
+            res["notes"].append(sudo_note)
         audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
-                     status="timeout", timeout=limit, command=cmd)
+                     status="timeout", timeout=limit, command=cmd, sudo=run["sites"])
         return res
 
     res = _result(True, backend="none", cwd=str(root), code=code, stdout=out, stderr=err,
@@ -484,10 +529,25 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
     res["enforced"] = {"timeout": True, "cpu_limit": False, "memory_limit": False,
                        "network": False, "readonly_project": False}
     res["notes"] = ["no isolation: this backend runs commands directly"]
+    if sudo_note:
+        res["notes"].append(sudo_note)
     audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
                  status="ok" if code == 0 else f"exit {code}", code=code,
-                 timeout=limit, command=cmd, changed=res["changed"]["count"])
+                 timeout=limit, command=cmd, changed=res["changed"]["count"],
+                 sudo=run["fed"] if run["elevated"] else 0)
     return res
+
+
+def _sudo_unsupplied(cmd: str) -> str:
+    """The note for a backend that does not feed the saved password.
+
+    Both sandboxed backends leave stdin at DEVNULL, so a `sudo` there fails at once
+    rather than waiting for a terminal that does not exist. Failing promptly is not the
+    same as being explained: without this the model reads "a password is required" and
+    spends its next steps trying to type into a pipe."""
+    return ("sudo: this backend does not supply the saved password, so the command ran "
+            "as written and failed unless sudo here needs no password. The `none` "
+            "backend is the one that supplies it")
 
 
 def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
@@ -534,6 +594,8 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
         notes.append("CPU limits are not enforced on this platform")
     if not caps["memory_limit"] and limits["memory_mb"]:
         notes.append("memory limits are not enforced on this platform")
+    if sudo.uses_sudo(cmd):
+        notes.append(_sudo_unsupplied(cmd))
 
     res = _result(
         True, backend="tacit-micro", cwd=str(root),
@@ -696,6 +758,13 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
     notes = [f"ran in {_runtime_label(runtime)} image '{image}'"]
     if timed_out:
         notes.append(f"timed out after {limit}s; the container was killed, not just the client")
+    if sudo.uses_sudo(cmd):
+        # Not a gap to close: `no-new-privileges` is set on the run argv (see
+        # container_argv), so the kernel drops the setuid bit that sudo depends on, and
+        # the root inside the image was never root on this machine anyway.
+        notes.append("sudo: not supplied here and not usable here. The container runs "
+                     "with no_new_privileges, so the kernel drops sudo's setuid bit, and "
+                     "the root inside the image is not root on this machine")
     enforced = {
         "mechanism": "container",
         "timeout": True,
