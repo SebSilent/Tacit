@@ -4760,6 +4760,73 @@ body.compacting #sendBtn { opacity: .55; cursor: progress; }
   padding: var(--sp-7);
 }
 
+/* ── MCP panel: one switch per server ─────────────────────────────────
+   Deliberately narrower than the assistant and delegation panels. It carries a
+   name, a state, a tool count and a switch per server, and nothing else: the
+   point of having it outside Settings is that opening it costs almost no screen,
+   so it can be left open while you watch what a server being off does to a turn. */
+.mcp-panel.open {
+  width: min(320px, 30vw);
+}
+.mcp-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-7);
+  border-bottom: 1px solid var(--line);
+}
+/* An off server stays readable, not greyed to nothing: you need to be able to see
+   which one it is in order to switch it back on. */
+.mcp-row.off {
+  opacity: .62;
+}
+.mcp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fadetext);
+  flex: 0 0 auto;
+}
+.mcp-dot.running { background: var(--ok); }
+.mcp-dot.starting { background: var(--warn); }
+.mcp-dot.error { background: var(--err); }
+.mcp-dot.stopped { background: var(--fadetext); }
+.mcp-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--fs-3);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One line of numbers per server: how many tools it offers, what they would cost,
+   and how many are in the prompt right now. tabular-nums because a person
+   comparing two rows reads the columns, not the prose. */
+.mcp-meta {
+  flex: 1 1 100%;
+  font-size: var(--fs-2);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.mcp-meta b {
+  color: var(--warn);
+  font-weight: 600;
+}
+.mcp-err {
+  flex: 0 0 auto;
+  color: var(--err);
+  font-weight: 700;
+  cursor: help;
+}
+.mcp-foot {
+  padding: var(--sp-5) var(--sp-7);
+  line-height: 1.55;
+}
+
 /* ── assistant panel ──────────────────────────────────────────────── */
 /* A normal flex sibling of the sidebar and the main column, so it is aligned
    with them rather than floating over the top of the app. */

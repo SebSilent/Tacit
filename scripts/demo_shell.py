@@ -85,6 +85,7 @@ APP_SCRIPTS = """\
 <script src="/static/platform.js"></script>
 <script src="/static/assistant.js"></script>
 <script src="/static/delegation.js"></script>
+<script src="/static/mcp.js"></script>
 </body>
 """
 

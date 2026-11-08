@@ -16,6 +16,7 @@ Audit:   ~/.tacit/mcp_audit.jsonl  (append-only, secrets redacted)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -280,9 +281,45 @@ def discover(sid: str) -> list[dict]:
 
 
 # ── tool surface ───────────────────────────────────────────────────────────
+def _clean(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]+", "_", str(value or ""))
+
+
+def _digest(sid: str, tool: str) -> str:
+    """A stable short suffix for a (server, tool) pair.
+
+    Stable and derived from the pair alone, never from insertion order or from
+    what else happens to be registered: a name that changes when a second server
+    is added is a name the model cannot be trusted to have called the same thing
+    twice, and any lookup by name silently resolves to whichever server the
+    registry happened to read first.
+    """
+    return hashlib.sha1(f"{sid}\x00{tool}".encode("utf-8")).hexdigest()[:8]
+
+
 def _safe_fn_name(sid: str, tool: str) -> str:
-    clean = re.sub(r"[^A-Za-z0-9_]+", "_", f"mcp__{sid}__{tool}")
-    return clean[:64]
+    # The old rule was one sanitise and a hard cut at 64. Both halves collided.
+    # `server.one` and `server_one` are different ids that sanitise to the same
+    # prefix, so their tools took the same function name and the first match in
+    # all_tools() answered the call; and any two long names sharing a 64-character
+    # head collapsed onto each other, which is how a second server's tools started
+    # answering as the first server's. The suffix is only paid for when the
+    # sanitised form is not the raw one, or when the name had to be cut, so the
+    # common case stays readable.
+    clean_sid, clean_tool = _clean(sid), _clean(tool)
+    base = f"mcp__{clean_sid}__{clean_tool}"
+    ambiguous = (clean_sid != sid) or (clean_tool != tool)
+    if len(base) <= 64 and not ambiguous:
+        return base
+    digest = _digest(sid, tool)
+    if len(base) <= 64:
+        return f"{base}_{digest}"
+    # Keep the server leg whole: it is the part that says whose tool this is, and
+    # dropping the tail of the tool name loses less than dropping the tail of the
+    # server, which is exactly the collision that put two servers' tools together.
+    room = 64 - len(digest) - 1
+    head = f"mcp__{clean_sid}__{clean_tool}"
+    return head[:max(8, room)] + "_" + digest
 
 
 def to_openai_schema(sid: str, tool: dict) -> dict:
@@ -320,6 +357,12 @@ def _tool_entry(sid: str, spec: dict, tool: dict) -> dict:
         "tokens": tokens.estimate_tool_schema_tokens(schema),
         "danger": danger_level(tool),
         "allowed": _allowed(spec, tool["name"]),
+        # Carried on the entry so every gate downstream reads the same fact. The
+        # registry used to hand the prompt, the search index and the activator a
+        # list built from *all* servers, enabled or not, so switching a server off
+        # left its pinned tools in every request and its other tools one
+        # mcp_search_tools away from being activated.
+        "enabled": bool(spec.get("enabled")),
         "pinned": tool["name"] in (spec.get("pinned") or []),
         "auto_activate": bool(spec.get("auto_activate")),
         "last_used": (spec.get("tool_meta") or {}).get(tool["name"], {}).get("last_used"),
@@ -367,7 +410,10 @@ def _score(query: str, entry: dict) -> int:
 
 
 def search(query: str, limit: int = 8) -> list[dict]:
-    entries = [e for e in all_tools() if e["allowed"]]
+    # A server the person switched off is not a thing the model may discover,
+    # offer itself or be handed a key for, so the catalogue is the entry filter
+    # too, not only the injection filter.
+    entries = [e for e in all_tools() if e["allowed"] and e["enabled"]]
     scored = [(e, _score(query, e)) for e in entries]
     hits = [e for e, s in sorted(scored, key=lambda p: -p[1]) if s > 0]
     return (hits or sorted(entries, key=lambda e: e["name"]))[:max(1, min(int(limit or 8), 50))]
@@ -386,23 +432,45 @@ def current_turn() -> int:
 
 def activate(keys: list[str], ttl_turns: int | None = None) -> dict:
     ttl = int(ttl_turns or settings().get("default_ttl_turns") or 3)
-    known = {e["key"]: e for e in all_tools()}
-    active, missing = [], []
+    entries = all_tools()
+    known = {e["key"]: e for e in entries}
+    active, missing, disabled = [], [], []
     expire_at = current_turn() + max(1, ttl)
-    for key in keys or []:
-        entry = known.get(key) or known.get(str(key))
+    for key in [str(k) for k in (keys or [])]:
+        entry = known.get(key)
         if entry is None:
-            # accept a bare tool name or fn_name too
-            entry = next((e for e in known.values()
-                          if e["name"] == key or e["fn_name"] == key), None)
+            # A bare name is accepted only when exactly one enabled server owns
+            # it. The old rule took the first match in registry order, which with
+            # two servers is a coin toss the model cannot see: asking for
+            # `screenshot` would arm one server's tool and report the key of the
+            # other, and the person's "off" switch was not consulted at all.
+            hits = [e for e in entries if e["enabled"]
+                    and (e["name"] == key or e["fn_name"] == key)]
+            entry = hits[0] if len(hits) == 1 else None
+            if len(hits) > 1:
+                missing.append(f"{key} (ambiguous: "
+                               + ", ".join(sorted(e["key"] for e in hits)) + ")")
+                continue
         if entry is None:
             missing.append(key)
+            continue
+        if not entry["enabled"]:
+            disabled.append(entry["key"])
+            audit("tool_activation_refused", server=entry["server_id"], tool=entry["name"],
+                  reason="server disabled")
             continue
         _ACTIVE[entry["key"]] = {"expires_turn": expire_at, "activated_at": time.time()}
         active.append(entry["key"])
         audit("tool_activated", server=entry["server_id"], tool=entry["name"],
               ttl_turns=ttl, tokens=entry["tokens"])
-    return {"ok": True, "activated": active, "unknown": missing, "expires_turn": expire_at}
+    out = {"ok": True, "activated": active, "unknown": missing, "expires_turn": expire_at}
+    if disabled:
+        # Named separately, because "I could not find it" and "you turned it off"
+        # are different things for the model to act on.
+        out["disabled"] = disabled
+        out["note"] = ("these servers are switched off; turn one back on in the MCP "
+                      "panel before its tools can be activated")
+    return out
 
 
 def deactivate(keys: list[str]) -> dict:
@@ -424,10 +492,18 @@ def prune() -> None:
 
 
 def active_tools() -> list[dict]:
-    """Schemas to inject right now: explicitly activated, plus pinned."""
+    """Schemas to inject right now: explicitly activated, plus pinned.
+
+    Only from servers that are switched on. A pinned tool used to be injected
+    whatever the server's `enabled` said, so the off switch did not stop a
+    server's tools reaching the model: it stopped nothing, because pinning is the
+    one path that bypasses activation and the one that was never gated.
+    """
     prune()
     out = []
     for entry in all_tools():
+        if not entry["enabled"]:
+            continue
         if entry["key"] in _ACTIVE or entry["pinned"]:
             out.append(entry)
     return out
@@ -453,8 +529,13 @@ def injection_report() -> dict:
     return {
         "discovered_tokens": discovered if not direct else enabled_total,
         "injected_tokens": enabled_total if direct else injected,
-        "saved_tokens": 0 if direct else max(0, discovered, injected),
+        # What lazy loading is actually holding out of the prompt. This used to be
+        # `max(0, discovered, injected)`, the larger of the two, so the number
+        # labelled "saved" grew when more was injected and reported a saving that
+        # was never a difference at all.
+        "saved_tokens": 0 if direct else max(0, discovered - injected),
         "direct_mode": bool(direct),
+        "enabled_servers": sum(1 for s in data["servers"].values() if s.get("enabled")),
         "active": [e["key"] for e in active_tools()],
         "exact": tokens.exact(),
     }
@@ -544,6 +625,11 @@ def list_servers() -> list[dict]:
             "token_budget": int(spec.get("token_budget") or 0),
             "timeout": int(spec.get("timeout") or 30),
             "plugin": spec.get("plugin") or "",
+            # The panel needs this to answer the question a 43-tool server actually
+            # asks: not how many tools exist, how many are in the prompt right now.
+            # Pinned is the one path that injects without the model asking, so it is
+            # the only reason a lazy-loading registry ever looks like it isn't.
+            "pinned": list(spec.get("pinned") or []),
             "state": st["state"],
             "alive": st["alive"],
             "error": st["error"] or spec.get("last_error") or "",
@@ -587,6 +673,7 @@ def update_server(sid: str, patch: dict) -> dict:
         spec["env"] = {str(k): str(v) for k, v in (patch["env"] or {}).items()}
     if patch.get("headers") is not None:
         spec["headers"] = {str(k): str(v) for k, v in (patch["headers"] or {}).items()}
+    was_enabled = bool(spec.get("enabled"))
     for key in ("enabled", "require_confirmation", "auto_activate"):
         if patch.get(key) is not None:
             spec[key] = bool(patch[key])
@@ -594,6 +681,23 @@ def update_server(sid: str, patch: dict) -> dict:
         if patch.get(key) is not None:
             spec[key] = int(patch[key])
     save(data)
+    # The switch is the thing the person believes stops the tools, so it has to
+    # stop them, not merely record a preference. Turning a server off used to
+    # write `enabled: false` and leave the process running with its activations
+    # live, which meant the off switch cost the model nothing and the server kept
+    # a subprocess and its pipes open. `stop()` reaps the process and drops every
+    # activation belonging to this server.
+    now_enabled = bool(spec.get("enabled"))
+    if was_enabled and not now_enabled:
+        stop(sid)
+        audit("server_disabled", server=sid)
+    elif now_enabled and not was_enabled:
+        # On means on: start it now so a failure surfaces as an error in the
+        # panel on the click that made it, instead of several turns later inside a
+        # tool call the model thought it had.
+        res = start(sid)
+        audit("server_enabled", server=sid, started=bool(res.get("ok")),
+              error=res.get("error") or "")
     return {"ok": True, "server": list_servers_for(sid)}
 
 
@@ -623,6 +727,30 @@ def set_pinned(sid: str, tool_name: str, pinned: bool) -> dict:
           tokens=(entry or {}).get("tokens"))
     return {"ok": True, "pinned": pinned, "tool": tool_name,
             "token_cost": (entry or {}).get("tokens", 0)}
+
+
+def unpin_all(sid: str) -> dict:
+    """Drop every pin on one server, and say what that takes off the prompt.
+
+    The one-click answer to "why are forty-three tools in every request when the
+    registry is supposed to load them lazily": pinning is the only path that
+    injects without the agent asking, and it is easy to arrive by, because the
+    Settings tab pins from a tool row and nothing there says the schema is now
+    permanent. The freed figure is measured from the schemas being dropped rather
+    than asserted, so the toast cannot promise a saving the registry does not make.
+    """
+    data = load()
+    spec = data["servers"].get(sid)
+    if not spec:
+        return {"ok": False, "error": f"no MCP server '{sid}'"}
+    tools = spec.get("tools") or []
+    freed = sum(tokens.estimate_tool_schema_tokens(to_openai_schema(sid, t))
+                for t in tools if t.get("name") in (spec.get("pinned") or []))
+    count = len(spec.get("pinned") or [])
+    spec["pinned"] = []
+    save(data)
+    audit("tools_unpinned", server=sid, count=count, tokens=freed)
+    return {"ok": True, "unpinned": count, "tokens_freed": freed}
 
 
 def stop_all() -> None:

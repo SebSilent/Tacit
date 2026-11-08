@@ -26,7 +26,7 @@ Five of the optional systems default to off, and the code is the source of truth
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
 | Memory | `mode = "off"`, budget 120 | `backend/providers.py:26` |
-| MCP | `enabled` false on every added server | `backend/mcp_registry.py:93` |
+| MCP | `enabled` false on every added server | `backend/mcp_registry.py:94` |
 
 Cost and containment are separate switches. Turning plugins on does not turn learning on, and a profile that moves the sandbox does not touch either.
 

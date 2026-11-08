@@ -16,8 +16,8 @@ explicitly activates it for a bounded number of turns (`backend/mcp_registry.py:
 
 | File | What it holds |
 |---|---|
-| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:54`, read at `backend/mcp_registry.py:50`, written at `:61`) |
-| `~/.tacit/mcp_audit.jsonl` | every external call, arguments redacted, capped at 500 rows (`backend/mcp_registry.py:14`, `:33`) |
+| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:54`, read at `backend/mcp_registry.py:51`, written at `:62`) |
+| `~/.tacit/mcp_audit.jsonl` | every external call, arguments redacted, capped at 500 rows (`backend/mcp_registry.py:14`, `:34`) |
 
 ## The four helpers
 
@@ -32,34 +32,34 @@ what it could start.
 (`backend/agent.py:725-728`). Whether a tool looks destructive is a word list, not a guess: `delete`,
 `remove`, `drop`, `destroy`, `kill`, `exec`, `shell`, `write`, `create`, `push`, `deploy`, `publish`,
 `rm `, `unlink`, `truncate`, `reset`, `overwrite`, `send`, `post`, `install`
-(`backend/mcp_registry.py:35-37`).
+(`backend/mcp_registry.py:36-38`).
 
 ## Activation and its clock
 
 Activated tool keys live in memory with an expiry measured in turns
-(`backend/mcp_registry.py:31`), and the default lifetime is three turns
-(`backend/mcp_registry.py:41`). When a key expires it is dropped and the event is audited as
-`tool_deactivated` with the reason `ttl expired` (`backend/mcp_registry.py:419-423`).
+(`backend/mcp_registry.py:32`), and the default lifetime is three turns
+(`backend/mcp_registry.py:42`). When a key expires it is dropped and the event is audited as
+`tool_deactivated` with the reason `ttl expired` (`backend/mcp_registry.py:487-491`).
 
 What is injected at any moment is the activated set plus the pinned set
-(`backend/mcp_registry.py:426-433`). Pinning is a per-tool decision made in **Settings > MCP** and it is
-audited as `tool_pinned` or `tool_unpinned` (`backend/mcp_registry.py:611-624`).
+(`backend/mcp_registry.py:494-509`). Pinning is a per-tool decision made in **Settings > MCP** and it is
+audited as `tool_pinned` or `tool_unpinned` (`backend/mcp_registry.py:715-728`).
 
 `injection_report` is the number that matters for cost: it prices every discovered schema and subtracts
 what is actually injected, which is what the dashboard's "saved by lazy activation" counter reads
-(`backend/mcp_registry.py:436-448`, `backend/metrics.py:21-22`).
+(`backend/mcp_registry.py:512-524`, `backend/metrics.py:21-22`).
 
 **Direct MCP mode** is the escape hatch for the classic behavior of dumping every tool into the prompt.
-It is off by default (`backend/mcp_registry.py:39-40`), and a profile carries it as a choice
+It is off by default (`backend/mcp_registry.py:40-41`), and a profile carries it as a choice
 (`backend/profiles.py:296`).
 
 ## Server settings
 
 A server is normalised on load: `enabled` defaults to false, transport to `stdio`, `allow_tools` and
-`deny_tools` to empty lists, and `require_confirmation` to true (`backend/mcp_registry.py:87-98`).
+`deny_tools` to empty lists, and `require_confirmation` to true (`backend/mcp_registry.py:88-99`).
 Transport is `stdio`, `http`, `https`, `sse` or either spelling of `streamable`
-(`backend/mcp_registry.py:29`). Servers are not started until asked, and a crashed server is restarted
-at most three times (`backend/mcp_registry.py:42-43`).
+(`backend/mcp_registry.py:30`). Servers are not started until asked, and a crashed server is restarted
+at most three times (`backend/mcp_registry.py:43-44`).
 
 The allow and deny lists are checked when a tool is *called*, not only when it is offered, which is why
 `mcp_call` is removed from read-only callers entirely: a model can hand itself `confirm=true`

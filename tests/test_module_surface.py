@@ -50,8 +50,8 @@ STATIC = ROOT / "static"
 JS = {p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC.glob("*.js"))}
 
 NAMESPACES = ["Tacit", "TacitTheme", "TacitAssistant", "TacitDelegation",
-              "TacitGit", "TacitHarness", "TacitPlatform", "TacitTransport",
-              "TacitMarkdown"]
+              "TacitGit", "TacitHarness", "TacitMcp", "TacitPlatform",
+              "TacitTransport", "TacitMarkdown"]
 
 # The surface as measured on 2026-10-13. Pinned so a dropped or renamed member is a
 # reviewed change rather than a panel that quietly stops responding.
@@ -73,7 +73,13 @@ EXPECTED_EXPORTS = {
     # `openSnapshot` joined the public surface with item 4: the transcript's
     # snapshot control has to reach the overlay, and this is the one file that
     # makes adding a member to a namespace a deliberate act rather than an accident.
-    "TacitPlatform": {"openSnapshot", "openSnapshots", "render"},
+    # `openTab` is the same kind of addition, reviewed: the MCP panel's settings
+    # button has to reach a tab that lives inside the overlay, and a panel that
+    # duplicates the settings renderer is worse than a seam.
+    "TacitPlatform": {"openSnapshot", "openSnapshots", "openTab", "render"},
+    # The top-bar MCP panel. `open` exists so another surface (a keyboard shortcut,
+    # a link from a warning) can bring the panel up; `load` re-reads server state.
+    "TacitMcp": {"load", "open"},
 }
 
 EXPECTED_READS = {
@@ -94,11 +100,16 @@ EXPECTED_READS = {
     "TacitAssistant": {"handle", "sessionChanged", "setExternalBusy"},
     "TacitDelegation": {"handle", "maybeLaunch", "sessionChanged"},
     "TacitGit": set(),
-    "TacitHarness": set(),
+    # The MCP panel raises the settings overlay itself rather than assuming the
+    # person came here through the gear.
+    "TacitHarness": {"open"},
+    # Nothing reads the MCP panel from the outside yet; it is a leaf. It is listed
+    # because a namespace with no row here would read as "never measured".
+    "TacitMcp": set(),
     # `openSnapshot` is read by the transcript's undo-point control (item 4): the
     # renderer owns no snapshot UI of its own, so the row asks the overlay to open
     # itself on one card. Both names are read across files, which is the point.
-    "TacitPlatform": {"openSnapshot", "render"},
+    "TacitPlatform": {"openSnapshot", "openTab", "render"},
 }
 
 

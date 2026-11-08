@@ -32,7 +32,11 @@ async def add_server(request: Request):
 
 @router.patch("/api/mcp/servers/{sid}")
 async def update_server(sid: str, request: Request):
-    res = mcp_registry.update_server(sid, await request.json())
+    body = await request.json()
+    # Reading the body needs the coroutine, but applying it can now spawn or reap
+    # a server process, and that is not the event loop's job: only the policy
+    # change moves over, the same split the start/stop route documents.
+    res = await asyncio.to_thread(mcp_registry.update_server, sid, body)
     return res if res.get("ok") else _fail(res.get("error") or "could not update server")
 
 
@@ -40,6 +44,21 @@ async def update_server(sid: str, request: Request):
 def remove_server(sid: str):
     res = mcp_registry.remove_server(sid)
     return res if res.get("ok") else _fail(res.get("error") or "could not remove server")
+
+
+@router.post("/api/mcp/servers/{sid}/unpin_all")
+def unpin_all(sid: str):
+    # Forty-three pins arrived one click at a time from the tools tab; leaving the
+    # person to unpick them one at a time is not an exit. This one is a POST rather
+    # than a DELETE of the pins because it changes a policy field on the server, the
+    # same shape the pin route has.
+    #
+    # It is declared BEFORE the catch-all below, and that order is load-bearing:
+    # `/api/mcp/servers/{sid}/{action}` matches this URL too, and FastAPI answers the
+    # first route that matches, so declared after it this endpoint was unreachable
+    # and every call came back "unknown action 'unpin_all'".
+    res = mcp_registry.unpin_all(sid)
+    return res if res.get("ok") else _fail(res.get("error") or "could not unpin tools")
 
 
 @router.post("/api/mcp/servers/{sid}/{action}")

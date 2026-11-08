@@ -23,7 +23,7 @@ Three rules hold across all of them.
 **Nothing optional is on by default.** Memory, sandboxing and learning start off, and their defaults
 are declared in one place, `backend/providers.py:22-30`. Plugins start disabled until you enable one
 (`backend/plugin_manager.py:55`), and an external tool server neither auto-starts nor injects every
-tool it offers (`backend/mcp_registry.py:39-45`). Two flags are on: the per-turn guidance blocks, with
+tool it offers (`backend/mcp_registry.py:40-46`). Two flags are on: the per-turn guidance blocks, with
 the reason written next to them (`backend/providers.py:32-34`), and the analyzer's `enabled`
 (`:31`), which `sync_worker` still gates on the learning mode, so with learning off the thread never
 starts (`backend/analyzer.py:683-694`).

@@ -21,7 +21,7 @@ directory itself (`backend/config.py:29-30`). The defaults are your home and `~/
 | `capabilities.json` | `backend/config.py:57` | the sandbox, memory and learning selections |
 | `profiles.json` | `backend/config.py:55` | your saved profiles and which is active |
 | `mcp.json` | `backend/config.py:54` | MCP servers, allow and deny lists |
-| `mcp_audit.jsonl` | written at `backend/mcp_registry.py:118`, read at `:132-134` | every external tool call; arguments are summarized to 160 characters (`:124-129`) and an `env` field is redacted (`:114-115`) |
+| `mcp_audit.jsonl` | written at `backend/mcp_registry.py:119`, read at `:133-135` | every external tool call; arguments are summarized to 160 characters (`:125-130`) and an `env` field is redacted (`:115-116`) |
 | `plugins.json` | `backend/config.py:52` | which plugins are enabled |
 | `plugins/` | `backend/config.py:53` | user-installed plugins |
 | `learning.json` | `backend/config.py:59` | proposals as artifacts, bounded at 200 rows (`backend/learning.py:38`) |
@@ -90,7 +90,7 @@ refuse the path: `DENY_NAMES` is `{".env", "models.json"}` and `DENY_PARTS` is `
 refused whether the call would read or write it (`backend/agent.py:47-48`).
 
 The ledger masks on the way in rather than on the way out, at any depth, and the MCP layer redacts
-before it writes its own log (`backend/audit.py:26-44`, `backend/mcp_registry.py:25-26`).
+before it writes its own log (`backend/audit.py:26-44`, `backend/mcp_registry.py:26-27`).
 
 ## Memory is local, and small
 

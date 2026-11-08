@@ -1909,6 +1909,15 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         if entry is None:
             out["result"] = f"ERROR: unknown MCP tool '{name}'; it may have deactivated"
             return
+        if not entry["enabled"]:
+            # The person switched that server off. Hiding the schema is not the
+            # whole guard: a model that remembers the name can still emit the
+            # call, and `mcp_registry.call` would then start the process back up
+            # through its lazy-launch path. Refuse it here, in the words the
+            # person meant when they clicked the switch.
+            out["result"] = (f"ERROR: MCP server '{entry['server_id']}' is switched "
+                             f"off; its tools are not callable until it is enabled")
+            return
         res = mcp_registry.call(entry["server_id"], entry["name"], args or {})
         out["result"] = res.get("result") if res.get("ok") else f"ERROR: {res.get('error')}"
         return

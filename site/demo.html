@@ -117,6 +117,9 @@
       <button class="icon-btn" id="dgToggle" title="Delegation, what sub-agents are doing">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"/></svg>
       </button>
+      <button class="icon-btn" id="mcpToggle" title="MCP servers, what is connected and what is on">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-5 5 5 5 0 0 1-5-5V7zM12 16v5"/></svg>
+      </button>
       <button class="icon-btn" id="asToggle" title="Assistant">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 0 1 8-8h2a8 8 0 0 1 8 4z"/><path d="M9 11h6M9 15h4"/></svg>
       </button>
@@ -187,6 +190,20 @@
         own model, which is what they used to inherit, at the session's thinking level too.</div>
     </div>
     <div class="as-messages" id="dgMessages"></div>
+  </aside>
+
+  <!-- ── MCP: which servers are installed, one switch each. Servers, not tools:
+       one server can carry forty-three tools and this strip is deliberately tiny. ── -->
+  <aside class="as-panel mcp-panel" id="mcpPanel">
+    <header class="as-head">
+      <span class="as-title">MCP</span>
+      <span class="as-sub" id="mcpSub">servers</span>
+      <button class="ho-btn small" id="mcpSettingsBtn" title="MCP settings, tools and pins in Settings">settings</button>
+      <button class="icon-btn ho-close" id="mcpClose" title="Close">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div class="as-messages" id="mcpList"></div>
   </aside>
 
   <!-- ── Assistant: a per-session side conversation. The agent never sees it. ── -->
@@ -405,7 +422,7 @@
 </div>
 
 <script>
-window.TACIT_VERSION = "1.0.10";
+window.TACIT_VERSION = "1.0.11";
 window.TACIT_THEMES = [
   { id: 'graphite', name: 'Graphite', tone: 'dark', hint: 'warm graphite, petrol accent' },
   { id: 'verdigris', name: 'Verdigris', tone: 'dark', hint: 'cool grey-green, copper' },

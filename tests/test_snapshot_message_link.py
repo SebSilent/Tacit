@@ -280,7 +280,7 @@ class TestDesktopDrawsTheControl(unittest.TestCase):
         self.assertIn("const snap = e.target.closest('.msg-snap');", app)
         self.assertIn("window.TacitPlatform.openSnapshot(snap.dataset.snap)", app)
         plat = code(PLATFORM)
-        self.assertIn("window.TacitPlatform = { render, openSnapshots, openSnapshot };",
+        self.assertIn("window.TacitPlatform = { render, openSnapshots, openSnapshot, openTab };",
                       plat)
         self.assertIn('[data-act="compare"]', plat)
         # Matched by dataset, never by a selector built out of the name.

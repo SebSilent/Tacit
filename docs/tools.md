@@ -114,7 +114,7 @@ the person using Tacit (`backend/agent.py:644-650`).
 The same call with the same arguments runs three times in a turn, and after that it is answered from
 cache instead (`backend/agent.py:797-801`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:2836-2844`).
+(`backend/agent.py:2845-2853`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the

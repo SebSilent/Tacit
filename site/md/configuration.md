@@ -209,7 +209,7 @@ silent.
 | `~/.tacit/.env` | `backend/config.py:33` | API keys, masked in the interface |
 | `~/.tacit/capabilities.json` | `backend/providers.py:195`, `:214` | the sandbox, memory and learning selections |
 | `~/.tacit/profiles.json` | `backend/profiles.py:105-106`, read at `:93-102` | your saved profiles and which is active |
-| `~/.tacit/mcp.json` | `backend/mcp_registry.py:61`, read at `:50` | servers, allow and deny lists, MCP settings |
+| `~/.tacit/mcp.json` | `backend/mcp_registry.py:62`, read at `:51` | servers, allow and deny lists, MCP settings |
 | `~/.tacit/plugins.json` | `backend/plugin_manager.py:65`, read at `:52` | which plugins are enabled |
 | `~/.tacit/learning.json` | `backend/learning.py:63`, read at `:51`, bounded at 200 rows (`:38`) | proposals as artifacts |
 | `~/.tacit/audit.jsonl` | `backend/audit.py:62-64` | one line per important action |

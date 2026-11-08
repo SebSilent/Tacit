@@ -1650,5 +1650,21 @@
   }
 
   install();
-  window.TacitPlatform = { render, openSnapshots, openSnapshot };
+  // Open Settings on one specific tab, from outside the overlay. The MCP panel's
+  // "add a server" and "the tools themselves" actions both land here, and a tab
+  // that is `advanced` is hidden until the advanced switch is on: clicking a hidden
+  // button selects nothing and the overlay opens on whatever was last visited, so
+  // the switch has to be turned on first rather than assumed already on.
+  function openTab(id) {
+    if (window.TacitHarness) window.TacitHarness.open();
+    const btn = document.querySelector('.ho-tab[data-tab="' + id + '"]');
+    if (!btn) return;
+    if (btn.hidden) {
+      const cb = $('#advToggle');
+      if (cb) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
+    }
+    btn.click();
+  }
+
+  window.TacitPlatform = { render, openSnapshots, openSnapshot, openTab };
 })();

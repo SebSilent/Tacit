@@ -6,7 +6,9 @@ sites (the ones fed by the filesystem, git and the planner) unexamined, and its 
 docstring said the rest of the audit "needs a browser". It does not.
 
 Measured 2026-10-13 before writing this: `static/` defines **six** `esc()`s, one per
-module, and **five of them replace `"`**. `app.js`'s did not; it escaped `&`, `<`, `>`
+module, and **five of them replace `"`**. The MCP panel module made it seven in 1.0.11,
+quote clause and coercion both included; the count is pinned below, so growing the set
+stays a reviewed change rather than a silent one. `app.js`'s did not; it escaped `&`, `<`, `>`
 only. That is not cosmetic. `esc()` is interpolated inside double-quoted attributes in
 the workspace listing (`wd-item`/`wd-new` `data-path`), the file browser (`fs-quick-btn`,
 `fs-row` `data-path`), the prompt queue (`pq-opt` `data-opt`) and the planner's status
@@ -114,7 +116,7 @@ def run_esc(values, source=MD):
 
 
 DEF = re.compile(r"function esc\(|const esc = ")
-# app.js's esc is a delegation, not an escaper: counting it as a seventh definition
+# app.js's esc is a delegation, not an escaper: counting it as another definition
 # would report it as the one missing the quote and the coercion, which is true of a
 # line whose whole job is to call the thing that has both.
 DELEGATE = re.compile(r"return window\.TacitMarkdown\.esc\(")
@@ -152,7 +154,7 @@ def esc_definitions(sources):
     return found
 
 
-# Four of the six are arrows (`const esc = (s) => String(s == null ? '' : s)`, parameter
+# Five of the seven are arrows (`const esc = (s) => String(s == null ? '' : s)`, parameter
 # even named `s`), so matching `return String(` reported assistant/delegation/git/platform
 # as uncoerced when they were the ones that always were. The invariant is that the value
 # is wrapped before the first `.replace`, whichever keyword introduces it.
@@ -275,15 +277,15 @@ class ThePremiseIsStillTrue(unittest.TestCase):
 
 
 class EveryEscaperEscapesTheQuote(unittest.TestCase):
-    """The house standard across all six definitions. `app.js` diverged by one clause and
+    """The house standard across all seven definitions. `app.js` diverged by one clause and
     that divergence *was* the hole."""
 
     def test_it_reads_every_definition(self):
         """Anti-vacuity: an empty `missing` list is also what you get when the pattern
         matched no definition at all."""
         defs = esc_definitions(static_sources())
-        self.assertEqual(6, len(defs),
-                         f"found {sorted(defs)}; static/ defines six esc()s; if this "
+        self.assertEqual(7, len(defs),
+                         f"found {sorted(defs)}; static/ defines seven esc()s; if this "
                          "changes, the guard below has stopped covering all of them")
 
     def test_no_definition_is_missing_the_quote(self):
@@ -294,7 +296,7 @@ class EveryEscaperEscapesTheQuote(unittest.TestCase):
                          "end their attribute")
 
     def test_no_definition_is_missing_the_coercion(self):
-        """The second divergence in the same six definitions: every one of them wraps the
+        """The second divergence in the same seven definitions: every one of them wraps the
         argument in `String()` before calling `.replace`. `app.js` did not, so `esc(0)`
         threw a TypeError into whatever renderer called it, and eight call sites, on six
         lines of the workspace and file-browser renderers, had already started writing
@@ -315,7 +317,7 @@ class EveryEscaperEscapesTheQuote(unittest.TestCase):
         would report every definition as missing the coercion, which is the exact failure
         this file already had once with the quote clause."""
         bodies = esc_definitions(static_sources())
-        self.assertEqual(6, len(bodies))
+        self.assertEqual(7, len(bodies))
         for name, body in bodies.items():
             self.assertIn(".replace(", body, f"{name}'s slice does not contain the body")
 
@@ -368,7 +370,7 @@ class TheGuardHasTeeth(unittest.TestCase):
     UNCOERCED_MARK = "String(t == null ? '' : t)"
 
     def test_the_coercion_guard_is_caught(self):
-        """Put `app.js` back to the pre-fix form and require the six-definition guard to
+        """Put `app.js` back to the pre-fix form and require the seven-definition guard to
         name it; the same teeth check the quote clause has, because both guards fail
         vacuously if their slice is wrong."""
         sources = static_sources()
@@ -380,7 +382,7 @@ class TheGuardHasTeeth(unittest.TestCase):
         missing = sorted(n for n, body in esc_definitions(sources).items()
                          if not COERCION.search(body))
         self.assertEqual(["markdown.js"], missing,
-                         "the coercion was removed and the six-definition guard did not "
+                         "the coercion was removed and the seven-definition guard did not "
                          "notice; it is matching something other than the "
                          "coercion, in whichever dialect the definition is written")
 
@@ -399,7 +401,7 @@ class TheGuardHasTeeth(unittest.TestCase):
 
     def test_the_quote_guard_is_caught(self):
         """Teeth for `EveryEscaperEscapesTheQuote`: put the old `app.js` esc back in
-        memory and require that guard to name the file. Without this, the six-definition
+        memory and require that guard to name the file. Without this, the seven-definition
         check is a regex that could be matching nothing and reporting success."""
         sources = static_sources()
         planted = sources["markdown.js"].replace(esc_source(sources["markdown.js"]), self.OLD)
@@ -409,14 +411,14 @@ class TheGuardHasTeeth(unittest.TestCase):
                          if "&quot;" not in body)
         self.assertEqual(["markdown.js"], missing,
                          "the quote clause was removed from app.js's esc() and the "
-                         "six-definition guard did not notice")
+                         "seven-definition guard did not notice")
 
 
 class TheWrapperStillDelegates(unittest.TestCase):
     """The move is only safe while app.js has no escaper of its own.
 
-    `EveryEscaperEscapesTheQuote` counts six definitions; if app.js grew a body back,
-    it would be a seventh escaper that nothing audits, and the transcript would be
+    `EveryEscaperEscapesTheQuote` counts seven definitions; if app.js grew a body back,
+    it would be an eighth escaper that nothing audits, and the transcript would be
     escaping model text in a place the house standard has never looked at.
     """
     WRAPPER = "function esc(t) { return window.TacitMarkdown.esc(t); }"

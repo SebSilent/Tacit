@@ -7,6 +7,7 @@ real protocol (tests/fake_mcp_server.py) rather than a mock.
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -226,6 +227,215 @@ class TestMcp(Isolated):
         mcp_registry.save_settings({"direct_mode": True})
         self.assertEqual(len(mcp_registry.schemas_for_prompt()), 3)
         mcp_registry.save_settings({"direct_mode": False})
+
+
+class TestMcpOffSwitch(Isolated):
+    """The switch that is supposed to stop a server's tools, and the names that
+    decide whose tool a call is.
+
+    Two failures from a person running one 43-tool server. Turning the server off
+    changed nothing the model saw, because pinning injected schemas whatever the
+    server's `enabled` said and the catalogue kept offering the tools of a server
+    that was off. And adding a second server mixed the two sets together, because
+    a function name was built by sanitising and then cutting at 64 characters, so
+    `one.two` and `one_two` produced identical names and the first match in
+    registry order answered the call.
+    """
+
+    def _server(self, sid, tools, **kw):
+        """A registered server with cached schemas and no subprocess.
+
+        Discovery is not needed to test any of this: the registry reads the cached
+        `tools` list, and every claim here is about what the registry hands the
+        prompt, the catalogue or the caller.
+        """
+        res = mcp_registry.add_server({"id": sid, "command": "echo",
+                                       "enabled": True, **kw})
+        self.assertTrue(res["ok"], res)
+        data = mcp_registry.load()
+        data["servers"][sid]["tools"] = [{"name": n, "description": d} for n, d in tools]
+        mcp_registry.save(data)
+        return sid
+
+    def _keys(self, entries):
+        return {e["key"] for e in entries}
+
+    def test_off_means_the_model_never_sees_it(self):
+        """Pinned is not a bypass. This is the 43-tools case exactly."""
+        sid = self._server("phone", [("app_clear", "Clear an app's data"),
+                                     ("screenshot", "Capture the display")],
+                           pinned=["app_clear", "screenshot"])
+        self.assertEqual(len(mcp_registry.active_tools()), 2,
+                         "pinned tools of an enabled server should inject")
+        mcp_registry.update_server(sid, {"enabled": False})
+        self.assertEqual(mcp_registry.active_tools(), [],
+                         "a switched-off server still had its pinned schemas injected")
+        self.assertEqual(mcp_registry.schemas_for_prompt(), [])
+
+    def test_the_off_switch_stops_the_process_and_drops_activations(self):
+        mcp_registry.add_server({"id": "fake", "name": "Fake", "command": sys.executable,
+                                 "args": [str(FAKE_SERVER)], "enabled": True, "timeout": 20})
+        self.assertTrue(mcp_registry.start("fake")["ok"])
+        mcp_registry.activate(["fake:echo"], 5)
+        self.assertTrue(mcp_registry.active_tools())
+        mcp_registry.update_server("fake", {"enabled": False})
+        self.assertEqual(mcp_registry.active_tools(), [],
+                         "an activated tool outlived the switch that turned its server off")
+        self.assertFalse(mcp_registry.status("fake")["alive"],
+                         "off left the subprocess and its pipes running")
+
+    def test_the_on_switch_starts_it(self):
+        """On means on, so a server that cannot start says so on the click."""
+        mcp_registry.add_server({"id": "fake", "command": sys.executable,
+                                 "args": [str(FAKE_SERVER)], "enabled": False, "timeout": 20})
+        mcp_registry.update_server("fake", {"enabled": True})
+        self.assertTrue(mcp_registry.status("fake")["alive"])
+
+    def test_a_disabled_server_is_not_in_the_catalogue(self):
+        self._server("phone", [("screenshot", "Capture the display")])
+        self.assertTrue(mcp_registry.search("screenshot", 5))
+        mcp_registry.update_server("phone", {"enabled": False})
+        self.assertEqual(mcp_registry.search("screenshot", 5), [],
+                         "the agent could find and reach for a tool the person turned off")
+
+    def test_activating_a_disabled_tools_key_is_refused_by_name(self):
+        self._server("phone", [("screenshot", "Capture the display")])
+        mcp_registry.update_server("phone", {"enabled": False})
+        out = mcp_registry.activate(["phone:screenshot"], 3)
+        self.assertEqual(out["activated"], [])
+        self.assertIn("phone:screenshot", out["disabled"])
+        self.assertNotIn("phone:screenshot", out["unknown"],
+                         """"not found" is the wrong answer for "you turned it off""")
+
+    def test_the_direct_call_is_refused_at_the_call_too(self):
+        """Hiding the schema is not the whole guard: the model may still emit the
+        name it remembers, and the registry would happily launch the server."""
+        self._server("phone", [("screenshot", "Capture the display")])
+        mcp_registry.update_server("phone", {"enabled": False})
+        fn = mcp_registry.all_tools()[0]["fn_name"]
+        out = {}
+        # call_tool is a generator (it yields progress events for sub-agents), so
+        # the body does not run until it is drained.
+        list(agent.call_tool(fn, {}, {"project": None, "session": "S", "turn_id": 1}, out))
+        self.assertTrue(str(out["result"]).startswith("ERROR:"))
+        self.assertIn("switched off", out["result"])
+
+    def test_two_servers_that_sanitise_alike_keep_separate_names(self):
+        a = self._server("one.two", [("ping", "from the dotted server")])
+        b = self._server("one_two", [("ping", "from the underscore server")])
+        names = {e["fn_name"] for e in mcp_registry.all_tools()}
+        self.assertEqual(len(names), 2,
+                         f"two servers produced one function name: {names}")
+        self.assertEqual({e["server_id"] for e in mcp_registry.all_tools()
+                          if e["fn_name"] == mcp_registry.all_tools()[0]["fn_name"]}, {a})
+
+    def test_long_names_sharing_a_head_do_not_collide(self):
+        head = "measure_the_phone_before_and_after"
+        self._server("lab", [(head + "_one", "first"), (head + "_two", "second")])
+        names = [e["fn_name"] for e in mcp_registry.all_tools()]
+        self.assertEqual(len(names), len(set(names)), f"collision: {names}")
+        for n in names:
+            self.assertLessEqual(len(n), 64, "provider name caps are not a suggestion")
+
+    def test_a_bare_name_two_servers_own_is_not_resolved_by_coin_toss(self):
+        self._server("alpha", [("echo", "alpha's echo")])
+        self._server("beta", [("echo", "beta's echo")])
+        out = mcp_registry.activate(["echo"], 2)
+        self.assertEqual(out["activated"], [],
+                         "an ambiguous bare name armed whichever server came first")
+        self.assertTrue(any("ambiguous" in u for u in out["unknown"]), out["unknown"])
+        # The unambiguous form still works, and picks exactly who it names.
+        self.assertEqual(mcp_registry.activate(["beta:echo"], 2)["activated"], ["beta:echo"])
+
+    def test_saved_tokens_is_a_difference_not_a_maximum(self):
+        self._server("phone", [("screenshot", "Capture the display")],
+                     pinned=["screenshot"])
+        rep = mcp_registry.injection_report()
+        self.assertEqual(rep["saved_tokens"],
+                         max(0, rep["discovered_tokens"] - rep["injected_tokens"]),
+                         "the figure labelled saved grew when more was injected")
+
+
+# ── 6c. the way out of a pile of pins ──────────────────────────────────────
+class TestMcpUnpinAll(Isolated):
+    """`unpin_all` drops every pin on one server and reports what that took off
+    the prompt.
+
+    Pinning is the only path that puts a schema into every request without the
+    agent asking for it, and it is easy to arrive at by: the tools tab pins from a
+    row without saying the schema is now permanent. Forty-three of those and there
+    was no exit but unpicking them one at a time, which is why the panel has a
+    single button. The freed figure is measured from the dropped schemas rather
+    than asserted, so a toast cannot promise a saving the registry never made.
+    """
+
+    def _server(self, sid, tools, **kw):
+        res = mcp_registry.add_server({"id": sid, "command": "echo", "enabled": True, **kw})
+        self.assertTrue(res["ok"], res)
+        data = mcp_registry.load()
+        data["servers"][sid]["tools"] = [{"name": n, "description": d} for n, d in tools]
+        mcp_registry.save(data)
+        return sid
+
+    def _pinned(self, sid="phone", n=3):
+        tools = [(f"tool_{i}", f"Does thing number {i} on the phone node") for i in range(n)]
+        return self._server(sid, tools, pinned=[name for name, _ in tools])
+
+    def test_every_pin_goes_at_once(self):
+        sid = self._pinned()
+        self.assertEqual(len(mcp_registry.active_tools()), 3)
+        res = mcp_registry.unpin_all(sid)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["unpinned"], 3)
+        self.assertEqual(mcp_registry.load()["servers"][sid]["pinned"], [])
+        self.assertEqual(mcp_registry.active_tools(), [],
+                         "unpin_all left a schema injected, so the pins were not all cleared")
+
+    def test_the_freed_figure_is_measured_from_the_schemas_dropped(self):
+        sid = self._pinned()
+        want = sum(tokens.estimate_tool_schema_tokens(mcp_registry.to_openai_schema(sid, t))
+                   for t in mcp_registry.load()["servers"][sid]["tools"])
+        res = mcp_registry.unpin_all(sid)
+        self.assertEqual(res["tokens_freed"], want,
+                         "the panel is about to quote this number back as a saving")
+
+    def test_nothing_pinned_frees_nothing(self):
+        sid = self._server("quiet", [("a_tool", "A thing")])
+        res = mcp_registry.unpin_all(sid)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["unpinned"], 0)
+        self.assertEqual(res["tokens_freed"], 0)
+
+    def test_an_unknown_server_says_so_rather_than_passing_quietly(self):
+        res = mcp_registry.unpin_all("nope")
+        self.assertFalse(res["ok"])
+        self.assertIn("nope", res["error"])
+
+    def test_one_server_s_pins_do_not_move_another_s(self):
+        a = self._pinned("alpha", 2)
+        b = self._pinned("beta", 4)
+        mcp_registry.unpin_all(a)
+        self.assertEqual(len(mcp_registry.load()["servers"][b]["pinned"]), 4,
+                         "unpin_all reached across into another server's pins")
+
+    def test_the_audit_row_carries_the_count_and_the_cost(self):
+        sid = self._pinned()
+        res = mcp_registry.unpin_all(sid)
+        rows = [r for r in mcp_registry.recent_audit() if r.get("event") == "tools_unpinned"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["server"], sid)
+        self.assertEqual(rows[0]["count"], res["unpinned"])
+        self.assertEqual(rows[0]["tokens"], res["tokens_freed"])
+
+    def test_the_route_is_wired(self):
+        from fastapi.testclient import TestClient
+
+        from backend.main import app
+        sid = self._pinned()
+        with TestClient(app) as c:
+            res = c.post(f"/api/mcp/servers/{sid}/unpin_all").json()
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["unpinned"], 3)
 
 
 # ── 7-8. Durable memory ────────────────────────────────────────────────────
@@ -3439,6 +3649,95 @@ class TestAssistantPaneWiring(unittest.TestCase):
         self.assertIn("window.TacitAssistant.handle(m)", app)
         self.assertIn("window.TacitAssistant.setExternalBusy(m.assistantBusy)", app)
         self.assertIn("window.TacitAssistant.sessionChanged(activeId)", app)
+
+
+class TestMcpPaneWiring(unittest.TestCase):
+    """The panel is a second pair of hands on the same three things the backend
+    already governs: the server list, the enabled switch, and the pins. Nothing in
+    the Python can tell that the button was never wired, that the published demo
+    forgot to load the script, or that the markup emits a class the stylesheet has
+    no rule for, and all three fail silently, in the dark, on someone's machine.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def _read(self, rel):
+        return (self.ROOT / rel).read_text(encoding="utf-8")
+
+    def test_the_markup_and_the_script_are_both_there(self):
+        html = self._read("static/index.html")
+        for element in ('id="mcpToggle"', 'id="mcpPanel"', 'id="mcpList"',
+                        'id="mcpSub"', 'id="mcpClose"', 'id="mcpSettingsBtn"'):
+            self.assertIn(element, html, f"{element} is gone from the markup")
+        self.assertIn('/static/mcp.js', html)
+
+    def test_the_published_demo_loads_it_too(self):
+        # The demo is a separate shell that lists every app script by hand. A panel
+        # that works in the app and not in the demo is a panel nobody can try.
+        self.assertIn('/static/mcp.js', self._read("scripts/demo_shell.py"))
+
+    def test_every_state_the_backend_reports_has_a_colour(self):
+        """The dot's class is the state string, interpolated at runtime, so the
+        class test above cannot see it. A state with no rule renders an invisible
+        dot, which reads as a server that is not running."""
+        css = self._read("static/style.css")
+        py = self._read("backend/mcp_registry.py")
+        states = set(re.findall(r'"state":\s*"(\w+)"', py))
+        self.assertTrue(states, "found no states to check")
+        missing = {s for s in states if f".mcp-dot.{s}" not in css}
+        self.assertEqual(missing, set(),
+                         f"the registry reports {sorted(missing)} with no dot rule")
+
+    def test_the_settings_button_opens_the_tab_it_claims(self):
+        js = self._read("static/mcp.js")
+        plat = self._read("static/platform.js")
+        self.assertIn("window.TacitPlatform.openTab('mcp')", js)
+        self.assertIn("openTab", plat, "platform.js no longer defines openTab")
+        # The advanced tabs are built at runtime from a list in platform.js rather
+        # than written into index.html, so 'mcp' has to be registered there or the
+        # query in openTab finds no button, returns early, and the overlay opens on
+        # whatever tab was visited last.
+        self.assertRegex(plat, r"\{\s*id:\s*'mcp',\s*label:\s*'MCP',\s*advanced:\s*true\s*\}",
+                         "there is no advanced Settings tab named mcp to open")
+        # and because it is an advanced tab, openTab has to raise that switch itself:
+        # someone who has never opened it would otherwise click a hidden button and
+        # watch nothing happen.
+        body = plat[plat.index("function openTab"):]
+        self.assertIn("advToggle", body, "openTab no longer uncovers the advanced tabs first")
+        self.assertIn("btn.click()", body, "openTab never selects the tab it was asked for")
+
+    def test_every_endpoint_the_panel_calls_is_routed(self):
+        """The panel's URLs are written as template literals rather than string
+        concatenation precisely so this check can see the whole path: a call built
+        out of pieces is invisible to a reader, and a route renamed on one side of
+        the seam fails at click time with a 404 nobody thinks to trace back."""
+        js = self._read("static/mcp.js")
+        py = self._read("backend/routers/mcp.py")
+        called = set(re.findall(r"""api\(['"`](/api/mcp/[^'"`]*)['"`]""", js))
+        self.assertTrue(called, "found no MCP calls in the panel at all")
+        routed = re.findall(r'@router\.\w+\("(/api/mcp/[^"]+)"\)', py)
+        patterns = [re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", r) + "$") for r in routed]
+        for call in sorted(called):
+            # `${encodeURIComponent(id)}` is a segment, exactly like `{sid}` is
+            probe = re.sub(r"\$\{[^}]+\}", "x", call)
+            self.assertTrue(any(p.match(probe) for p in patterns),
+                            f"the panel calls {call}, which nothing routes")
+
+    def test_the_classes_the_panel_emits_are_styled(self):
+        """The bug this test exists for: the row markup used `.off` and `.mcp-dot`
+        while the stylesheet defined `.mcp-off` and `.mcp-state`. Both files parsed,
+        the panel rendered, and it simply looked like nothing was there."""
+        js = self._read("static/mcp.js")
+        css = self._read("static/style.css")
+        emitted = set()
+        for attr in re.findall(r'class="([^"]*)"', js):
+            for token in re.split(r"\s+|\$\{[^}]*\}", attr):
+                if re.fullmatch(r"mcp-[a-z][a-z-]*", token):
+                    emitted.add(token)
+        self.assertTrue(emitted, "no mcp- classes found in the panel markup at all")
+        missing = {c for c in emitted if "." + c not in css}
+        self.assertEqual(missing, set(),
+                         f"the panel emits {sorted(missing)} with no rule in style.css")
 
 
 if __name__ == "__main__":
