@@ -1190,9 +1190,19 @@ class TestCompactionMechanics(Isolated):
         summary, err = agent._summarise_region("\n\n".join(rows), ref="p/m")
         self.assertEqual(err, "")
         self.assertEqual(len(seen), 3)          # two parts plus the merge call
-        self.assertLessEqual(len(seen[0]), config.SUMMARY_INPUT_MAX_CHARS)
-        self.assertIn("part 0", seen[0])        # the oldest part is summarised
-        self.assertIn("part 26", seen[1])       # and so is the newest one
+        # The two parts are summarised concurrently, so which one reaches the stub
+        # first is the scheduler's, not the fold's (`test_the_part_count_is_bounded`
+        # says the same a few lines below). Asserting on positions here made this test
+        # fail in a full run and pass alone. What the fold promises is that both parts
+        # were summarised, so both names have to appear among them, and the merge,
+        # which runs after both, is the one whose position is real.
+        parts = seen[:2]
+        for part in parts:
+            self.assertLessEqual(len(part), config.SUMMARY_INPUT_MAX_CHARS)
+        self.assertTrue(any("part 0" in p for p in parts),
+                        "the oldest part is not among the summarised parts")
+        self.assertTrue(any("part 26" in p for p in parts),
+                        "the newest part is not among the summarised parts")
         self.assertTrue(seen[2].startswith("note: "),
                         "the merge is called on the part notes, not the raw rows")
         self.assertIn("part 0", seen[2])        # the merge sees every part note
