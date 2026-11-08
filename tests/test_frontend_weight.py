@@ -111,10 +111,20 @@ GZIP_BASELINE = 115_372
 # 497,300 raw / 133,467 gzip, union 521,619 / 138,936 - the gzip line was already
 # over, the shipped gzip line had 64 bytes of headroom left. Budgets are the new
 # figures plus ~4%: 517,000 / 139,000 for the page, 542,000 / 144,500 shipped.
-RAW_BUDGET = 517_000
-GZIP_BUDGET = 139_000
-SHIPPED_RAW_BUDGET = 542_000
-SHIPPED_GZIP_BUDGET = 144_500
+#
+# Raised again for the Assistant's step budget and the MCP panel. Neither was
+# measured when it landed, which is how the shipped gzip line ended up 97 bytes
+# past itself while every test still read green for a commit: the page gzip line
+# had 98 bytes of headroom, so both were spent, and a spent budget is the failure
+# this file's own notes keep naming. Measured now: page 513,247 raw / 138,902 gzip
+# (was 497,300 / 133,467), union 538,772 / 144,597 (was 521,619 / 138,936) - about
+# 16 KB of raw and 5.4 KB of gzip across the two features, `mcp.js` and the panel
+# markup being the bulk of it. Figures plus ~4% again: 534,000 / 144,500 for the
+# page, 560,000 / 150,500 shipped.
+RAW_BUDGET = 534_000
+GZIP_BUDGET = 144_500
+SHIPPED_RAW_BUDGET = 560_000
+SHIPPED_GZIP_BUDGET = 150_500
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.

@@ -157,7 +157,7 @@ rather than a fork.
 **Capabilities load when they are used, not when they are installed.** Skills and knowledge are listed by
 name and fetched only when the agent asks (`backend/skills.py:50`). An MCP server's tool descriptions stay
 out of the prompt: the agent gets four helpers to search, activate and call, and with no server configured
-even those schemas are withdrawn (`backend/agent.py:850-852`). Your project's instruction files are indexed
+even those schemas are withdrawn (`backend/agent.py:857-859`). Your project's instruction files are indexed
 by name and size instead of inlined, at 110 characters plus 40 per entry
 (`backend/project_context.py:191-194`). A server with fifty tools costs nothing until one is used, so the
 prompt grows with what you exercise rather than with what you installed.
@@ -324,11 +324,11 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:461-469`, `backend/agent.py:806-809`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:461-469`, `backend/agent.py:813-816`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four
-  blocked repeats (`backend/agent.py:797-806`), because one cell spent 26 of its 29 shell calls on refused
+  blocked repeats (`backend/agent.py:804-813`), because one cell spent 26 of its 29 shell calls on refused
   repeats and ended with nothing written.
 - **The uncapped retry** re-asks a round this harness's own output ceiling destroyed, so thinking is never
   billed as waste, and that one is not part of the delivery switch.

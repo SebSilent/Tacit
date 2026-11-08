@@ -438,6 +438,102 @@ class TestMcpUnpinAll(Isolated):
         self.assertEqual(res["unpinned"], 3)
 
 
+# ── 6d. the set the model is actually handed ───────────────────────────────
+class TestMcpOfferedToTheAgent(Isolated):
+    """`tools_for` is the list of names a model can call this turn.
+
+    Everything above tests the registry's own views of itself. The registry can
+    report an empty `active_tools()` and the agent can still be handed the tool,
+    because `tools_for` appends the MCP schemas *after* it has applied its own
+    filters (agent.py:952 sits below the readonly pass at agent.py:900). So the
+    on/off switch, the read-only contract and the per-server boundary each have to
+    hold at that seam, not merely inside the registry.
+    """
+
+    def _server(self, sid, tools, **kw):
+        res = mcp_registry.add_server({"id": sid, "command": "echo", "enabled": True, **kw})
+        self.assertTrue(res["ok"], res)
+        data = mcp_registry.load()
+        data["servers"][sid]["tools"] = [{"name": n, "description": d} for n, d in tools]
+        mcp_registry.save(data)
+        return sid
+
+    def _offered(self, **kw):
+        return [t["function"]["name"] for t in agent.tools_for(**kw)]
+
+    def _mcp_offered(self, **kw):
+        return sorted(n for n in self._offered(**kw) if n.startswith("mcp__"))
+
+    def test_a_toggled_off_server_contributes_no_tools_to_the_agent(self):
+        a = self._server("alpha", [("read_thing", "Reads a thing")], pinned=["read_thing"])
+        self._server("beta", [("write_thing", "Writes a thing")], pinned=["write_thing"])
+        self.assertEqual(self._mcp_offered(),
+                         ["mcp__alpha__read_thing", "mcp__beta__write_thing"])
+        mcp_registry.update_server(a, {"enabled": False})
+        self.assertEqual(self._mcp_offered(), ["mcp__beta__write_thing"],
+                         "the switch took one server off the offered set, or took none")
+
+    def test_the_off_switch_does_not_empty_the_helpers_it_still_owes(self):
+        """`mcp_list_servers` and `mcp_search_tools` are how the model finds out a
+        server exists at all; switching one off must not hide the others."""
+        a = self._server("alpha", [("read_thing", "Reads a thing")], pinned=["read_thing"])
+        mcp_registry.update_server(a, {"enabled": False})
+        names = self._offered()
+        for helper in ("mcp_list_servers", "mcp_search_tools"):
+            self.assertIn(helper, names, f"{helper} vanished with the server")
+
+    def test_discovered_but_inactive_stays_out_of_the_offered_set(self):
+        self._server("alpha", [("read_thing", "Reads a thing")])
+        self.assertEqual(self._mcp_offered(), [],
+                         "a cached schema with nothing activated or pinned still cost tokens")
+
+    def test_discovered_tools_stay_grouped_under_their_server(self):
+        """Two servers may ship the same tool name. The registry row has to say
+        whose it is, or the panel and the call route cannot tell them apart."""
+        self._server("alpha", [("echo", "alpha's echo"), ("other", "alpha's other")])
+        self._server("beta", [("echo", "beta's echo")])
+        rows = mcp_registry.all_tools()
+        groups = {}
+        for row in rows:
+            groups.setdefault(row["server_id"], []).append(row["key"])
+        self.assertEqual(groups, {
+            "alpha": ["alpha:echo", "alpha:other"],
+            "beta": ["beta:echo"],
+        }, "the rows a person sees as one list are not the rows they belong to")
+        for row in rows:
+            self.assertEqual(row["key"], f"{row['server_id']}:{row['name']}")
+            self.assertTrue(row["fn_name"].startswith("mcp__"), row["fn_name"])
+        # And the grouping survives activation: one server's key cannot arm the other.
+        out = mcp_registry.activate(["beta:echo"], 2)
+        self.assertEqual(out["activated"], ["beta:echo"])
+        self.assertEqual([e["key"] for e in mcp_registry.active_tools()], ["beta:echo"])
+
+    def test_a_read_only_agent_is_offered_no_direct_mcp_tool(self):
+        """Read-only is a promise about side effects, and an MCP tool's side effect
+        lives outside this machine, where no filter here can see it."""
+        self._server("alpha", [("read_thing", "Reads a thing")], pinned=["read_thing"])
+        self.assertEqual(self._mcp_offered(readonly=True), [],
+                         "a read-only sub-agent was handed an external tool it cannot police")
+
+    def test_a_read_only_agent_cannot_call_one_it_remembers(self):
+        """Hiding the schema is not the guard: a model that saw the name in an
+        earlier turn can still emit it, exactly as with `mcp_call`."""
+        self._server("alpha", [("read_thing", "Reads a thing")], pinned=["read_thing"])
+        out = {}
+        list(agent.call_tool("mcp__alpha__read_thing", {}, {"readonly": True}, out))
+        self.assertTrue(str(out["result"]).startswith("ERROR:"), out.get("result"))
+        self.assertIn("read-only", out["result"])
+
+    def test_the_read_only_still_offers_the_tools_it_can_answer_with(self):
+        """Blocking the call must not cost the sub-agent its ability to report what
+        is connected, which is what the two read-only helpers are for."""
+        self._server("alpha", [("read_thing", "Reads a thing")], pinned=["read_thing"])
+        names = self._offered(readonly=True)
+        self.assertIn("mcp_list_servers", names)
+        self.assertIn("mcp_search_tools", names)
+        self.assertNotIn("mcp_call", names)
+
+
 # ── 7-8. Durable memory ────────────────────────────────────────────────────
 class TestMemoryStore(Isolated):
     def test_crud_and_token_estimate(self):
@@ -3675,6 +3771,32 @@ class TestMcpPaneWiring(unittest.TestCase):
         # The demo is a separate shell that lists every app script by hand. A panel
         # that works in the app and not in the demo is a panel nobody can try.
         self.assertIn('/static/mcp.js', self._read("scripts/demo_shell.py"))
+
+    def test_a_tool_is_drawn_inside_the_server_that_owns_it(self):
+        """The Settings tab used to render one flat list of every discovered tool
+        under a `Discovered tools` heading, each row wearing a `server_id` badge.
+        With two servers that reads as a single pool: the pin, the token cost and
+        the switch all belong to a (server, tool) pair, and the list showed the
+        name as if it were the thing you were pinning.
+
+        The Python cannot see this. It hands the same rows to either shape, and
+        both render without an error.
+        """
+        plat = self._read("static/platform.js")
+        self.assertIn("t.server_id === sid", plat,
+                      "nothing groups the rows by server any more")
+        start = plat.index("const serverCard")
+        card = plat[start:plat.index("panel.innerHTML", start)]
+        self.assertIn("toolsOf(s.id)", card, "the card does not pick its own tools")
+        self.assertIn("ts.map(toolRow)", card,
+                      "the card's tools are rendered outside the card")
+        self.assertIn('data-server="${esc(t.server_id)}"', plat,
+                      "a row cannot be checked against the card holding it")
+        # One place may draw a row, or a tool appears twice under two servers.
+        self.assertEqual(plat.count("map(toolRow)"), 1,
+                         "toolRow is mapped in more than one place")
+        self.assertNotIn("Discovered tools", plat,
+                         "the flat all-servers list is back")
 
     def test_every_state_the_backend_reports_has_a_colour(self):
         """The dot's class is the state string, interpolated at runtime, so the

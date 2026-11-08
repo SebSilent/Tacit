@@ -105,7 +105,7 @@ reproduce whole (`backend/config.py:84`, `:93`).
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:229` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
-than written out, so the sentence cannot drift away from the caps (`backend/agent.py:723-725`).
+than written out, so the sentence cannot drift away from the caps (`backend/agent.py:730-732`).
 
 ### Context and compaction
 
@@ -172,7 +172,7 @@ outright (`backend/config.py:955-960`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:17`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:701-703`), and that sentence has to be testable.
+it runs on (`backend/agent.py:708-710`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -190,7 +190,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `turnSound` | `backend/config.py:437` | on by default |
 | `alertSound` | `backend/config.py:479` | off by default |
 | `allowVersionControl` | `backend/config.py:549` | absent means the agent may not run git |
-| `disabledTools` | `backend/agent.py:895`, `backend/profiles.py:236` | tool names removed from the registry |
+| `disabledTools` | `backend/agent.py:902`, `backend/profiles.py:236` | tool names removed from the registry |
 | `archiveTool` | `backend/config.py:468` | the archive reader's switch; absent means on |
 | `projectRoots` | `backend/config.py:763` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |

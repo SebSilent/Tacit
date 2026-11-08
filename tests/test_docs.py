@@ -313,6 +313,32 @@ class TestCitationsResolve(unittest.TestCase):
                          "docs cite blank lines, which means nobody opened the "
                          "file:\n  " + "\n  ".join(sorted(set(blank))))
 
+    def test_a_table_row_cites_the_entry_it_names(self):
+        """The blank-line test above deliberately tolerates a citation that lands one
+        line off, and that tolerance is what let the tool table drift.
+
+        All 23 rows in `docs/tools.md` cited the closing line of the entry *before*
+        the one they named. Every number was non-blank, in the right file, and inside
+        the same list literal, so every guard passed while the table pointed at the
+        wrong tool on every row. A row that names a tool is a claim about that tool,
+        so the row's own first cell is the anchor here.
+        """
+        code = _read(ROOT / "backend" / "agent.py").splitlines()
+        rows = re.findall(r"^\| `([a-z_]+)` \|[^|]*\|[^|]*`backend/agent\.py:(\d+)",
+                          _read(ROOT / "docs" / "tools.md"), re.M)
+        self.assertGreaterEqual(len(rows), 20,
+                                "the tool table stopped looking like a tool table")
+        wrong = []
+        for name, line_no in rows:
+            i = int(line_no) - 1
+            landed = code[i] if 0 <= i < len(code) else ""
+            if f'_fn("{name}"' not in landed:
+                wrong.append(f"{name}: cites agent.py:{line_no}, which reads "
+                             f"'{landed.strip()[:56]}'")
+        self.assertEqual(wrong, [],
+                         "these rows point at somebody else's entry:\n  "
+                         + "\n  ".join(wrong))
+
 
 class TestLinksResolve(unittest.TestCase):
     def test_relative_links_point_at_files(self):

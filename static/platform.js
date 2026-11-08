@@ -952,7 +952,27 @@
     const servers = d.servers || [];
     const inj = d.injection || {};
 
-    const serverCard = (s) => `
+    const allTools = tools.tools || [];
+    const toolsOf = (sid) => allTools.filter((t) => t.server_id === sid);
+
+    // A tool belongs to exactly one server, so it is drawn inside that server's
+    // card and nowhere else. One flat list with a badge on each row was the old
+    // shape, and with two servers it read as if `alpha`'s tools were `beta`'s
+    // neighbours: the pin, the cost and the on/off switch all belong to the pair
+    // (server, tool), not to the tool name.
+    const toolRow = (t) => `
+      <div class="mcp-tool" data-key="${esc(t.key)}" data-server="${esc(t.server_id)}">
+        <label class="chk"><input type="checkbox" class="pin" ${t.pinned ? 'checked' : ''}
+          title="pin: put this schema in every request"></label>
+        <span class="mcp-tool-name">${esc(t.name)}</span>
+        <span class="badge danger-${esc(t.danger)}">${esc(t.danger)}</span>
+        <span class="badge">${esc(fmt(t.tokens))} tok</span>
+        <span class="mcp-tool-desc">${esc((t.description || '').slice(0, 140))}</span>
+      </div>`;
+
+    const serverCard = (s) => {
+      const ts = toolsOf(s.id);
+      return `
       <div class="card mcp-card" data-id="${esc(s.id)}">
         <div class="card-head mcp-head">
           <span class="mcp-name">${esc(s.name)}</span>
@@ -968,18 +988,14 @@
           <button class="ho-btn small" data-act="stop">Stop</button>
           <button class="ho-btn small" data-act="discover">Re-scan</button>
           <button class="ho-btn small danger" data-act="remove">Remove</button>
+          ${ts.length ? `<button class="ho-btn small" data-act="unpin_all"
+            title="drop every pin on this server in one go">Unpin all</button>` : ''}
         </div>
+        <div class="ho-section sm">Tools <span class="ho-count">${ts.length}</span></div>
+        <div class="mcp-tools">${ts.map(toolRow).join('')
+          || '<div class="ho-empty sm">Nothing discovered yet. Enable, then Re-scan.</div>'}</div>
       </div>`;
-
-    const toolRow = (t) => `
-      <div class="mcp-tool" data-key="${esc(t.key)}">
-        <label class="chk"><input type="checkbox" class="pin" ${t.pinned ? 'checked' : ''}></label>
-        <span class="mcp-tool-name">${esc(t.name)}</span>
-        <span class="badge">${esc(t.server_id)}</span>
-        <span class="badge danger-${esc(t.danger)}">${esc(t.danger)}</span>
-        <span class="badge">${esc(fmt(t.tokens))} tok</span>
-        <span class="mcp-tool-desc">${esc((t.description || '').slice(0, 140))}</span>
-      </div>`;
+    };
 
     panel.innerHTML = `
       <div class="ho-toolbar">
@@ -1006,18 +1022,12 @@
         <input class="mcp-in" id="mcpHttpUrl" placeholder="…or an HTTP endpoint (https://host/mcp)" spellcheck="false">
         <button class="ho-btn" id="mcpAddHttp">Add HTTP server</button>
       </div>
-      <div class="ho-section">Discovered tools <span class="ho-count">${(tools.tools || []).length}</span></div>
-      <div class="mcp-tools">${(tools.tools || []).map(toolRow).join('') || '<div class="ho-empty sm">Nothing discovered yet.</div>'}</div>
       <div class="ho-section">Recent activity</div>
       <div class="mcp-audit">${(audit.events || []).slice().reverse().map((e) =>
         `<div class="audit-row"><span class="audit-event">${esc(e.event)}</span>` +
         `<span class="audit-detail">${esc(e.server || '')} ${esc(e.tool || '')} ${esc(e.error || e.reason || '')}</span></div>`
       ).join('') || '<div class="ho-empty sm">No activity yet.</div>'}</div>`;
 
-    const call = async (act) => {
-      const sid = panel.querySelector('.mcp-card') && null;
-      return act();
-    };
     panel.querySelectorAll('.mcp-card').forEach((card) => {
       const id = card.dataset.id;
       card.querySelector('[data-act="toggle"]').addEventListener('click', async () => {
@@ -1048,6 +1058,15 @@
         note(`${id} removed`);
         renderMcp();
       });
+      const unpin = card.querySelector('[data-act="unpin_all"]');
+      if (unpin) {
+        unpin.addEventListener('click', async () => {
+          const r = await post(`/api/mcp/servers/${encodeURIComponent(id)}/unpin_all`);
+          note(r.ok ? `${id}: ${r.unpinned} pin(s) dropped, ${fmt(r.tokens_freed)} tokens freed`
+                    : (r.error || 'unpin_all failed'), !r.ok);
+          renderMcp();
+        });
+      }
     });
 
     panel.querySelectorAll('.mcp-tool').forEach((row) => {

@@ -665,6 +665,13 @@ def readonly_guard(name: str, args: dict) -> str:
     """
     if name in READONLY_BLOCKED:
         return f"ERROR: '{name}' is not available to a read-only caller"
+    if name.startswith("mcp__"):
+        # A direct MCP schema is `mcp_call` under another name, and `mcp_call` is
+        # already blocked above. The side effect happens on the far side of a
+        # subprocess, where nothing in this process can tell a read from a write,
+        # so the read-only caller may not make either kind of call.
+        return (f"ERROR: '{name}' is an external MCP tool; a read-only caller may "
+                "not invoke one")
     blocked = READONLY_BLOCKED_ACTIONS.get(name)
     if blocked and str((args or {}).get("action") or "").strip().lower() in blocked:
         return (f"ERROR: {name} action='{(args or {}).get('action')}' writes settings, "
@@ -948,10 +955,17 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
         rows.extend(plugin_manager.collect_tools())
     except Exception:  # noqa: BLE001
         pass
-    try:
-        rows.extend(mcp_registry.schemas_for_prompt())
-    except Exception:  # noqa: BLE001
-        pass
+    # The direct MCP schemas are appended below every filter above, so the
+    # read-only decision has to be made here rather than assumed: a pinned tool
+    # of an enabled server would otherwise be handed to a sub-agent that has been
+    # told it cannot change anything, and `call_tool` would launch the process.
+    # The two read-only helpers stay, which is why the block is filtered and not
+    # skipped.
+    if not readonly:
+        try:
+            rows.extend(mcp_registry.schemas_for_prompt())
+        except Exception:  # noqa: BLE001
+            pass
     return rows
 
 
