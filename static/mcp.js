@@ -140,7 +140,10 @@
     const row = btn.closest('.mcp-row');
     if (!row) return;
     const id = row.dataset.id;
-    if (btn.dataset.act === 'toggle') toggle(id, !row.classList.contains('off'));
+    // The row carries 'off' when the server is disabled, so the state the click
+    // should produce is exactly that class's presence. Inverting it here made every
+    // click re-assert the state the row was already in: a switch that never moved.
+    if (btn.dataset.act === 'toggle') toggle(id, row.classList.contains('off'));
     else if (btn.dataset.act === 'unpin') unpin(id);
   }
 
