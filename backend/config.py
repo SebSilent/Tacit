@@ -508,6 +508,20 @@ def turn_sound() -> bool:
     return True if v is None else bool(v)
 
 
+def report_mode() -> bool:
+    """Whether the agent writes its answer as a report the interface can fold the
+    working away from. Off by default.
+
+    A server preference rather than localStorage, because it changes what the agent
+    *sends*, not merely what one browser shows. The instruction asks for a `## Report`
+    heading and the viewer folds everything above it; a per-device switch would let one
+    tab buy an instruction another tab cannot render, and the transcript is shared. Off,
+    the standing prompt is byte-for-byte what it was and the heading, if a model writes
+    one anyway, is just a heading.
+    """
+    return bool(prefs().get("reportMode"))
+
+
 def archive_tool() -> bool:
     """Whether the agent may read a session's frozen archive. On by default.
 

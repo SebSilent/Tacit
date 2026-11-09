@@ -139,6 +139,266 @@ function paintDensity(id) {
 }
 applyDensity(density);
 
+// ── Report mode ───────────────────────────────────────────────────────────
+// A reply has two halves and the transcript has always run them together: the
+// part that answers, and the running commentary that says what it is about to
+// read next. The commentary is not wrong. It is just in the way, and because it
+// arrives in the same column of prose as the findings, the reader ends up doing
+// the separation the harness could have done - or typing "too much text, explain
+// it briefly", which is the same complaint wearing a different hat.
+//
+// With this on, an assistant reply splits at the heading the agent puts its
+// deliverable under. From that heading down is the Report, drawn as a card at the
+// top of the row. Everything above it is the Working, folded under one control
+// beside the thinking trace and the tool cards, which already had a disclosure
+// each and keep it.
+//
+// The marker is a markdown heading rather than a sentinel token, and that choice
+// is load-bearing twice over. With the mode off, `## Report` is simply a heading:
+// nothing about the stored transcript, the markdown export, or what the model
+// re-reads next turn changes at all. And a reply with no marker degrades to the
+// whole reply being the report, which is the failure direction you want, because a
+// model that ignored the instruction still has its answer on screen rather than
+// filed in a fold nobody knew to open.
+//
+// The split is a view choice, but the mode is not: asking the agent for a `## Report`
+// heading changes what it sends, and the transcript is shared by every device pointed
+// at this install. So the switch is a server preference, read at boot and written on
+// click, and only the view (which half you are looking at) stays in localStorage.
+const REPORT_HEAD =
+  /^ {0,3}(?:#{1,6}\s*)?(?:\*\*)?(report|findings|results|summary|answer)(?:\*\*)?\s*[:：]?\s*$/im;
+
+// The prompt's ceiling, quoted by the card's meter so the budget is checkable by
+// eye instead of by asking again. This number and the injected instruction are one
+// fact in two places; change it in both or the chip starts lying.
+const REPORT_BUDGET = 180;
+
+let reportMode = false;   // the server's answer arrives at boot; see loadReportMode()
+let reportView = localStorage.getItem('tacit.reportView') || 'both';
+
+function splitReply(text) {
+  if (!text) return { working: '', report: '' };
+  const m = REPORT_HEAD.exec(text);
+  // No marker: the reply is the report, and there is no commentary to fold.
+  if (!m) return { working: '', report: text.trim() };
+  return {
+    working: text.slice(0, m.index).trim(),
+    report: text.slice(m.index + m[0].length).trim(),
+  };
+}
+
+// Rough, and deliberately so: it strips markdown punctuation rather than parsing
+// the document, because the number is a budget check, not a billing figure. A
+// fenced code block counts its words, which is wrong in spirit but honest in
+// method - the alternative is silently excluding a block the reader still has to
+// read, and a meter that hides things is the defect this whole feature is about.
+function wordCount(text) {
+  // Tokens with no letter or digit in them are markdown furniture, not prose: a
+  // bullet's bare `-` was counting as a word, which put every list a report could
+  // have over a budget it had not in fact exceeded. A numbered marker still
+  // counts, because `1.` is something the reader reads.
+  return (text || '').replace(/[#*_`>|[\]()~–—-]/g, ' ')
+    .split(/\s+/).filter(w => /[A-Za-z0-9]/.test(w)).length;
+}
+
+// The split DOM, built once per assistant row while the mode is on. It holds the
+// same three parts the plain layout does, in a different order: the report first,
+// because that is what the row is for, and the working second, because it is what
+// the row got while doing it. `.msg-content` keeps its class and stays the only
+// node with that name in the row, so every selector in this file that finds the
+// prose still finds the prose.
+// DOM order is the fold first and the card second, which is the reverse of what
+// you see. It has to be that way round: every `querySelector('.msg-content')` in
+// this file means the commentary and takes the first match, and the card's body
+// carries the same class so it inherits the prose rules instead of re-declaring
+// them. `order` in style.css puts the answer on top. Do not "fix" the markup to
+// match the visual order - it would look the same and route every delta into the
+// wrong half of the reply.
+// The three parts every assistant row has always had, in the order the flat layout
+// puts them. Named once because both layouts need it: report mode moves this block
+// inside a fold and changes nothing else about it, and a second copy of the markup
+// would be a second place the transcript's shape has to be changed.
+const REASON_TOOLS_HTML = `<div class="reason-block"><button class="reason-toggle">thinking…</button><div class="reason-body"></div></div><div class="tools"></div><div class="msg-content"></div>`;
+
+const WORK_TEMPLATE = `
+  <div class="work-fold">
+    <button class="work-toggle" type="button"><span class="work-label">Working</span><span class="work-count"></span></button>
+    <div class="work-body">${REASON_TOOLS_HTML}</div>
+  </div>
+  <div class="report-card" hidden>
+    <div class="report-head">
+      <span class="report-eyebrow">Report</span>
+      <span class="report-meter"></span>
+    </div>
+    <div class="report-body msg-content"></div>
+  </div>`;
+
+// One painter for both paths. The live turn and a rebuilt transcript used to
+// assemble `.msg-content` separately, which is how a card that looked right while
+// streaming looked wrong after a reload; they now share this, and a fork or a
+// reload cannot disagree with the turn it just watched.
+function paintReply(el) {
+  const c = el.querySelector('.msg-content');
+  if (!c) return;
+  const raw = c._raw || '';
+  if (!reportMode) { c.innerHTML = md(raw); return; }
+  const parts = splitReply(raw);
+  c.innerHTML = md(parts.working);
+  const card = el.querySelector('.report-card');
+  if (!card) return;
+  const body = card.querySelector('.report-body');
+  if (!parts.report) {
+    card.hidden = true;
+    // Its own line, and not tidiness: the escaping audit reads any `innerHTML` on a
+    // line that also names a payload as a sink that bypassed `md()`. A write of the
+    // empty string is not that, and sharing a line with `parts.report` made the guard
+    // claim model text reached innerHTML unescaped.
+    body.innerHTML = '';
+    paintWorkCount(el);
+    return;
+  }
+  body.innerHTML = md(parts.report);
+  card.hidden = false;
+  const n = wordCount(parts.report);
+  const over = n > REPORT_BUDGET;
+  card.classList.toggle('over', over);
+  const meter = card.querySelector('.report-meter');
+  meter.textContent = over ? `${n} / ${REPORT_BUDGET} words` : `${n} words`;
+  meter.title = over
+    ? `${n} words against a ${REPORT_BUDGET}-word budget: this report is longer than the prompt asked for`
+    : `${n} words, within the ${REPORT_BUDGET}-word budget the prompt sets`;
+  paintWorkCount(el);
+}
+
+// The fold's label carries the counts, so "how much did I skip" is answerable
+// without opening it. A fold that hides an unknown quantity is just a hidden
+// message with extra steps.
+function paintWorkCount(el) {
+  const fold = el.querySelector('.work-fold');
+  if (!fold) return;
+  const c = fold.querySelector('.msg-content');
+  const notes = splitReply(c ? c._raw || '' : '').working
+    .split(/\n\s*\n/).filter(p => p.trim()).length;
+  const calls = fold.querySelectorAll('.tool-card').length;
+  const bits = [];
+  if (notes) bits.push(notes === 1 ? '1 note' : `${notes} notes`);
+  if (calls) bits.push(calls === 1 ? '1 call' : `${calls} calls`);
+  if (fold.querySelector('.reason-block')) bits.push('thinking');
+  fold.querySelector('.work-count').textContent = bits.join(' · ');
+}
+
+// Open the fold on a row that is currently running. Called wherever a bubble
+// becomes this turn's card, including the two paths that adopt a row a turn was
+// already writing into before this window arrived - a viewer that reconnects
+// mid-turn would otherwise watch a turn stream into a closed box.
+function openWork(body) {
+  const fold = body && body.querySelector && body.querySelector('.work-fold');
+  if (fold) fold.classList.add('open');
+}
+
+// The other half of `openWork`, and the reason it is a function rather than two
+// lines inside `endStream`: a turn has two ways to finish, and they are not
+// interchangeable. The protocol reports its own ending as
+// `state_delta {busy:false}` followed by `done`, and the busy branch runs
+// `endStreamQuiet()`, which releases `streaming` before `done` is ever read. A
+// collapse that lived only in `endStream` therefore never fires on a well-behaved
+// turn - which is exactly what it looked like doing, because the replayed turn is
+// well behaved. Both paths call this, so the fold closes on the ending that
+// arrives, whatever it is called.
+function closeWork(body) {
+  const fold = body && body.querySelector('.work-fold');
+  if (!fold) return;
+  // A fold someone opened by hand stays open. The automatic collapse is a guess
+  // about what the reader still needs, and they overrode it when they clicked it.
+  if (fold.dataset.manual !== '1') fold.classList.remove('open');
+  paintWorkCount(body);
+}
+
+function applyReportMode(on, opts) {
+  reportMode = !!on;
+  paintReportView();
+  // Rebuild rather than restyle: the two layouts are different DOM, not the same
+  // DOM with a class flipped, and a row that was built flat cannot gain a card.
+  const s = cur();
+  if (s) renderTranscript(s, false);
+  if (!opts || !opts.persist) return;
+  // The switch changed the machine's preference, so the answer is the server's and
+  // not this tab's: re-read it and correct the row if they disagree. A write that
+  // silently did not land would leave the transcript folding around a heading no
+  // model was ever told to emit.
+  fetch('/api/harness/report_mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ report_mode: reportMode }),
+  }).then((r) => (r && r.ok ? r.json() : null))
+    .then((d) => {
+      if (d && typeof d.report_mode === 'boolean' && d.report_mode !== reportMode) {
+        applyReportMode(d.report_mode);
+      }
+    })
+    .catch(() => { /* offline: the next read corrects it */ });
+}
+
+// Read once at boot. The transcript is painted flat and rebuilt when the answer
+// says on, which costs one extra render on the rare session that has the mode, and
+// buys back the far worse alternative: blocking first paint on a fetch to settle a
+// layout decision that is off for nearly everyone.
+function loadReportMode() {
+  fetch('/api/harness/report_mode')
+    .then((r) => (r && r.ok ? r.json() : null))
+    .then((d) => { if (d && !!d.report_mode !== reportMode) applyReportMode(!!d.report_mode); })
+    .catch(() => { /* no answer: flat is the shape that needs nothing from the model */ });
+}
+
+function applyReportView(v) {
+  reportView = (v === 'report' || v === 'working') ? v : 'both';
+  try { localStorage.setItem('tacit.reportView', reportView); } catch (e) { /* private mode */ }
+  paintReportView();
+}
+
+// Which of the two halves is on screen is CSS's job, not a second renderer: the
+// row always carries both, and this attribute decides which one you are shown.
+function paintReportView() {
+  const root = document.documentElement;
+  if (reportMode) root.dataset.report = reportView;
+  else delete root.dataset.report;
+  const seg = document.getElementById('viewSeg');
+  if (!seg) return;
+  seg.hidden = !reportMode;
+  seg.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.view === reportView));
+}
+
+// consumed by the harness "Appearance" panel and by the top bar's view control
+window.TacitReport = {
+  enabled: () => reportMode,
+  view: () => reportView,
+  budget: REPORT_BUDGET,
+  setEnabled: applyReportMode,
+  setView: applyReportView,
+};
+
+{
+  const seg = document.getElementById('viewSeg');
+  if (seg) seg.addEventListener('click', e => {
+    const b = e.target.closest('button[data-view]');
+    if (b) applyReportView(b.dataset.view);
+  });
+}
+// `?view=` picks which half you are looking at, and nothing more. It is deliberately
+// not a way to turn the mode on: the mode is the server's answer about what the agent
+// was told, and a URL that folded the working of a session whose model never asked
+// to write a report would show a card built out of a paragraph.
+{
+  const q = new URLSearchParams(location.search);
+  if (q.has('view')) reportView = q.get('view') || reportView;
+}
+// The first paint: the attribute has to be on the document before the stylesheet
+// gets a chance to matter, or the first transcript of a session renders in the
+// wrong view and corrects itself a frame later.
+paintReportView();
+loadReportMode();
+
 function applyTheme(id) {
   if (!THEMES.some(t => t.id === id)) return;
   theme = id;
@@ -754,6 +1014,7 @@ function resumeLiveStream() {
     // all; re-arming it is what keeps a reconnect from splitting one answer
     // across two bubbles.
     streaming = { msg: held.msg, el: held.el.querySelector('.msg-body-inner') };
+    openWork(streaming.el);
     setBusy(true);
     return;
   }
@@ -764,6 +1025,7 @@ function resumeLiveStream() {
   const body = setOpenCard(s, row,
     appendMsg('assistant', '', null, row.ts, s.messages.indexOf(row)));
   streaming = { msg: row, el: body };
+  openWork(body);
   setBusy(true);
 }
 
@@ -1170,6 +1432,10 @@ function send(text) {
 
   appendMsg('user', text, null, sent, at - 1);
   const el = appendMsg('assistant', '', null, sent, at);
+  // Work is visible while it is happening and folded once it is not. A turn you
+  // cannot see running looks hung, which is the opposite failure from the one this
+  // mode exists to fix, so the fold starts open and `endStream` closes it.
+  openWork(el);
   streaming = { msg: s.messages[s.messages.length - 1], el };
   // This bubble is this turn's card. Recorded here so a busy signal that
   // arrives after a stale idle report re-arms it rather than opening a second
@@ -1351,9 +1617,14 @@ function endStream() {
   if (streaming) {
     // flush any unthrottled tail content (rAF may still be pending)
     const cc = streaming.el.querySelector('.msg-content');
-    if (cc && cc._dirty) { cc._dirty = false; cc.innerHTML = md(cc._raw || ''); }
+    if (cc && cc._dirty) { cc._dirty = false; paintReply(streaming.el); }
     const el = streaming.el.closest('.msg');
     if (el) el.classList.remove('streaming');
+    // The turn is finished, so the working has nothing left to show and the report
+    // is the only thing that should still be occupying the screen. This is the
+    // whole point of the mode, and it is the one moment that makes it a view
+    // rather than a second copy of the same text.
+    closeWork(streaming.el);
     const blk = streaming.el.querySelector('.reason-block');
     if (blk) {
       if (streaming.msg.reason) {
@@ -1366,7 +1637,7 @@ function endStream() {
     if (!streaming.msg.content && !streaming.msg.tools.length) {
       streaming.msg.content = '(empty response)';
       const c = streaming.el.querySelector('.msg-content');
-      if (c) c.innerHTML = md('(empty response)');
+      if (c) { c._raw = '(empty response)'; paintReply(streaming.el); }
     }
   }
   streaming = null;
@@ -1503,7 +1774,8 @@ function appendMsg(role, text, origin, ts, msgi) {
     </div>`;
   const body = wrap.querySelector('.msg-body-inner');
   if (role === 'assistant') {
-    body.innerHTML = `<div class="reason-block"><button class="reason-toggle">thinking…</button><div class="reason-body"></div></div><div class="tools"></div><div class="msg-content"></div>`;
+    body.innerHTML = reportMode ? WORK_TEMPLATE : REASON_TOOLS_HTML;
+    if (reportMode) wrap.classList.add('split');
     // No listener on .reason-toggle: one delegated click handler on messagesEl
     // routes the whole transcript (see `// delegated` below). A listener per row
     // is a listener per message, forever, on the one surface that grows without
@@ -1542,7 +1814,10 @@ function scheduleStreamPaint() {
     streamRaf = 0;
     if (streaming) {
       const c = streaming.el.querySelector('.msg-content');
-      if (c && c._dirty) { c._dirty = false; c.innerHTML = md(c._raw || ''); }
+      // paintReply, not `md(raw)` into the one node: while the mode is on the raw
+      // text is two channels, and the split has to be re-taken on every frame
+      // because the marker itself may be the thing that just arrived.
+      if (c && c._dirty) { c._dirty = false; paintReply(streaming.el); }
     }
     if (stickToBottom) { messagesEl.scrollTop = messagesEl.scrollHeight; if (jumpBtn) jumpBtn.hidden = true; }
     else if (jumpBtn) jumpBtn.hidden = false;
@@ -1588,6 +1863,7 @@ function addToolCard(m) {
   const atEnd = tools.scrollHeight - tools.scrollTop - tools.clientHeight < 40;
   tools.appendChild(card);
   if (atEnd) tools.scrollTop = tools.scrollHeight;
+  paintWorkCount(streaming.el);   // the fold's count moves as the calls land
   scrollBottom();
 }
 
@@ -1780,11 +2056,10 @@ function renderTranscript(s, midTurn) {
     // row was written, which is when the turn started, not when it finished.
     const body = appendMsg(g.role, g.role === 'assistant' ? '' : (head.content || ''), head.origin, head.ts, g.at);
     if (g.role !== 'assistant') continue;
-    if (text) {
-      const c = body.querySelector('.msg-content');
-      c._raw = text;
-      c.innerHTML = md(text);
-    }
+    // The same painter the live turn uses, so a reload of a turn cannot render it
+    // differently from the way it rendered while it was arriving.
+    body.querySelector('.msg-content')._raw = text;
+    paintReply(body);
     const reason = g.parts.map(p => p.reason || '').filter(Boolean).join('\n\n');
     const blk = body.querySelector('.reason-block');
     if (reason) {
@@ -1818,6 +2093,7 @@ function renderTranscript(s, midTurn) {
         railSum(tools);
       }
     }
+    paintWorkCount(body);
     // A step that ran tools and said nothing is real work, but a group with
     // nothing at all in it is noise left behind by an interrupted turn.
     if (!text && !reason && !g.parts.some(p => (p.tools || []).length)) body.closest('.msg').remove();
@@ -2026,6 +2302,14 @@ function endStreamQuiet() {
     // is re-armed when the busy signal arrives.
     const m = openCard && openCard.msg;
     if (m && (m.content || m.reason || (m.tools || []).length)) openCard = null;
+    // The fold-close `endStream` also runs, and for the same reason: on a turn that
+    // reports its own ending this is the path that actually executes. Guarded by
+    // the row having said something, because an empty held card is a send still in
+    // flight and folding it would hide the work arriving a moment later.
+    const mine = streaming.msg;
+    if (mine && (mine.content || mine.reason || (mine.tools || []).length)) {
+      closeWork(streaming.el);
+    }
     streaming = null;
   }
   setBusy(false);
@@ -2177,6 +2461,16 @@ messagesEl.addEventListener('click', e => {
     navigator.clipboard.writeText(code).then(() => {
       btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1500);
     });
+    return;
+  }
+  const work = e.target.closest('.work-toggle');
+  if (work) {
+    const fold = work.closest('.work-fold');
+    fold.classList.toggle('open');
+    // A fold someone opened by hand stays open when the turn ends. The automatic
+    // collapse at `done` is a guess about what they still need, and they just
+    // overrode it.
+    fold.dataset.manual = '1';
     return;
   }
   const toggle = e.target.closest('.reason-toggle');

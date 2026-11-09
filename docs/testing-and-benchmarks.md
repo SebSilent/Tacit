@@ -21,7 +21,7 @@ from it, so tests that believed they were isolated wrote fixture sessions into t
 deliberately excluded, because tests must be able to read those (`:14-15`).
 
 Redirecting a path works because the store re-reads it on every call rather than caching it at import
-(`backend/store.py:9-17`, `backend/config.py:769-774`). A test that redirected `WORKSPACES_DIR` had to
+(`backend/store.py:9-17`, `backend/config.py:783-788`). A test that redirected `WORKSPACES_DIR` had to
 actually redirect it.
 
 ## What the suite holds down

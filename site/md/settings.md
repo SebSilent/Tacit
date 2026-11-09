@@ -7,7 +7,7 @@ Nine tabs, four of them visible until you ask for the rest. Every one of them wr
 | **General** | Profile selector, project roots, permissions, the fallback model, the Interface section with both sound switches, their audition button and transcript density, server, updater, Restart server | `prefs.json`, `.env`, and this browser's `localStorage` for density (`static/app.js:115-122`) |
 | **Providers** | Endpoints, keys, per-model capabilities | `models.json`, `.env` |
 | **Skills & Tools** | Skills, knowledge, the tool list with a cost figure per tool | `~/.tacit/skills/`, `~/.tacit/knowledge/`, `prefs.json` |
-| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones | this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`) |
+| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones; Report mode, with the view control beside it | theme in this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`); Report mode in `prefs.json` (`backend/config.py:511`), because it changes what the agent is told |
 | **Capabilities** | Sandbox backend, container image, PID ceiling, turn timeout | `capabilities.json` |
 | **Learning** | The mode selector, the proposal queue, the analyzer | `learning.json` (`backend/config.py:65`) |
 | **MCP** | Servers, allow and deny lists, Direct MCP, the audit log | `~/.tacit/mcp.json`, `mcp_audit.jsonl` |
@@ -108,6 +108,14 @@ Each plugin shows what it contributes and what that costs, enabled or not. A plu
 
 ## Appearance
 
-Theme and transcript density. Density changes how much of a tool result sits in the transcript before you expand it; it does not change what the agent sees.
+Theme, transcript density and Report mode. Density changes how much of a tool result sits in the transcript before you expand it; it does not change what the agent sees.
+
+Report mode does change what the agent sees, which is why it is the only switch on this
+page stored on the server rather than in this browser. Off, the standing prompt is the
+figure the README publishes. On, it gains 220 characters asking for the answer under a
+heading reading `## Report`, and the transcript splits each reply at that heading: the
+answer in a card that counts its words against a 180-word ceiling, the running commentary
+folded beneath it with its counts showing. A reply with no such heading is shown whole,
+so a model that ignored the instruction still arrives readable.
 
 Next: [every knob, with its default](configuration.md).

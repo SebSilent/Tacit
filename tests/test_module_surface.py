@@ -51,7 +51,7 @@ JS = {p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC.glob("*.js"))
 
 NAMESPACES = ["Tacit", "TacitTheme", "TacitAssistant", "TacitDelegation",
               "TacitGit", "TacitHarness", "TacitMcp", "TacitPlatform",
-              "TacitTransport", "TacitMarkdown"]
+              "TacitTransport", "TacitMarkdown", "TacitReport"]
 
 # The surface as measured on 2026-10-13. Pinned so a dropped or renamed member is a
 # reviewed change rather than a panel that quietly stops responding.
@@ -80,6 +80,10 @@ EXPECTED_EXPORTS = {
     # The top-bar MCP panel. `open` exists so another surface (a keyboard shortcut,
     # a link from a warning) can bring the panel up; `load` re-reads server state.
     "TacitMcp": {"load", "open"},
+    # Report mode. `budget` is a number rather than a function on purpose: the word
+    # ceiling the card measures against is the same fact the standing prompt states,
+    # and a panel that hardcodes its own copy of it is a second number to drift.
+    "TacitReport": {"enabled", "view", "budget", "setEnabled", "setView"},
 }
 
 EXPECTED_READS = {
@@ -110,6 +114,11 @@ EXPECTED_READS = {
     # renderer owns no snapshot UI of its own, so the row asks the overlay to open
     # itself on one card. Both names are read across files, which is the point.
     "TacitPlatform": {"openSnapshot", "openTab", "render"},
+    # Report mode is read entirely from the Appearance panel, which is its only
+    # consumer: the switch, the view control, the word ceiling printed in the row's
+    # own text, and the two writes. The transcript does not read it; app.js owns both
+    # the state and the painting, so there is no second file to keep in step.
+    "TacitReport": {"budget", "enabled", "setEnabled", "setView", "view"},
 }
 
 

@@ -12,7 +12,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 
 <title>Tacit</title>
-<link rel="stylesheet" href="/static/style.css?v=38">
+<link rel="stylesheet" href="/static/style.css?v=39">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%237c6cf0' d='M8 4 2 12l6 8 1.6-1.2L4.8 12l4.8-6.8zm8 0-1.6 1.2 4.8 6.8-4.8 6.8L16 20l6-8z'/></svg>">
 </head>
 <body>
@@ -52,6 +52,14 @@
       </button>
       <div class="top-title" id="topTitle">New session</div>
       <div class="top-meta" id="topMeta"></div>
+      <!-- Report mode's view control. Present only while the mode is on, and it
+           changes which half of a reply you are looking at, not what was stored:
+           every row always carries both halves in the DOM. -->
+      <div class="seg view-seg" id="viewSeg" hidden title="Report mode: what each reply shows">
+        <button data-view="report">Report</button>
+        <button data-view="both">Both</button>
+        <button data-view="working">Working</button>
+      </div>
       <div class="wd-wrap">
         <button class="wd-chip" id="wdChip" title="Workspace">
           <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg>
@@ -390,9 +398,9 @@
 </div>
 <script src="/static/transport.js?v=46"></script>
   <script src="/static/markdown.js?v=2"></script>
-  <script src="/static/app.js?v=49"></script>
+  <script src="/static/app.js?v=50"></script>
 <script src="/static/git.js?v=15"></script>
-<script src="/static/harness.js?v=22"></script>
+<script src="/static/harness.js?v=23"></script>
 <script src="/static/platform.js?v=22"></script>
 <script src="/static/assistant.js?v=11"></script>
 <script src="/static/delegation.js?v=2"></script>

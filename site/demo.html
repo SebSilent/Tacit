@@ -75,6 +75,14 @@
       </button>
       <div class="top-title" id="topTitle">New session</div>
       <div class="top-meta" id="topMeta"></div>
+      <!-- Report mode's view control. Present only while the mode is on, and it
+           changes which half of a reply you are looking at, not what was stored:
+           every row always carries both halves in the DOM. -->
+      <div class="seg view-seg" id="viewSeg" hidden title="Report mode: what each reply shows">
+        <button data-view="report">Report</button>
+        <button data-view="both">Both</button>
+        <button data-view="working">Working</button>
+      </div>
       <div class="wd-wrap">
         <button class="wd-chip" id="wdChip" title="Workspace">
           <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg>

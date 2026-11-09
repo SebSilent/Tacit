@@ -5428,6 +5428,175 @@ input, textarea, .ctl-select, .as-input, .rename-input, .mcp-in {
 }
 
 
+/* ═══════════════════════════ REPORT MODE ═══════════════════════════
+   Two channels in one reply: the part that answers, and the part that says what
+   it is about to read next. app.js splits them at the heading the agent puts its
+   deliverable under; this section decides what you are shown.
+
+   There is deliberately no second set of prose rules here. The report body
+   carries `.msg-content`, so it inherits the measure, the heading ladder, the
+   table chrome and the code block from the rules above rather than re-declaring
+   them - a report with its own type would be a second 72ch to keep in step, and
+   the two would drift exactly the way the tool card's two builders did. */
+
+/* The row becomes a column, and the card is ordered above the fold instead of
+   placed there in the markup. DOM order is the fold first, because every query in
+   app.js that asks for `.msg-content` means the commentary and takes the first
+   match; `order` is what puts the answer on top without breaking that. Reordering
+   WORK_TEMPLATE to match the visual order would look identical on screen and route
+   every streamed delta into the wrong half. */
+.msg.split .msg-body-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.msg.split .work-fold { order: 2; }
+.msg.split .report-card { order: 1; }
+
+/* The card. No accent stripe: craft-floor.md bans a 2px accent border on a
+   callout, and the reasoning body above already gets its separation from
+   indentation and type rather than from a coloured edge. So the report earns
+   prominence the way a document does - surface, a label, a rule under the head -
+   and not by borrowing a colour that means something else everywhere else. */
+.report-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--rd-4);
+  padding: var(--sp-6) var(--sp-9) var(--sp-8);
+  margin-bottom: var(--sp-6);
+  transition: background-color var(--dur-3) var(--ease-soft),
+              border-color var(--dur-3) var(--ease-soft);
+}
+.report-card[hidden] { display: none; }
+.report-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  padding-bottom: var(--sp-4);
+  margin-bottom: var(--sp-6);
+  border-bottom: 1px solid var(--line);
+}
+.report-eyebrow {
+  font-size: var(--fs-2);
+  font-weight: 700;
+  letter-spacing: var(--tr-4);
+  text-transform: uppercase;
+  color: var(--accent);
+}
+/* The budget, on the page. The prompt says "brief"; a word that nobody can see is
+   a word that gets argued with. Mono and tabular because it is a measurement, and
+   it borrows the clock's rung rather than inventing one. */
+.report-meter {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  letter-spacing: var(--tr-2);
+  text-transform: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.report-card.over { border-color: rgba(var(--warn-rgb), .5); }
+.report-card.over .report-meter { color: var(--warn); }
+.report-body > *:first-child { margin-top: 0; }
+.report-body > *:last-child { margin-bottom: 0; }
+
+/* The fold. Same pill language as `.reason-toggle`, on purpose: this is the same
+   kind of thing - a disclosure over work that is real but is not the point, and a
+   second visual vocabulary for it would make the transcript look like two features
+   that had not been introduced to each other. */
+.work-fold { width: 100%; }
+.work-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-5);
+  font-size: var(--fs-3);
+  color: var(--muted);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: var(--sp-3) var(--sp-7);
+  transition: background-color var(--dur-2) var(--ease-out),
+              border-color var(--dur-2) var(--ease-out),
+              color var(--dur-2) var(--ease-out);
+}
+.work-toggle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.work-fold.open .work-toggle::before { background: var(--accent-2); }
+.work-toggle:hover { color: var(--text); border-color: var(--line-2); }
+/* The counts ride on the closed control, so "how much am I skipping" is answerable
+   without skipping it. A fold whose size is unknown is just a hidden message with
+   extra steps. */
+.work-count {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  letter-spacing: var(--tr-2);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Indentation carries the containment, the way the reasoning body does it. The
+   hairline is --line and not --accent: it separates, it does not mean. */
+.work-body {
+  display: none;
+  width: 100%;
+  box-sizing: border-box;
+  margin: var(--sp-5) 0 0 var(--sp-9);
+  padding-left: var(--sp-7);
+  border-left: 1px solid var(--line);
+}
+.work-fold.open .work-body { display: block; }
+/* The tool pile already sums itself inside the fold. Two lines under one
+   disclosure saying how many calls there were is the duplication this feature is
+   meant to be reducing, not producing. */
+.work-body .rail-sum { display: none; }
+
+/* ── the three views ─────────────────────────────────────────────────────
+   Which half you are looking at is one attribute on <html> and a handful of
+   overrides, not a second renderer: every row always carries both channels in the
+   DOM, so switching views cannot lose anything and cannot re-fetch anything. */
+
+/* Report only. The working stays in the transcript and off the screen. */
+html[data-report="report"] .work-fold { display: none; }
+
+/* Working: today's reading order - the thinking, the calls, then the prose - with
+   the card demoted back into that prose and the fold opened. This is the escape
+   hatch, and it is why turning the mode on is not a bet: if a reply ever splits
+   somewhere unhelpful, this view is the old interface, not a worse one. */
+html[data-report="working"] .work-fold { order: 1; }
+html[data-report="working"] .report-card {
+  order: 2;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: 0;
+}
+html[data-report="working"] .report-head { display: none; }
+html[data-report="working"] .work-toggle { display: none; }
+html[data-report="working"] .work-body {
+  display: block;
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+/* The top bar's control. `.seg` sets `display: flex` at author level, which beats
+   the UA's `[hidden]`, so the attribute alone would not hide it - the rule the
+   sidebar's own mode control never needed because it is never hidden. */
+.view-seg { flex: none; width: auto; margin: 0; }
+.view-seg[hidden] { display: none; }
+.view-seg button { flex: none; padding: var(--sp-3) var(--sp-6); font-size: var(--fs-2); }
+
+
 /* ── reduced motion ───────────────────────────────────────────────────────
    the deleted plan, item 5: "Respect prefers-reduced-motion: every animation has an off
    state." One blanket rule at the end, rather than a `@media` bolted onto each

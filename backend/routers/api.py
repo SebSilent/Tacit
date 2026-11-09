@@ -1010,6 +1010,23 @@ async def set_sound(request: Request):
     return _ok(turn_sound=config.turn_sound(), alert_sound=config.alert_sound())
 
 
+@router.get("/api/harness/report_mode")
+async def get_report_mode():
+    """Report mode: the switch that asks the agent for an answer the interface can
+    fold the working away from. Off by default."""
+    return _ok(report_mode=config.report_mode())
+
+
+@router.post("/api/harness/report_mode")
+async def set_report_mode(request: Request):
+    body = await request.json()
+    # Written only if it arrived, the same guard the sound pair uses: a handler that
+    # defaulted a missing key would flip the switch on any request that did not name it.
+    if "report_mode" in body:
+        config.save_prefs({"reportMode": bool(body.get("report_mode"))})
+    return _ok(report_mode=config.report_mode())
+
+
 @router.get("/api/tools")
 async def get_tools():
     from .. import agent as agent_mod

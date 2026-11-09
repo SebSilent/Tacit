@@ -90,8 +90,13 @@ _LITERAL = re.compile(r"`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"
 # sinks unexamined**: deleting `md()` from `c.innerHTML = md(text)` passed the guard.
 # Widening is free; measured 2026-10-13, the wider list matches 4 live sink lines and
 # 0 non-md() lines, so it adds coverage without inventing false positives.
+# `raw` and `parts.` joined when the four re-render sinks became one painter:
+# `paintReply()` holds the streaming buffer in `raw` and the two channels of a split
+# reply in `parts`, so those are the names carrying agent text now. Without them the
+# sinks fall out of this pattern's view while still writing innerHTML, which is the
+# exact vacuity the anti-vacuity test below exists to catch.
 _PAYLOAD = re.compile(r"\b(?:m|t)\.result\b|\.reason\b|\.content\b|\.reasoning\b"
-                      r"|_raw\b|\btext\b")
+                      r"|_raw\b|\btext\b|\braw\b|parts\.")
 _MD_WRAPPED = re.compile(r"\.innerHTML\s*=\s*md\(")
 
 
@@ -245,10 +250,15 @@ class TheGuardHasTeeth(unittest.TestCase):
         plant is the realistic regression; the escaper deleted, the render still
         working. The first draft's pattern saw only `last.content`, so the other three
         could regress with the suite green."""
+        # The three writes inside `paintReply()`. They were four separate sinks until
+        # one painter took over: the live frame, the end-of-turn flush, the rebuilt
+        # transcript and the empty-response placeholder all assembled `.msg-content`
+        # themselves, and a card that looked right while streaming could look wrong
+        # after a reload. They are one function now, so the plants moved with them.
         plants = [
-            ("cc.innerHTML = md(cc._raw || '');", "cc.innerHTML = cc._raw || '';"),
-            ("c.innerHTML = md(c._raw || '');", "c.innerHTML = c._raw || '';"),
-            ("c.innerHTML = md(text);", "c.innerHTML = text;"),
+            ("c.innerHTML = md(raw);", "c.innerHTML = raw;"),
+            ("c.innerHTML = md(parts.working);", "c.innerHTML = parts.working;"),
+            ("body.innerHTML = md(parts.report);", "body.innerHTML = parts.report;"),
         ]
         for good, bad in plants:
             self.assertIn(good, APP, f"audited sink moved: {good!r}")
@@ -295,9 +305,12 @@ class UntrustedSinksStayOnTextContent(unittest.TestCase):
     def test_the_model_text_html_sinks_are_few_and_pinned(self):
         """Every place agent prose becomes HTML. A sixth one is a review, not a merge."""
         sites = re.findall(r"\.innerHTML = md\(", APP)
-        self.assertEqual(4, len(sites),
+        # 4 became 3 when the four re-render sinks collapsed into `paintReply()`: the
+        # flat write, the working half and the report half. One fewer place for an
+        # escaper to go missing, and the count is restated rather than left to fail.
+        self.assertEqual(3, len(sites),
                          "model text enters innerHTML through md() at "
-                         f"{len(sites)} sites; the audited number is 4")
+                         f"{len(sites)} sites; the audited number is 3")
 
 
 if __name__ == "__main__":

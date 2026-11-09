@@ -39,6 +39,15 @@ SUDO = """- Root elevation is armed on this machine. Tacit hands the saved passw
   spend steps on `sudo -v` probes, and do not report a capability withdrawn without the
   note saying so."""
 
+# Report mode's instruction. Three lines, because it buys a fold and nothing else:
+# the heading is the only new format the model has to honour, and the word ceiling is
+# the one number the card can then show the person measuring it against. Off, this
+# block is not in the prompt at all, so the standing prompt stays the figure the
+# README publishes and the cost panel re-derives.
+REPORT = """- Put the answer, and only the answer, under a heading reading exactly `## Report`:
+  enumerated, under 180 words, no restating the request. Everything above that heading is
+  the working, which the interface folds away."""
+
 PROJECT = """Working project: {project}
 
 Relative paths resolve against that directory. Treat it as the scope of this task and prefer
@@ -173,6 +182,12 @@ def system_prompt(project: str | None = None, readonly: bool = False,
     # something the shell guard would refuse, or vice versa.
     vcs = _VCS_ON if config.allow_vcs() else _VCS_OFF
     parts = [(SUBAGENT if subagent else BASE).format(platform=config.PLATFORM, vcs=vcs)]
+    # The report shape is asked for only when the interface is going to fold for it,
+    # and never of a sub-agent: its tool calls and prose never reach a transcript, only
+    # its final message reaches the parent, so a heading for a viewer that will not see
+    # it is a line paid for and never spent.
+    if config.report_mode() and not subagent and not chat:
+        parts.append(REPORT)
     if config.project_usable(project):
         parts.append(PROJECT.format(project=project))
     elif session and not chat:

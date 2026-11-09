@@ -111,6 +111,14 @@ function renderAppearancePanel() {
   const tones = [];
   T.themes.forEach(t => { if (!tones.includes(t.tone)) tones.push(t.tone); });
   const LABEL = { dark: 'Dark', light: 'Light' };
+  const R = window.TacitReport;
+  const on = R ? R.enabled() : false;
+  const view = R ? R.view() : 'both';
+  const VIEW = {
+    report: 'Only the report. The working stays in the transcript and off the screen.',
+    both: 'The report on top, the working folded under it with its counts showing.',
+    working: 'Today. No card, no fold, the whole reply in one column of prose.',
+  };
   panel.innerHTML = `
     <div class="ho-toolbar"><span class="ho-sub">Pick a look, applies instantly, stored per-browser (<code>tacit.theme</code>).</span></div>` +
     tones.map(tone => `
@@ -118,7 +126,37 @@ function renderAppearancePanel() {
       <div class="theme-group-label">${esc(LABEL[tone] || tone)}<span class="theme-group-count">${
         T.themes.filter(t => t.tone === tone).length}</span></div>
       <div class="theme-cards">${T.themes.filter(t => t.tone === tone).map(card).join('')}</div>
-    </div>`).join('');
+    </div>`).join('') + `
+    <div class="ho-section">Transcript</div>
+    <div class="tool-row ${on ? '' : 'off'}" data-perm="report-mode">
+      <span class="tool-name">Report mode</span>
+      <span class="tool-desc">Off by default. Splits an assistant reply into the part that
+        answers and the part that says what it is about to read next. The answer becomes a card
+        at the top of the row; the running commentary folds under one control beside the thinking
+        trace and the tool cards, and closes itself when the turn ends. The agent marks the split
+        with a heading, so with this off that heading is just a heading - the stored transcript,
+        the markdown export and what the model re-reads next turn are all unchanged, and a reply
+        that carries no heading degrades to the whole reply being the report rather than losing
+        it to a fold. The card counts its own words against a ${R ? R.budget : 180}-word budget
+        and turns amber when the reply goes over, so the limit is something you can read off the
+        screen instead of asking for again. With it on, every turn is also told to put its
+        answer under a heading reading <code>## Report</code>, in 220 characters of standing
+        instruction that are absent when it is off. Stored on the server, because it changes
+        what the agent sends and not only what this browser shows: every device pointed at
+        this install gets the same instruction and the same fold.</span>
+      <button class="tgl ${on ? 'on' : ''}" id="reportModeTgl" role="switch" aria-checked="${on}"
+        title="${on ? 'Disable' : 'Enable'}"><span class="tgl-knob"></span></button>
+    </div>
+    ${on ? `
+    <div class="tool-row" data-perm="report-view">
+      <span class="tool-name">What each reply shows</span>
+      <span class="tool-desc">${esc(VIEW[view] || VIEW.both)}</span>
+      <div class="seg" id="reportViewSeg">
+        <button data-view="report"${view === 'report' ? ' class="active"' : ''}>Report</button>
+        <button data-view="both"${view === 'both' ? ' class="active"' : ''}>Both</button>
+        <button data-view="working"${view === 'working' ? ' class="active"' : ''}>Working</button>
+      </div>
+    </div>` : ''}`;
   // A repaint destroys the card under the cursor, so no `pointerleave` ever fires
   // for it: drop any live preview by hand first, or the committed theme never comes
   // back and the flag claims there was never a preview.
@@ -137,6 +175,23 @@ function renderAppearancePanel() {
     // Same preview for the keyboard, or the feature is mouse-only.
     b.addEventListener('focus', () => { previewing = id; T.preview(id); });
     b.addEventListener('blur', () => { if (previewing === id) stopThemePreview(); });
+  });
+  // Report mode repaints the panel on every change, because the second row only
+  // exists while the first is on, and a row that stays on screen explaining a
+  // disabled feature is a lie about what is in force.
+  const rTgl = panel.querySelector('#reportModeTgl');
+  if (rTgl) rTgl.addEventListener('click', () => {
+    // `persist` is what makes this a machine preference rather than a mood: the
+    // handler re-reads the server's answer and corrects the row if they disagree.
+    R.setEnabled(!R.enabled(), { persist: true });
+    renderAppearancePanel();
+  });
+  const rSeg = panel.querySelector('#reportViewSeg');
+  if (rSeg) rSeg.addEventListener('click', e => {
+    const b = e.target.closest('button[data-view]');
+    if (!b) return;
+    R.setView(b.dataset.view);
+    renderAppearancePanel();
   });
 }
 

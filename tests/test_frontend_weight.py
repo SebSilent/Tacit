@@ -121,17 +121,39 @@ GZIP_BASELINE = 115_372
 # 16 KB of raw and 5.4 KB of gzip across the two features, `mcp.js` and the panel
 # markup being the bulk of it. Figures plus ~4% again: 534,000 / 144,500 for the
 # page, 560,000 / 150,500 shipped.
-RAW_BUDGET = 534_000
-GZIP_BUDGET = 144_500
-SHIPPED_RAW_BUDGET = 560_000
-SHIPPED_GZIP_BUDGET = 150_500
+# Re-measured 2026-11-09, after Report mode landed, raw / gzip: app.js 167,832 /
+# 52,081 · style.css 149,963 / 31,712 · harness.js 29,601 / 9,026 · index.html 26,020.
+# Page 543,418 / 148,188, union 569,438 / 154,066. Both gzip lines were already
+# behind before this feature: the note above recorded a page of 513,247 / 138,902,
+# and only about 25,900 B of the raw gap is Report mode (app.js +14,803, style.css
+# +7,154, harness.js +3,473, index.html +495). The rest is the drift this file keeps
+# naming - a budget that is nearly spent reads as a passing test, not as a warning.
+# Figures plus ~4%: 565,000 / 154,000 for the page, 592,000 / 160,000 shipped.
+#
+# What the bytes bought: an assistant reply now carries two channels, so the part
+# that answers sits in a card with a word meter and the running commentary folds
+# under one control that states how much it is hiding. Most of the app.js growth is
+# `paintReply()`, which replaces four separate re-render sinks with a single painter -
+# fewer places a reload can disagree with the turn it just watched.
+RAW_BUDGET = 565_000
+GZIP_BUDGET = 154_000
+SHIPPED_RAW_BUDGET = 592_000
+SHIPPED_GZIP_BUDGET = 160_000
 
 # What one delegated handler on the transcript surface is allowed to route.
 # `.msg-snap` joined this set with PLAN item 4: the undo-point control on a message.
 # Reviewed as the guard intends; it is built by appendMsg() with no listener of its
 # own, routed by the one handler, and it opens the overlay's existing compare rather
 # than growing a second snapshot surface. The set stays closed against new clickables.
-ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit", ".msg-snap"}
+#
+# `.work-toggle` joined with Report mode: the control that folds the working away.
+# Same shape as the two above it - built by appendMsg() carrying no listener, routed
+# by the one handler, and it opens a disclosure that already exists rather than
+# growing a second surface. It is also the only one of the six that a person can
+# leave open past the end of the turn, which is why the handler writes a `manual`
+# flag on the fold rather than toggling a class and walking away.
+ROUTED = {".copy-btn", ".reason-toggle", ".tool-head", ".msg-edit", ".msg-snap",
+          ".work-toggle"}
 
 # Classes a transcript row makes clickable. Each one MUST be routed by the
 # delegated handler and MUST NOT get a listener of its own.

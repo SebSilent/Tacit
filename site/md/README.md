@@ -269,7 +269,7 @@ Tacit uses the strategy the endpoint actually supports.
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row matters most: prefix caching needs no markers there, and a server that has never seen
-`cache_control` may reject the body outright. Around the rest (`backend/config.py:1018-1023`): a rejection is
+`cache_control` may reject the body outright. Around the rest (`backend/config.py:1032-1037`): a rejection is
 retried once without the markers, detected before any event streams, so nothing is half-sent and repeated;
 `TACIT_PROMPT_CACHE=off` turns marking off; and what is in force is reported with the hit rate observed.
 One measured run on an OpenAI-compatible endpoint reported **71.1%** of prompt tokens served from cache.

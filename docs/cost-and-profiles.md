@@ -12,7 +12,7 @@ The standing prompt is assembled in one function (`backend/ai/prompts.py:169`-19
 |---|---|---|
 | Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:55-62`) for a delegated run |
 | The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:165` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
-| Project scope | `backend/ai/prompts.py:42`-37`, added at `:167-168` | when the session has a usable project (`backend/config.py:703`) |
+| Project scope | `backend/ai/prompts.py:42`-37`, added at `:167-168` | when the session has a usable project (`backend/config.py:717`) |
 | Scratch-workspace notice | `backend/ai/prompts.py:48`-44`, added at `:169-174` | when there is no usable project and a session id, so the model is told where it is working |
 | Read-only or chat notice | `backend/ai/prompts.py:55`-50`, added at `:179-182` | per mode |
 | Skill index | added at `backend/ai/prompts.py:200`-195` | only when skills exist; bodies are fetched on demand by the `skill` tool |
