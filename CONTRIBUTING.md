@@ -60,11 +60,11 @@ additionally gated on the learning mode, so with learning off its thread never s
 block, no worker.
 The memory tools are removed from the registry when the mode is off, and `memory_recall` is removed
 again when the mode cannot retrieve, because a tool that can only answer "not enabled" is a dead end with
-a schema attached (`backend/agent.py:905-919`).
+a schema attached (`backend/agent.py:909`-919`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced
-(`backend/sandbox.py:581-596`). Windows has no isolation primitive in the base OS, and the correct fix for
+(`backend/sandbox.py:587`-596`). Windows has no isolation primitive in the base OS, and the correct fix for
 that is the honest note plus the opt-in container backend, not a fake
 (`backend/sandbox.py:25-27`, `backend/providers.py:82-90`).
 

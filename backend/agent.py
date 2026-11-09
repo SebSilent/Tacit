@@ -362,12 +362,16 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
                     ", ".join(names)
         for note in (res.get("notes") or [])[:2]:
             body += f"\n[{res['backend']}] {note}"
-    if sudo.uses_sudo(cmd) and not sudo.armed():
+    if sudo.mentions(cmd) and not sudo.armed() and res.get("code"):
         # The command ran as written and sudo answered it however it is configured to.
         # Saying which answer that was is the difference between the model moving on and
         # spending four steps trying to type into a terminal that has no keyboard. A
         # backend that has the switch on but does not feed it carries its own note from
         # the sandbox, so this one stays out of that case.
+        # `mentions`, not `uses_sudo`: `sh -c "sudo apt update"` has no command position to
+        # feed, and with the switch off it fails exactly as loudly as one at the front does.
+        # A non-zero code is the other half of the gate, so `grep sudo auth.log` succeeding
+        # does not get told about a password nobody asked for.
         body += ("\n[sudo] Tacit supplied no password: the switch is off, or it is on with "
                  "nothing saved. If this failed asking for one, that is why. Settings > "
                  "Tools, Sudo.")

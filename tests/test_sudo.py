@@ -218,6 +218,56 @@ class TestCommandPositions(Isolated):
         for cmd, want in self.SITES:
             self.assertEqual(len(sudo.sites(cmd)), want, cmd)
 
+    # (command, sites, of those: at the end of a pipe, inside quotes)
+    SHAPES = [
+        ("for f in a b; do sudo chmod 0 $f; done", 1, 0, 0),
+        ("if test -f /tmp/x; then sudo cp /tmp/x /etc/x; fi", 1, 0, 0),
+        ("while read -r l; do sudo tee -a /etc/hosts; done", 1, 0, 0),
+        ("case $1 in start) sudo systemctl start nginx ;; esac", 1, 0, 0),
+        ("until sudo -n true; do sleep 1; done", 1, 0, 0),
+        ("!sudo whoami", 1, 0, 0),
+        ("{ sudo whoami; }", 1, 0, 0),
+        ("id=$(sudo id -u)", 1, 0, 0),
+        ("echo `sudo whoami`", 1, 0, 0),
+        ("echo x | sudo tee /etc/hosts", 1, 1, 0),
+        ("echo x |& sudo tee /etc/hosts", 1, 1, 0),
+        ("false || sudo whoami", 1, 0, 0),
+        ("sh -c 'sudo apt update'", 0, 0, 0),
+        ('bash -c "sudo x && sudo y"', 1, 0, 1),
+    ]
+
+    def test_a_sudo_inside_shell_syntax_is_still_found(self):
+        """The reported failure, one line per shape.
+
+        `for …; do sudo …; done` and `if …; then sudo …; fi` put a sudo at a real command
+        position that the first draft did not see, because `do` and `then` were not stepped
+        over. Nothing was added to it and nothing was fed, and no note was written either,
+        since the switch was on: the model got a bare "a terminal is required to read the
+        password" and reported back that root had been withdrawn from it."""
+        for cmd, want, piped, quoted in self.SHAPES:
+            got = sudo.sites(cmd)
+            self.assertEqual(len(got), want, cmd)
+            self.assertEqual(sum(1 for s in got if s["piped"]), piped, cmd)
+            self.assertEqual(sum(1 for s in got if s["quoted"]), quoted, cmd)
+
+    def test_what_is_found_after_a_keyword_is_actually_fed(self):
+        self.arm()
+        for cmd in ("for f in a b; do sudo chmod 0 $f; done",
+                    "if test -f /tmp/x; then sudo cp /tmp/x /etc/x; fi",
+                    "case $1 in start) sudo systemctl start nginx ;; esac",
+                    "id=$(sudo id -u)"):
+            got = sudo.prepare(cmd)
+            self.assertEqual(got["fed"], 1, cmd)
+            self.assertIn("-S -p ''", got["command"], cmd)
+
+    def test_a_quoted_sudo_is_left_out_of_the_command(self):
+        """Splicing `-p ''` into a single-quoted string changes what the string says, so a
+        sudo inside quotes is never rewritten. The note says so instead."""
+        self.arm()
+        got = sudo.prepare('bash -c "sudo x && sudo y"')
+        self.assertEqual(got["fed"], 0)
+        self.assertEqual(got["command"], 'bash -c "sudo x && sudo y"')
+
     def test_an_unarmed_switch_changes_nothing(self):
         got = sudo.prepare("sudo apt-get install -y curl")
         self.assertEqual(got["command"], "sudo apt-get install -y curl")
@@ -243,9 +293,45 @@ class TestElevation(Isolated):
 
     def test_a_line_that_already_reads_stdin_is_not_told_to_twice(self):
         self.arm()
-        got = sudo.prepare("echo x | sudo -S sh")
-        self.assertEqual(got["command"], "echo x | sudo -S sh")
+        got = sudo.prepare("sudo -S sh")
+        self.assertEqual(got["command"], "sudo -S sh")
         self.assertEqual(got["fed"], 1)
+
+    def test_a_pipe_into_sudo_is_never_fed(self):
+        """The shape behind "1 incorrect password attempt" in a report.
+
+        `echo x | sudo -S tee /etc/hosts` hands sudo a stdin full of `x`. Adding `-S` there
+        makes sudo read the piped data as the password, fail once, retry, and then pass the
+        real password to tee as its input. The expectation this replaces was `fed == 1` for
+        exactly this line: the test was pinning the bug."""
+        self.arm()
+        cmd = "echo x | sudo -S tee /etc/hosts"
+        got = sudo.prepare(cmd)
+        self.assertEqual(got["command"], cmd, "nothing is added to a piped sudo")
+        self.assertEqual(got["fed"], 0)
+        self.assertEqual(got["piped"], 1)
+        self.assertFalse(got["elevated"])
+        self.assertIsNone(got["stdin"], "the secret must not be written to a pipe at all")
+
+    def test_a_pipe_into_sudo_without_the_flag_is_still_not_fed(self):
+        """Whether the sudo already carries `-S` changes nothing about who owns its stdin."""
+        self.arm()
+        got = sudo.prepare("cat list | sudo tee /etc/hosts")
+        self.assertEqual(got["fed"], 0)
+        self.assertEqual(got["piped"], 1)
+
+    def test_double_bar_is_not_a_pipe(self):
+        """`false || sudo whoami` inherits the shell's stdin and can be fed. Reading `||` as
+        a pipe would leave a plain conditional unexplained."""
+        self.arm()
+        got = sudo.prepare("false || sudo whoami")
+        self.assertEqual(got["fed"], 1)
+        self.assertEqual(got["piped"], 0)
+
+    def test_and_and_are_not_pipes(self):
+        self.arm()
+        for cmd in ("true && sudo whoami", "true ; sudo whoami", "true\nsudo whoami"):
+            self.assertEqual(sudo.prepare(cmd)["fed"], 1, cmd)
 
     def test_lowercase_s_is_a_shell_not_a_stdin_flag(self):
         """`sudo -s` asks for a shell. Reading it as `-S` would feed the password to that
@@ -269,6 +355,89 @@ class TestElevation(Isolated):
         correct password into a wrong one."""
         self.arm("  spaced  ")
         self.assertEqual(sudo.prepare("sudo whoami")["stdin"], "  spaced  \n")
+
+
+class TestANotFedSudoIsNeverSilent(Isolated):
+    """`explain` exists because of one sentence in a report: "root is no longer available
+    to me", written by a model that had run `sudo -v` after a loop failed. The switch was
+    on the whole time and the loop was the problem.
+
+    The rule the tests hold: a sudo that failed and was not fed always gets a sentence
+    saying which of the two it was, and no sentence ever implies the switch went off.
+    """
+
+    def test_it_stays_quiet_when_the_password_was_supplied(self):
+        self.arm()
+        got = sudo.prepare("sudo whoami")
+        self.assertEqual(got["fed"], 1)
+        self.assertEqual(sudo.explain(got, 1, "sudo: no password was provided"), "")
+
+    def test_it_stays_quiet_when_the_switch_is_off(self):
+        got = sudo.prepare("sudo whoami")
+        self.assertFalse(got["armed"])
+        self.assertEqual(sudo.explain(got, 1, "sudo: a terminal is required"), "",
+                         "agent.py states the off case on every backend already")
+
+    def test_it_stays_quiet_about_a_command_that_ran_fine(self):
+        """`grep sudo backend/` mentions the word and needs nothing."""
+        self.arm()
+        got = sudo.prepare("grep -r sudo backend/")
+        self.assertEqual(sudo.explain(got, 0, "backend/sudo.py: def armed()"), "")
+
+    def test_a_pipe_is_explained_as_a_pipe(self):
+        self.arm()
+        note = sudo.explain(sudo.prepare("echo x | sudo tee /etc/hosts"), 1,
+                            "sudo: 1 incorrect password attempt")
+        self.assertIn("end of a pipe", note)
+        self.assertIn("sudo cp", note)
+
+    def test_a_quoted_sudo_is_explained_as_quoted(self):
+        self.arm()
+        note = sudo.explain(sudo.prepare("sh -c 'sudo apt update'"), 1,
+                            "sudo: a terminal is required to read the password")
+        self.assertIn("quoted string", note)
+        self.assertIn("sudo sh -c", note)
+
+    def test_a_dash_n_is_explained_as_dash_n(self):
+        self.arm()
+        note = sudo.explain(sudo.prepare("sudo -n whoami"), 1,
+                            "sudo: a password is required")
+        self.assertIn("`-n`", note)
+
+    def test_an_empty_store_says_the_password_is_missing(self):
+        """Ready, and nothing inside it. `put` refuses to store an empty value and the
+        panel refuses to save one, so this arrives from a store edited by hand or half
+        written, and the branch stays because the note is the only thing that says which
+        of the two states the model is looking at."""
+        self.arm()
+
+        class Empty:
+            def has(self, name):
+                return True
+
+            def get(self, name):
+                return ""
+
+        real = sudo._store
+        sudo._store = Empty()
+        self.addCleanup(setattr, sudo, "_store", real)
+        got = sudo.prepare("sudo whoami")
+        self.assertTrue(got["armed"], "the store has the name, so the switch reads ready")
+        self.assertEqual(got["fed"], 0)
+        note = sudo.explain(got, 1, "sudo: no password was provided")
+        self.assertIn("saved password is empty", note)
+
+    def test_no_note_ever_lets_the_model_infer_the_switch(self):
+        """Every sentence ends by naming the state of the switch, because the report was a
+        model inferring it from silence and telling a person root had gone."""
+        self.arm()
+        for cmd in ("echo x | sudo tee /etc/hosts", "sh -c 'sudo apt update'",
+                    "sudo -n whoami"):
+            note = sudo.explain(sudo.prepare(cmd), 1, "sudo: a password is required")
+            self.assertTrue(note, cmd)
+            self.assertIn("the switch is ON", note, cmd)
+            self.assertNotIn("switch is off", note, cmd)
+            self.assertNotIn("Settings > Tools, Sudo.", note, cmd)
 
 
 class TestRunCapturedStdin(Isolated):
@@ -310,14 +479,14 @@ class TestRunCapturedStdin(Isolated):
 
 
 class TestRunNoneSuppliesIt(Isolated):
-    def capture(self, cmd):
+    def capture(self, cmd, code=0, out="ok", err=""):
         """Run `_run_none` with the spawn recorded instead of executed."""
         seen = {}
 
         def fake(argv, **kw):
             seen["argv"] = argv
             seen.update(kw)
-            return 0, "ok", "", False
+            return code, out, err, False
 
         real = sandbox._run_captured
         sandbox._run_captured = fake
@@ -334,6 +503,43 @@ class TestRunNoneSuppliesIt(Isolated):
         self.assertEqual(seen["stdin_data"], SECRET + "\n")
         self.assertTrue(any("sudo" in n for n in res["notes"]),
                         "the model must be told the command ran as root")
+
+    def test_a_sudo_it_could_not_feed_says_so_in_the_result(self):
+        """The bug report, as a result object.
+
+        Switch on, a sudo Tacit cannot feed, command failing on a password prompt. Before
+        this the notes carried nothing about sudo at all, and the model concluded from
+        sudo's own line that root had been taken away and told the person so."""
+        self.arm()
+        res, seen = self.capture("sh -c 'sudo apt update'", code=1,
+                                 err="sudo: a terminal is required to read the password")
+        self.assertIsNone(seen["stdin_data"], "the secret must not be written at all here")
+        notes = " ".join(res["notes"])
+        self.assertIn("the switch is ON", notes)
+        self.assertIn("quoted string", notes)
+
+    def test_a_loop_that_runs_sudo_gets_the_password(self):
+        self.arm()
+        res, seen = self.capture("for f in a b; do sudo chmod 0 $f; done")
+        self.assertIn("sudo -S -p '' chmod 0 $f", seen["argv"])
+        self.assertEqual(seen["stdin_data"], SECRET + "\n")
+        self.assertIn("supplied to 1 command", " ".join(res["notes"]))
+
+    def test_a_command_it_fed_does_not_also_get_the_miss_note(self):
+        self.arm()
+        res, _ = self.capture("sudo whoami")
+        notes = " ".join(res["notes"])
+        self.assertIn("supplied to 1 command", notes)
+        self.assertNotIn("did not feed", notes)
+
+    def test_the_fed_note_does_not_claim_more_than_it_knows(self):
+        """A fed command can still be refused by sudoers or by a wrong saved password. The
+        note states what Tacit did and leaves the rest to the output, because the model
+        reads this line as the state of the switch."""
+        self.arm()
+        res, _ = self.capture("sudo whoami")
+        notes = " ".join(res["notes"])
+        self.assertIn("not the switch being off", notes)
 
     def test_the_password_is_not_in_what_anyone_can_see(self):
         self.arm()

@@ -500,9 +500,15 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
     sudo_note = None
     if run["elevated"]:
         sudo_note = (f"sudo: the saved password was supplied to {run['fed']} command(s). "
-                     "They ran as root.")
+                     "They ran as root. If one of them still failed, that is sudo's own "
+                     "answer, not the switch being off.")
     elif run.get("error"):
         sudo_note = f"sudo: {run['error']}"
+    else:
+        # Armed, a sudo in the command, nothing fed. This used to be the silent case, and
+        # silence is what let a model read `sudo: no password was provided` as root having
+        # been withdrawn and report that back as a fact about the machine.
+        sudo_note = sudo.explain(run, code, f"{out}\n{err}") or None
     if timed_out:
         partial = (out or "").strip()
         note = (f"ERROR: timed out after {limit}s. That is this shell's cap, not the task's "

@@ -36,7 +36,7 @@ including Windows, which is the reason it is offered at all (`backend/sandbox.py
 Nothing is faked to fill that gap. The isolation ladder is stated plainly in the module header
 (`backend/sandbox.py:21-27`), and a run on Windows carries a note saying that this system offers no
 isolation primitive Tacit can use, that the timeout and the change report still apply, and that
-nothing here is pretending otherwise (`backend/sandbox.py:589-592`).
+nothing here is pretending otherwise (`backend/sandbox.py:595`-592`).
 
 ## What a run reports back
 
@@ -45,20 +45,20 @@ Every result has the same shape (`backend/sandbox.py:283-294`): `ok`, `backend`,
 `requested`, and `duration_ms`.
 
 `enforced` is computed per run, not per platform: a limit counts as enforced only when the platform
-can apply it and the box asked for it (`backend/sandbox.py:571-580`). `requested` records what the
-settings asked for (`backend/sandbox.py:605`), so a reader can compare the two. Where they disagree,
+can apply it and the box asked for it (`backend/sandbox.py:577`-580`). `requested` records what the
+settings asked for (`backend/sandbox.py:611`), so a reader can compare the two. Where they disagree,
 a note says which guarantee is missing: network not cut off and proxy variables advisory only
-(`backend/sandbox.py:581-583`), the project not mountable read-only (`:584-585`), CPU or memory limits
+(`backend/sandbox.py:587`-583`), the project not mountable read-only (`:584-585`), CPU or memory limits
 not enforced (`:533-536`).
 
 `changed` comes from scanning the project root before and after and diffing the two
-(`backend/sandbox.py:561`, `:570`). That report is produced whatever the backend, which is why a
+(`backend/sandbox.py:567`, `:570`). That report is produced whatever the backend, which is why a
 command that rewrote the tree on Windows still tells you what it rewrote.
 
 ## The timeout is enforced, not reported
 
 `GRACE_SECONDS` is 10 (`backend/sandbox.py:297`), and a timed-out run returns exit code 124 with the
-output it printed before the kill (`backend/sandbox.py:602-603`).
+output it printed before the kill (`backend/sandbox.py:608`-603`).
 
 Killing only the direct child is not enough. On Windows a `.bat` or `cmd /c` wrapper leaves its
 grandchildren running, and they keep the captured pipe open, so the reader blocks long after the
@@ -83,11 +83,11 @@ because that probe is the only portable way to cut the network off (`backend/san
 
 The image, the pull policy and the PID ceiling are read from the capability registry rather than the
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
-false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:635`, `:647-649`). A missing
+false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:641`, `:647-649`). A missing
 image is not fetched unless you allowed it, and the refusal names the runtime and the command to run
-by hand (`backend/sandbox.py:725-728`). `--pids-limit` is passed on the command line
-(`backend/sandbox.py:671`). Docker is tried before Podman and both are accepted, because which one a
-person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:616-622`).
+by hand (`backend/sandbox.py:731`-728`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:677`). Docker is tried before Podman and both are accepted, because which one a
+person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:622`-622`).
 
 ## The container backend, checked against a real daemon
 
@@ -110,27 +110,46 @@ a person with a daemon who wants them re-run is doing a useful thing by reportin
 ## Root elevation
 
 `sudo` is off, and it is a capability only two of the three backends can even talk about. The switch
-is honoured where the binary exists (`backend/sudo.py:177`), which means Linux and macOS.
+is honoured where the binary exists (`backend/sudo.py:315`), which means Linux and macOS.
 
 | Backend | Supplies the saved password | What happens to a `sudo` command there |
 |---|---|---|
-| `none` | yes (`backend/sandbox.py:496`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:537`) |
-| `tacit-micro` | no (`backend/sandbox.py:597`) | fails at once, with a note saying this backend does not supply it |
-| `container` | no (`backend/sandbox.py:761`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
+| `none` | yes (`backend/sandbox.py:496`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:543`) |
+| `tacit-micro` | no (`backend/sandbox.py:603`) | fails at once, with a note saying this backend does not supply it |
+| `container` | no (`backend/sandbox.py:767`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
 
 Both sandboxed backends leave stdin at `DEVNULL`, so an unanswered `sudo` fails immediately instead of
 hanging until the turn timeout. Failing fast is not the same as being explained, which is why the note
 exists: a model that reads only `sudo: a password is required` spends its next steps trying to type
 into a pipe.
 
-The command is rewritten to `sudo -S -p ''` before it runs (`backend/sudo.py:134`), so the password can
+The command is rewritten to `sudo -S -p ''` before it runs (`backend/sudo.py:200`), so the password can
 only arrive on stdin and sudo can never open a terminal and wait. One password line is fed per command
 that actually asks, not one per turn: `sudo apt-get update && sudo apt-get install` runs two commands as
 root, and a pipe closed after the first read leaves the second asking. `sudo` counted only in command position,
 so `echo sudo` is not an elevation site and does not get the credential.
 
-The prompt says elevation is armed only while it is (`backend/ai/prompts.py:27`). A model that was never
-given the capability is not told the password exists.
+Three shapes are deliberately not fed, and each says so in the result instead of leaving sudo's own
+complaint as the only evidence (`backend/sudo.py:255`). A `sudo` at the end of a pipe has stdin full of
+the piped data, so a password fed there is read as a wrong password and the real one goes to the program:
+`echo x | sudo tee /etc/hosts` fails, and the note says to write the file somewhere first and `sudo cp`
+it into place. A `sudo` inside a quoted string is not rewritten either, because splicing `-p ''` into a
+`'…'` changes what the string says, so `sh -c 'sudo …'` is left as typed and the working form is
+`sudo sh -c '…'`. And a `sudo -n` asked sudo not to prompt at all; answering a question its writer chose
+not to ask would put the credential somewhere it was not wanted.
+
+Command position includes the words the shell stands in front of a command (`backend/sudo.py:53`), so
+`for f in …; do sudo chmod …; done`, `if …; then sudo …; fi` and a `sudo` inside `$(…)` are sites. They
+were not: those lines ran without a password and without a note, because the switch was on, and the model
+read a bare `sudo: a terminal is required to read the password` as root having been withdrawn and told a
+person so. The missing piece was never the capability, it was the sentence. A non-zero exit and a sudo
+complaint in the output are both required before one is written (`backend/sudo.py:306`), so `grep sudo
+backend/` succeeding does not get told about a password nobody asked for.
+
+The prompt says elevation is armed only while it is (`backend/ai/prompts.py:27`), names the three shapes
+that get nothing, and tells the model to read the note rather than probe: a failed command whose note says
+the switch is ON was refused by sudo, not left without a password. A model that was never given the
+capability is not told the password exists at all.
 
 ## The audit ledger
 
@@ -162,7 +181,7 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:797-801`, `:876-903`), one capture per turn
+the server checkpoints the workspace (`backend/agent.py:801`-801`, `:876-903`), one capture per turn
 rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:155-180`,
@@ -172,6 +191,6 @@ looks only at parts inside the project, because testing absolute parts would ski
 the project itself sat in a folder named `build/` or `checkpoints/` (`backend/extras.py:170-172`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:636-641`).
+person (`backend/agent.py:640`-641`).
 
 Next: [data and privacy](data-and-privacy.md).

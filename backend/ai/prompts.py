@@ -24,11 +24,20 @@ Rules:
 - Report what you actually did, including anything that failed.
 {vcs}"""
 
-SUDO = """- Root elevation is armed on this machine: a `sudo` command in `run_shell` is handed the
-  saved password and runs without anyone typing anything. That is capability, not
-  instruction. Use it only where the task genuinely needs root, never to work around a
-  permission error you could answer by changing the approach, and say in your reply which
-  commands ran as root."""
+SUDO = """- Root elevation is armed on this machine. Tacit hands the saved password to every `sudo`
+  that starts a command, including after `&&`, `||`, `;`, inside a loop or a `$(…)`, so
+  nothing needs typing. That is capability, not instruction: use it only where the task
+  genuinely needs root, never to work around a permission error you could answer by
+  changing the approach, and say in your reply which commands ran as root.
+- Three shapes get no password, and the result says so when one of them fails: a `sudo` at
+  the end of a pipe, because its stdin is the piped data; a `sudo` inside a quoted string,
+  so write `sudo sh -c '…'`, not `sh -c 'sudo …'`; and a `sudo -n`, which asks sudo not to
+  prompt at all. For a pipe, write the content to a temp file and `sudo cp` it into place.
+- A sudo result always states whether Tacit supplied the password. Read that line before
+  drawing any conclusion about root. A failed command whose note says the switch is ON was
+  refused by sudo, not left without a password, and there is nothing to re-check: do not
+  spend steps on `sudo -v` probes, and do not report a capability withdrawn without the
+  note saying so."""
 
 PROJECT = """Working project: {project}
 

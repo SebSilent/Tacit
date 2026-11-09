@@ -44,37 +44,88 @@ POSIX_OS = ("Linux", "Darwin")
 # deliberately absent, because here it is the thing being looked for.
 _WRAPPERS = {"env", "command", "nohup", "time", "nice", "xargs", "doas"}
 
-# A segment is one command: split on the shell's own sequencing characters.
-_SEGMENT_BREAK = re.compile(r"[&|;\n]+")
+# Shell words that stand where a command would, without being one. They were not skipped
+# at all, so `for f in …; do sudo chmod …; done` and `if …; then sudo systemctl …; fi`
+# each had a sudo that Tacit never saw: no `-S` was added, nothing was fed, and the result
+# carried no sudo note either, because the switch was on. The model read a bare
+# "a terminal is required to read the password" with nothing explaining it and reported
+# back that root had been taken away.
+_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for",
+             "in", "case", "esac", "select", "{", "}", "("}
+
+# A segment is one command: split on the shell's own sequencing characters, plus the two
+# ways a command hides inside another one. `$(sudo …)` and backticks are their own command
+# positions and inherit stdin, so they are feedable, and were silently missing.
+_SEGMENT_BREAK = re.compile(r"[&|;\n]+|\$\(|`|\)")
 _TOKEN = re.compile(r"[^\s()<>`|;&]+")
 _ENV_ASSIGN = re.compile(r"^\w+=")
 
 
+def _quote_spans(text: str) -> list[tuple[int, int]]:
+    """Regions the shell would treat as literal, single or double quoted.
+
+    Backslash escapes count inside double quotes and not inside single ones, which is the
+    difference between `"sudo \\" x"` ending the span and `'sudo \\' x"` not.
+    An unbalanced quote runs to the end of the line, because that is what the shell does
+    with it, and a site inside it must not be rewritten either."""
+    spans, start, quote, escaped = [], None, "", False
+    for i, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if quote == '"' and ch == "\\":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                spans.append((start, i))
+                quote = ""
+        elif ch in "'\"":
+            quote, start = ch, i + 1
+    if quote:
+        spans.append((start, len(text)))
+    return spans
+
+
 def _segments(text: str):
-    """(start, end) spans of each command in a line, the same split the version-control
-    guard uses (`backend/agent.py:281`), but keeping offsets so a rewrite can be exact."""
+    """(start, end, separator-before) for each command in a line.
+
+    The same split the version-control guard uses (`backend/agent.py:281`), keeping offsets
+    so a rewrite can be exact, and carrying the characters that ended the previous command
+    because they decide what this one's stdin is: `a || sudo b` inherits the shell's stdin
+    and can be fed, `a | sudo b` has stdin full of `a`'s output and cannot."""
     pos = 0
+    sep = ""
     for m in _SEGMENT_BREAK.finditer(text):
-        yield pos, m.start()
+        yield pos, m.start(), sep
         pos = m.end()
-    yield pos, len(text)
+        sep = m.group()
+    yield pos, len(text), sep
+
+
+def _piped(sep: str) -> bool:
+    """Whether the separator handing off to this segment is an input pipe.
+
+    `|&` pipes stderr too, still a pipe. `||` is a conditional and leaves stdin alone,
+    so it is spotted by the absence of a doubled bar rather than by counting."""
+    return "|" in sep and "||" not in sep
 
 
 def _command_word(text: str, start: int, end: int):
     """The span of the word that would be executed, or None.
 
-    Leading wrappers and `VAR=value` prefixes are stepped over, exactly as the
-    version-control guard steps over them, so `sudo git push` and `sudo apt install`
-    are both found at the position that matters.
+    Leading wrappers, shell keywords and `VAR=value` prefixes are stepped over, so
+    `sudo git push`, `sudo apt install` and `then sudo systemctl restart x` are all found
+    at the position that matters. `!` is stripped from the front: `!sudo x` is a sudo.
     Scanning the whole string with pos and endpos, not a slice: the first draft sliced
     the segment and passed the offset anyway, so every segment after a `&&` lost its
     first word and `echo done && sudo reboot` was reported as containing no sudo."""
     for m in _TOKEN.finditer(text, start, end):
-        w = m.group().strip("'\"")
+        w = m.group().strip("'\"").lstrip("!")
         if not w:
             continue
         low = os.path.basename(w).lower()
-        if low in _WRAPPERS or _ENV_ASSIGN.match(w):
+        if low in _WRAPPERS or low in _KEYWORDS or _ENV_ASSIGN.match(w):
             continue
         return m.start(), m.end(), low
     return None
@@ -111,10 +162,13 @@ def sites(command: str) -> list[dict]:
     """Every `sudo` reached at a command position, with the flags it already carries.
 
     `sudo` as an argument (`echo sudo`, `grep sudo file`) is not a site, because the
-    first word of the segment is `echo` or `grep`. An absolute path to it is a site."""
+    first word of the segment is `echo` or `grep`. An absolute path to it is a site.
+    A site whose stdin is already full is marked `piped`: it is still a sudo the person
+    is trying to run, and the caller has to say why it did not get the password."""
     text = str(command or "")
+    spans = _quote_spans(text)
     found = []
-    for start, end in _segments(text):
+    for start, end, sep in _segments(text):
         word = _command_word(text, start, end)
         if not word:
             continue
@@ -123,12 +177,24 @@ def sites(command: str) -> list[dict]:
             continue
         reads_stdin, asks_nothing = _options(text[we:end])
         found.append({"start": ws, "end": we, "stdin": reads_stdin,
-                      "noninteractive": asks_nothing})
+                      "noninteractive": asks_nothing, "piped": _piped(sep),
+                      "quoted": any(s <= ws < e for s, e in spans)})
     return found
 
 
 def uses_sudo(command: str) -> bool:
     return bool(sites(command))
+
+
+def mentions(command: str) -> int:
+    """How many times the word `sudo` appears at all, in any position.
+
+    Looser than `sites` on purpose, and only ever used to decide whether the result owes
+    the model an explanation. `sh -c "sudo apt update"` has no site, because rewriting
+    inside a quoted string would change what the string says, and `grep sudo log` has no
+    site either; the first is a command the model meant to run as root and the second is not,
+    and the difference is drawn by whether sudo actually complained, not by this count."""
+    return len(re.findall(r"\bsudo\b", str(command or "")))
 
 
 def prepare(command: str) -> dict:
@@ -142,8 +208,11 @@ def prepare(command: str) -> dict:
     text = str(command or "")
     found = sites(text)
     out = {"command": text, "stdin": None, "sites": len(found), "fed": 0,
-           "elevated": False}
-    if not found or not armed():
+           "elevated": False, "piped": sum(1 for s in found if s["piped"]),
+           "noint": sum(1 for s in found if s["noninteractive"]),
+           "quoted": sum(1 for s in found if s["quoted"]),
+           "mentions": mentions(text), "armed": armed()}
+    if not found or not out["armed"]:
         return out
     try:
         password = _store.get(NAME)
@@ -159,7 +228,18 @@ def prepare(command: str) -> dict:
     # `-n` means the command explicitly asked sudo not to prompt. Overriding that with
     # `-S` would answer a question the writer of the command chose not to ask, and the
     # line fed for it would land on the program's stdin instead.
-    feed = [s for s in found if not s["noninteractive"]]
+    feed = [s for s in found
+            if not s["noninteractive"] and not s["piped"] and not s["quoted"]]
+    # A piped-into sudo is left alone, and that is the whole reason it is left alone:
+    # `echo x | sudo tee /etc/hosts` gives sudo a stdin full of `x`, so `-S` would read
+    # the piped data as the password, report "1 incorrect password attempt", and then hand
+    # the real password to tee as its input. Not feeding it costs one failed command;
+    # feeding it costs the secret's appearance in a program that was never meant to see it.
+    if not feed:
+        # Every sudo in the line was one of the shapes above. Return before writing a
+        # password of length zero into stdin: an empty string and no string are different
+        # things to a child process, and the line has to run exactly as it was typed.
+        return out
     # Rewrite back to front so earlier offsets stay valid.
     new = text
     for s in reversed(feed):
@@ -168,8 +248,66 @@ def prepare(command: str) -> dict:
     out["command"] = new
     out["stdin"] = (password + "\n") * len(feed)
     out["fed"] = len(feed)
-    out["elevated"] = bool(feed)
+    out["elevated"] = True
     return out
+
+
+def explain(run: dict, code: int = 0, output: str = "") -> str:
+    """What to tell the model about a sudo that Tacit did not feed, or "" for nothing.
+
+    The case that produced the bug report: the switch ON, a sudo in the command, nothing
+    supplied. Nothing used to be said about it, so the only evidence in the transcript was
+    sudo's own complaint, and the model wrote back that root had been taken away from it.
+    It had not: it had run a shape Tacit cannot feed, in a loop, or behind a pipe. A note
+    that names the shape and the rewrite is the difference between a corrected command and
+    a session spent arguing about a capability it still has.
+
+    It stays quiet when there is nothing to explain: no sudo in the command, the switch off
+    (which `backend/agent.py` states on every backend already), the command fed, or a
+    command that ran fine without being fed.
+    """
+    if run.get("fed") or not run.get("armed"):
+        return ""
+    if not (run.get("mentions") or run.get("sites")):
+        return ""
+    if code == 0 and not _COMPLAINT.search(str(output or "")):
+        return ""
+    if run.get("piped"):
+        return ("sudo: the switch is ON and Tacit did not feed this one, because its sudo "
+                "sits at the end of a pipe. Its stdin is the piped data, so a password fed "
+                "here would be read as a wrong password and the real one would go to the "
+                "program. Write the content to a file, then elevate the copy: "
+                "`printf '%s\\n' … > /tmp/x && sudo cp /tmp/x /etc/file`. Root has not been "
+                "withdrawn.")
+    # Both halves of this branch are the same mistake seen from two sides: a sudo the
+    # scanner found inside quotes, and a sudo the scanner could not find because the segment
+    # starts at `sh`. Rewriting the first would splice `-p ''` into a single-quoted string
+    # and change what it says, so neither is touched and both are explained.
+    if run.get("quoted") or run.get("mentions", 0) > run.get("sites", 0):
+        return ("sudo: the switch is ON and Tacit did not feed this one, because its sudo is "
+                "inside a quoted string, where adding the flags would change what the string "
+                "says. Put the sudo outside the quotes: `sudo sh -c '…'`, not "
+                "`sh -c 'sudo …'`. Root has not been withdrawn.")
+    if run.get("noint"):
+        return ("sudo: the switch is ON and Tacit did not feed this one, because every sudo "
+                "in it carried `-n`, which asks sudo not to prompt at all. Drop `-n` to have "
+                "the saved password supplied. Root has not been withdrawn.")
+    # Reached from one place only: the switch is on and the store holds an empty string, so
+    # `armed()` is true and there is nothing to write. A sudoers refusal or a wrong password
+    # lands on the fed path instead, with sudo's own answer beside it.
+    return ("sudo: the switch is ON and this sudo sits where Tacit can feed it, but nothing "
+            "was supplied, because the saved password is empty. Save one under Settings > "
+            "Tools, Sudo, or turn the switch off. Nobody has withdrawn root from you.")
+
+
+# What a sudo that wanted a password and did not get one sounds like, from either end of
+# the pipe. A command that merely mentions the word sudo (`grep sudo /var/log/auth.log`)
+# and exits 0 does not match, and gets no note.
+_COMPLAINT = re.compile(
+    r"sudo:\s|a password is required|no password was provided|incorrect password|"
+    r"terminal is required|not in the sudoers file|may not run|must be root|"
+    r"operation not permitted|permission denied|denied by policy|ttyprompt",
+    re.I)
 
 
 # ── the switch ─────────────────────────────────────────────────────────────
