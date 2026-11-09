@@ -110,7 +110,7 @@ a person with a daemon who wants them re-run is doing a useful thing by reportin
 ## Root elevation
 
 `sudo` is off, and it is a capability only two of the three backends can even talk about. The switch
-is honoured where the binary exists (`backend/sudo.py:315`), which means Linux and macOS.
+is honoured where the binary exists (`backend/sudo.py:329`), which means Linux and macOS.
 
 | Backend | Supplies the saved password | What happens to a `sudo` command there |
 |---|---|---|
@@ -181,7 +181,7 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:801`-801`, `:876-903`), one capture per turn
+the server checkpoints the workspace (`backend/agent.py:803`-801`, `:876-903`), one capture per turn
 rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:155-180`,
@@ -191,6 +191,6 @@ looks only at parts inside the project, because testing absolute parts would ski
 the project itself sat in a folder named `build/` or `checkpoints/` (`backend/extras.py:170-172`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:640`-641`).
+person (`backend/agent.py:642`-641`).
 
 Next: [data and privacy](data-and-privacy.md).

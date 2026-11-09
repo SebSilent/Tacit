@@ -23,7 +23,7 @@ Five of the optional systems default to off, and the code is the source of truth
 | System | Default off | In |
 |---|---|---|
 | Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:507` |
-| Sudo elevation | `sudoEnabled` absent from `prefs.json`, and no password stored | `backend/sudo.py:327` |
+| Sudo elevation | `sudoEnabled` absent from `prefs.json`, and no password stored | `backend/sudo.py:341` |
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
 | Memory | `mode = "off"`, budget 120 | `backend/providers.py:26` |
@@ -92,7 +92,7 @@ The analyzer runs on a daemon thread named `tacit-analyzer` (`backend/analyzer.p
 
 One switch, four modes: `off` (default), `explicit`, `jit`, `full` (`backend/memory_modes.py:7-13`). The budget is a hard cap on the rendered block, default 120 tokens, and an entry that does not fit is deferred rather than silently dropped. Every entry carries its provenance and is editable, and a pinned entry survives a prune.
 
-`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:442`-448`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:454`-456`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:461`-459`).
+`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:444`-448`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:456`-456`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:463`-459`).
 
 ## MCP
 

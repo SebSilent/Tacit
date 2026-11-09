@@ -309,6 +309,20 @@ _COMPLAINT = re.compile(
     r"operation not permitted|permission denied|denied by policy|ttyprompt",
     re.I)
 
+# The narrower half of that: lines only sudo itself writes. Used where the claim being
+# gated is about sudo and nothing else is allowed to trigger it, because `permission
+# denied` on its own is what a hundred unrelated failures say, and a sentence about a
+# password would be a false accusation about a command that never asked for one.
+_SUDO_ONLY = re.compile(
+    r"sudo:|a password is required|no password was provided|incorrect password|"
+    r"terminal is required|not in the sudoers file|sudoers file",
+    re.I)
+
+
+def complained(output: str) -> bool:
+    """Whether something in the output is sudo talking, not the shell failing elsewhere."""
+    return bool(_SUDO_ONLY.search(str(output or "")))
+
 
 # ── the switch ─────────────────────────────────────────────────────────────
 

@@ -105,7 +105,7 @@ reproduce whole (`backend/config.py:90`, `:99`).
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:235` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
-than written out, so the sentence cannot drift away from the caps (`backend/agent.py:746`-744`).
+than written out, so the sentence cannot drift away from the caps (`backend/agent.py:748`-744`).
 
 ### Context and compaction
 
@@ -172,7 +172,7 @@ outright (`backend/config.py:961-966`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:17`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:724`-722`), and that sentence has to be testable.
+it runs on (`backend/agent.py:726`-722`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -190,8 +190,8 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `turnSound` | `backend/config.py:443` | on by default |
 | `alertSound` | `backend/config.py:485` | off by default |
 | `allowVersionControl` | `backend/config.py:555` | absent means the agent may not run git |
-| `sudoEnabled` | `backend/sudo.py:327` | absent means no elevation; honoured only where `sudo` exists |
-| `disabledTools` | `backend/agent.py:918`, `backend/profiles.py:236` | tool names removed from the registry |
+| `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
+| `disabledTools` | `backend/agent.py:920`, `backend/profiles.py:236` | tool names removed from the registry |
 | `archiveTool` | `backend/config.py:474` | the archive reader's switch; absent means on |
 | `projectRoots` | `backend/config.py:769` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |

@@ -688,6 +688,25 @@ class TestWhatTheAgentSees(Isolated):
         out = agent.t_run_shell("sudo definitely-not-a-real-command", session="s1")
         self.assertNotIn("Tacit supplied no password", out)
 
+    def test_a_command_that_only_carries_the_word_sudo_is_left_alone(self):
+        """Found by running the product on itself: a one-liner whose text mentioned `sudo`
+        inside a string literal, failing for a reason nothing to do with root, was told
+        "Tacit supplied no password". That sentence is only true of a command that was going
+        to be asked for one, so it now needs sudo at a command position or sudo's own line
+        in the output, and a non-zero exit besides."""
+        out = agent.t_run_shell("grep sudo definitely-not-a-real-file", session="s1")
+        self.assertNotIn("[sudo]", out)
+
+    def test_sudo_talking_is_recognised_and_anything_else_is_not(self):
+        """The narrower half of the complaint pattern, on its own: the wide one matches
+        `permission denied`, which a hundred unrelated failures say."""
+        self.assertTrue(sudo.complained("sudo: a terminal is required to read the password"))
+        self.assertTrue(sudo.complained("Sorry, try again.\nsudo: 1 incorrect password attempt"))
+        self.assertTrue(sudo.complained("user is not in the sudoers file. This incident will be reported."))
+        self.assertFalse(sudo.complained("'grep' is not recognized as an internal or external command"))
+        self.assertFalse(sudo.complained("chmod: Operation not permitted"))
+        self.assertFalse(sudo.complained(""))
+
 
 if __name__ == "__main__":
     unittest.main()
