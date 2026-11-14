@@ -1477,6 +1477,58 @@ class TestCompactionReachesTheStore(Isolated):
         self.assertGreater((saved.get("metrics") or {}).get("saved_compaction"), 0,
                            "the wire saving is real even where the fold was not kept")
 
+    def test_a_fold_the_wire_needed_lands_once_the_store_passes_the_plain_target(self):
+        # The band between the plain fill target and twice it: should_compact
+        # says no (the stored measure carries 2x headroom), but the wire already
+        # needed a fold, so the note must reach the store rather than ride back
+        # whole into the next turn. turns=50 at 19k chars a row sits over the
+        # plain target and under twice it.
+        store.create(title="band", model="p/m", sid="x")
+        rec = self._rec(turns=50)
+        store.save(rec)
+        target = config.context_fill_target(262_144)
+        self.assertFalse(agent.should_compact(rec),
+                         "the fixture is deliberately under twice the target")
+        self.assertGreater(agent.stored_tokens(rec["messages"]), target,
+                           "but over the plain target")
+        trace = []
+
+        def fake_run_turn(messages, **kw):
+            trace.append({"text": "step a", "tools": []})
+            yield {"type": "compaction", "compacted": 20, "kept": 3,
+                   "chars_before": 900000, "chars_after": 40000, "saved": 215000,
+                   "summary": "NOTE FROM THE WORKER", "kept_tokens": 6000}
+            trace.append({"text": "step b", "tools": []})
+            yield {"type": "done"}
+
+        orig_run, orig_bus, orig_state = (session_runtime.agent.run_turn,
+                                          session_runtime.turn_bus,
+                                          session_runtime.session_state)
+        published = []
+        session_runtime.agent.run_turn = fake_run_turn
+        session_runtime.turn_bus = types.SimpleNamespace(
+            publish=lambda ev: published.append(ev), finish=lambda *a, **kw: None,
+            start=lambda *a, **kw: None)
+        session_runtime.session_state = types.SimpleNamespace(
+            running=lambda sid: None, end=lambda sid: None,
+            begin=lambda *a, **kw: None, busy=lambda sid: False)
+        self.addCleanup(setattr, session_runtime.agent, "run_turn", orig_run)
+        self.addCleanup(setattr, session_runtime, "turn_bus", orig_bus)
+        self.addCleanup(setattr, session_runtime, "session_state", orig_state)
+
+        run = {"stop": threading.Event(), "steer": [], "worker": None,
+               "thread": None, "loop": None}
+        session_runtime._drive_turn(
+            "x", rec, [], project=None, ref="p/m", chat=True, has_instructions=False,
+            reasoning=None, trace=trace, run=run,
+            bus=types.SimpleNamespace(publish=lambda ev: published.append(ev)))
+
+        saved = session_runtime.store.get("x") or {}
+        notes = [m for m in (saved.get("messages") or []) if m.get("role") == "summary"]
+        self.assertEqual(len(notes), 1,
+                         "a fold the wire needed must reach the store past the plain target")
+        self.assertIn("NOTE FROM THE WORKER", notes[0]["content"])
+
     def test_a_hand_compaction_moves_the_meter_and_the_ledger(self):
         # The interface's "Compact context" command. It used to fold the record and
         # tell nobody: the bar kept reading the old fill over a transcript that had

@@ -1211,6 +1211,9 @@ def _msg_tokens(m: dict) -> int:
         return token_mod.estimate_tokens(str(m))
     total = token_mod.estimate_tokens(m.get("content") or "")
     total += token_mod.estimate_tokens(m.get("reason") or "")
+    # The wire shape keeps reasoning under its own key; counting only `reason`
+    # left a thinking model's replayed chain of thought out of the tail budget.
+    total += token_mod.estimate_tokens(m.get("reasoning_content") or "")
     for t in m.get("tools") or []:
         if isinstance(t, dict):
             total += token_mod.estimate_tokens(str(t.get("result") or ""))
@@ -2201,7 +2204,79 @@ def _confusion_class(sentence: str) -> str:
     return ""
 
 
-def clean_reason(text) -> str:
+# Planning scaffolding: the "Let me… / Now I… / I'll…" family that is legitimate
+# once and becomes an imitation loop when every step opens with it. clean_reason
+# kills confusion about the replay; nothing killed repetitive scaffolding, so a
+# turn that narrated between every tool call taught the next step to narrate too
+# (one logged turn spent its whole step budget on "Let me read… Let me check…").
+# Counted per turn — the caller owns the dict — and elided only past a repeat
+# threshold, so real planning that opens a step once or twice survives.
+_SCAFFOLD = re.compile(
+    r"^\s*(let me\b|let's\b|first\b|now i\b|i'?ll\b|i will\b|i need to\b|i should\b|"
+    r"next\b|to do\b|plan:|time to\b|going to\b|actually\b|wait\b)", re.I)
+SCAFFOLD_REPEAT_MAX = 3
+# Characters of prose / chain-of-thought an intermediate (tool-calling) step may
+# carry into the trace and the replay. The live stream is uncapped; this bounds
+# what the next step imitates and what the next turn re-reads. 0 disables. The
+# final answer (a step with no calls) is never capped.
+STEP_NARRATION_CAP = 1500
+STEP_REASON_CAP = 2500
+
+
+def _dedup_scaffold(text: str, seen: dict | None) -> str:
+    """Elide planning scaffolding that has repeated past the threshold this turn.
+
+    ``seen`` counts scaffolding openers across the turn; the first
+    SCAFFOLD_REPEAT_MAX of each opener pass through untouched and later ones are
+    replaced by the neutral note, consecutive elisions collapsed into one. With
+    ``seen`` None this is the identity, so the replay path (which has no turn
+    state) keeps the confusion gate's behaviour exactly.
+    """
+    if not text or seen is None:
+        return text
+    parts = _SENTENCE.split(text)
+    frags, seps = parts[0::2], parts[1::2]
+    flags = []
+    for f in frags:
+        m = _SCAFFOLD.match(f)
+        elide = False
+        if m and len(f) < 200 and "```" not in f:
+            key = m.group(1).lower().strip()
+            seen[key] = seen.get(key, 0) + 1
+            elide = seen[key] > SCAFFOLD_REPEAT_MAX
+        flags.append(elide)
+    out: list[str] = []
+    i, n = 0, len(frags)
+    while i < n:
+        if flags[i]:
+            j = i
+            while j < n and flags[j]:
+                j += 1
+            out.append(REASON_ELIDED)
+            if j - 1 < len(seps):
+                out.append(seps[j - 1])
+            i = j
+        else:
+            out.append(frags[i])
+            if i < len(seps):
+                out.append(seps[i])
+            i += 1
+    return "".join(out).strip()
+
+
+def _cap_step_text(text: str, cap: int) -> str:
+    """Bound what an intermediate step replays, keeping a truncation marker.
+
+    The person watching the live stream already saw the whole step; this only
+    shortens what is stored and sent back, which is the copy the imitation loop
+    feeds on. A non-empty reason stays non-empty (DeepSeek 400s without it).
+    """
+    if cap <= 0 or len(text) <= cap:
+        return text
+    return text[:cap].rstrip() + " […]"
+
+
+def clean_reason(text, scaffold_seen: dict | None = None) -> str:
     """Neutralise attractor text in a chain of thought before it is replayed.
 
     A block that OPENS with the disclaimer is replaced whole. Any other run of
@@ -2211,7 +2286,12 @@ def clean_reason(text) -> str:
     and an empty reason stays empty so rows that never reasoned still carry no
     key at all. A stored row can carry a non-string (a malformed row, a
     number), and one bad row must not take the whole transcript build down
-    with it."""
+    with it.
+
+    ``scaffold_seen`` is a turn-scoped counter of planning openers. When the
+    loop passes one, repetitive scaffolding ("Let me…" past the third time this
+    turn) is elided too; the replay path passes None and gets the confusion gate
+    alone, so a stored row's fate never depends on turn state it cannot see."""
     t = text.strip() if isinstance(text, str) else ""
     if t.lower().startswith(REASON_ATTRACTOR):
         return REASON_ELIDED
@@ -2243,7 +2323,7 @@ def clean_reason(text) -> str:
             if i < len(seps):
                 out.append(seps[i])
         i = j
-    return "".join(out).strip()
+    return _dedup_scaffold("".join(out).strip(), scaffold_seen)
 
 
 def transcript_messages(rows: list[dict], reasoning: bool = False) -> list[dict]:
@@ -2359,6 +2439,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     demanded = [0]
     forced = 0
     snapped = False
+    # Turn-scoped anti-narration state: the scaffolding counter clean_reason
+    # elides against, and the one-time over-narration directive (a step that
+    # called a tool but narrated past the cap sets the flag; the next step reads
+    # it). Neither is stored; both die with the turn.
+    scaffold_seen: dict = {}
+    narration_nudged = False
+    narration_over = False
 
     def _salvage(names, run_check=False):
         """One round whose only tools are the ones that can write the deliverable.
@@ -2603,6 +2690,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 # paid for on the step that needs it.
                 ctx_msgs = ctx_msgs + [{"role": "system", "content": block}]
                 last_block = block
+            # The over-narration directive, once per turn: a step that called a
+            # tool but spent its prose budget narrating gets told to stop, the way
+            # plan_like tells a no-call step to act. Unstored, point-of-use, and
+            # gated on the same guidance switch as every other block.
+            if (narration_over and not narration_nudged and guidance.enabled()
+                    and not chat and not nested and depth == 0):
+                ctx_msgs = ctx_msgs + [{"role": "system", "content": guidance.narrating()}]
+                narration_nudged = True
             # The task list is the one standing block that changes *during* a turn.
             # It lives outside the transcript on purpose, which means a snapshot
             # taken at turn start is stale by step three: the model has already
@@ -2714,8 +2809,17 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # every downstream use (the trace the pane renders and the
         # reasoning_content the next step reads back) sees the neutral note
         # instead of attractor text. Without this, one spammy step teaches the
-        # next one, and the turn burns its step budget on the disclaimer.
-        thinking = clean_reason("".join(step_reason))
+        # next one, and the turn burns its step budget on the disclaimer. The
+        # turn-scoped scaffold counter rides along so repetitive "Let me…" planning
+        # is elided the same way; an intermediate step's prose and reasoning are
+        # then capped to what the next step should imitate. The live stream above
+        # already showed the whole step, and the final answer below is never capped.
+        thinking = clean_reason("".join(step_reason), scaffold_seen=scaffold_seen)
+        narration_over = False
+        if calls and not chat and not nested and depth == 0:
+            narration_over = len(narration) > STEP_NARRATION_CAP > 0
+            narration = _cap_step_text(narration, STEP_NARRATION_CAP)
+            thinking = _cap_step_text(thinking, STEP_REASON_CAP)
 
         if not calls:
             # A step that announces intent and runs nothing is deliberation, not

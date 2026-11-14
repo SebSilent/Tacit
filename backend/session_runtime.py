@@ -780,18 +780,29 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
         # `should_compact` reading it, describe the shrunken request. That is the
         # pair of facts that let a session sit at 99% for sixteen turns with
         # millions of tokens reported as saved and nothing ever reclaimed.
-        if pending is not None and agent.should_compact(rec):
-            # Persist the fold only when the stored record itself is over the
-            # fill target — the point where between-turns compaction would fold
-            # it anyway. A fold the wire needed but the record did not stays
-            # wire-only: the record keeps every row and elision serves the
-            # newest budget worth next turn, as it did before mid-turn folds
-            # became persistent.
-            reclaimed = agent.apply_stored_summary(
-                rec, pending["summary"], pending["kept_tokens"],
-                max(0, len(trace) - pending["at"]))
-            if reclaimed:
-                _lower_context(rec, reclaimed)
+        if pending is not None:
+            # Persist the fold once the stored record is itself over the fill
+            # target — the point where between-turns compaction would fold it
+            # anyway. should_compact gives the *stored* measure 2x headroom
+            # (STORE_COMPACT_FACTOR) so a healthy wire is never folded for nothing;
+            # a fold the wire already needed is not that case, so here the plain
+            # target is enough. Without this, a turn that folded its wire to stay
+            # under the window handed the whole transcript back to the next turn
+            # whenever the store sat between the target and twice it. A record
+            # still under the plain target stays wire-only: it keeps every row and
+            # elision serves the newest budget worth next turn, as it did before
+            # mid-turn folds became persistent.
+            ctx = (rec.get("usage") or {}).get("context") or {}
+            window = int(ctx.get("window") or 0)
+            over_plain = (bool(window)
+                          and agent.stored_tokens(rec.get("messages") or [])
+                          > config.context_fill_target(window))
+            if agent.should_compact(rec) or over_plain:
+                reclaimed = agent.apply_stored_summary(
+                    rec, pending["summary"], pending["kept_tokens"],
+                    max(0, len(trace) - pending["at"]))
+                if reclaimed:
+                    _lower_context(rec, reclaimed)
         store.save(rec)
         # Only now may the transcript be called complete.
         if terminal is not None:

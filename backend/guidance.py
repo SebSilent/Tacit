@@ -69,6 +69,13 @@ _BUDGET = ("{n} step(s) left in this turn. Stop gathering and answer now: the fi
 _FAILED = ("The last step's tool call failed{detail}. Fix the cause before repeating it: wrong path, "
            "wrong arguments, or a tool this mode does not allow.")
 _DO_IT = ("Do it now with your tools. Do not describe what you are going to do next.")
+# The plan_like guard above only reaches a step that runs NO tool. A model that
+# calls a tool between every paragraph of prose sails past it, and the prose is
+# replayed as the next step's example, so the turn spends its budget narrating.
+# This is the same directive for that shape: one short line, then the call.
+_NARRATING = ("You are narrating instead of working. An intermediate step needs one short line, "
+              "then the tool call. Save the explanation for the final answer, not for the gaps "
+              "between every call.")
 _CLOSING = ("Out of steps for this turn. Answer now without using any more tools: the finding "
             "first, then what you changed if anything, then what is still unresolved.")
 
@@ -283,6 +290,15 @@ def for_step(*, step: int = 0, steps: int = 0, errors=(), repeated=(),
 def nudge() -> str:
     """The instruction sent when a step planned instead of acting."""
     return _clip(_DO_IT)
+
+
+def narrating() -> str:
+    """The instruction sent when a tool-calling step over-narrates.
+
+    plan_like catches a step that talks and runs nothing; this catches the step
+    that talks at length AND runs something, which the no-call guard never sees.
+    """
+    return _clip(_NARRATING)
 
 
 # --- Shell overlap ---------------------------------------------------------
