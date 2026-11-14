@@ -189,7 +189,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `shellOverlap` | `backend/config.py:599-616` | overridden by `TACIT_SHELL_OVERLAP` |
 | `turnSound` | `backend/config.py:443` | on by default |
 | `alertSound` | `backend/config.py:485` | off by default |
-| `reportMode` | `backend/config.py:511` | off by default. On, the standing prompt gains 220 characters asking for the answer under a `## Report` heading and the transcript folds everything above it away; off, those characters are not in the prompt and the heading, if a model writes one anyway, is a heading |
+| `reportMode` | `backend/config.py:511` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
 | `allowVersionControl` | `backend/config.py:569` | absent means the agent may not run git |
 | `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
 | `disabledTools` | `backend/agent.py:920`, `backend/profiles.py:236` | tool names removed from the registry |

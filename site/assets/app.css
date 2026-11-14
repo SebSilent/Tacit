@@ -5501,6 +5501,20 @@ input, textarea, .ctl-select, .as-input, .rename-input, .mcp-in {
 }
 .report-card.over { border-color: rgba(var(--warn-rgb), .5); }
 .report-card.over .report-meter { color: var(--warn); }
+/* No report was written. The card stays rather than vanishing, because the channel
+   is the thing that is missing and an absent card reads as a feature that never ran.
+   What it loses is the claim: the accent goes out of the eyebrow, the surface drops
+   back a rung, and the frame turns dashed, which this sheet already uses to mean a
+   boundary that is structural rather than a thing with content. The prose is the
+   interface's own sentence, so it is set apart from model output rather than wearing
+   it. Over-budget amber is deliberately not reused here: a missing report and an
+   ignored word limit are different failures and must not look alike. */
+.report-card.empty {
+  background: var(--bg-2);
+  border-style: dashed;
+}
+.report-card.empty .report-eyebrow { color: var(--muted); }
+.report-card.empty .report-body { color: var(--muted); font-style: italic; }
 .report-body > *:first-child { margin-top: 0; }
 .report-body > *:last-child { margin-bottom: 0; }
 

@@ -165,8 +165,24 @@ applyDensity(density);
 // heading changes what it sends, and the transcript is shared by every device pointed
 // at this install. So the switch is a server preference, read at boot and written on
 // click, and only the view (which half you are looking at) stays in localStorage.
+// The `#` is required, and that is not pedantry. With it optional, a line that said
+// nothing but "Report" anywhere in the prose - a bullet, a sentence about a bug
+// report - split the reply there and filed everything after it as the deliverable.
+// The prompt asks for a heading, so a heading is what counts.
+// The `#` is required, and that is not pedantry. With it optional, a line that said
+// nothing but "Report" anywhere in the prose - a bullet, a sentence about a bug
+// report - split the reply there and filed everything after it as the deliverable.
+// The prompt asks for a heading, so a heading is what counts.
+// A trailing note after a separator is allowed, because models write `## Report - what
+// changed` constantly and calling that "no report" would discard a real deliverable.
+// The separator is what keeps it safe: `## Reporting the results` cannot match, because
+// after the word the pattern demands either end-of-line or one of : ： — – -.
+// Horizontal space only, and that is the whole lesson: with `\s*` here the match
+// stepped over the blank line after `## Report` and read the next bullet's `-` as a
+// separator, so the heading consumed the first line of the report and the card started
+// one bullet short. `[^\n]` on the trailing note for the same reason.
 const REPORT_HEAD =
-  /^ {0,3}(?:#{1,6}\s*)?(?:\*\*)?(report|findings|results|summary|answer)(?:\*\*)?\s*[:：]?\s*$/im;
+  /^ {0,3}#{1,6}[ \t]*(?:\*\*)?(report|findings|results|summary|answer)(?:\*\*)?[ \t]*(?:[:：—–-][ \t]*(?:\S[^\n]*)?)?$/im;
 
 // The prompt's ceiling, quoted by the card's meter so the budget is checkable by
 // eye instead of by asking again. This number and the injected instruction are one
@@ -179,8 +195,13 @@ let reportView = localStorage.getItem('tacit.reportView') || 'both';
 function splitReply(text) {
   if (!text) return { working: '', report: '' };
   const m = REPORT_HEAD.exec(text);
-  // No marker: the reply is the report, and there is no commentary to fold.
-  if (!m) return { working: '', report: text.trim() };
+  // No heading means there IS no report, so the whole turn belongs to the working
+  // channel and the report is empty. The fallback used to be the other way round -
+  // no marker meant the reply was its own report - and that is what turned every
+  // ignored instruction into an amber card reading 2,483 / 180 words: a missing
+  // deliverable rendered as a very long one, which is the exact confusion this
+  // feature exists to remove. `paintReply` now says "no report" instead.
+  if (!m) return { working: text.trim(), report: '' };
   return {
     working: text.slice(0, m.index).trim(),
     report: text.slice(m.index + m[0].length).trim(),
@@ -243,26 +264,44 @@ function paintReply(el) {
   const raw = c._raw || '';
   if (!reportMode) { c.innerHTML = md(raw); return; }
   const parts = splitReply(raw);
+  // The commentary channel holds everything that is not the report, which with no
+  // heading in the turn is the whole turn. That is the point: the yapping is shown
+  // where yapping is shown, not inside a card that calls it a deliverable.
   c.innerHTML = md(parts.working);
   const card = el.querySelector('.report-card');
   if (!card) return;
   const body = card.querySelector('.report-body');
+  const meter = card.querySelector('.report-meter');
+  card.classList.remove('over');
+
   if (!parts.report) {
-    card.hidden = true;
-    // Its own line, and not tidiness: the escaping audit reads any `innerHTML` on a
-    // line that also names a payload as a sink that bypassed `md()`. A write of the
-    // empty string is not that, and sharing a line with `parts.report` made the guard
-    // claim model text reached innerHTML unescaped.
-    body.innerHTML = '';
+    // No report was written, so the card states that instead of filling itself with
+    // the turn's own prose. Through `textContent`, and not for style: this sentence is
+    // ours rather than the model's, and the escaping audit reads any `innerHTML` on a
+    // line naming a payload as a sink that skipped `md()`.
+    card.classList.add('empty');
+    body.textContent = 'No report written, check the output';
+    meter.textContent = 'no report';
+    meter.title = 'The turn never wrote the `## Report` heading the prompt asks for, '
+      + 'so there is no deliverable to show apart from the working itself';
+    // Only once the row has stopped streaming. While prose is still arriving, an empty
+    // report is a heading not reached yet, and a notice claiming the model declined
+    // would be a verdict on work still in progress.
+    const row = el.closest('.msg') || el;
+    card.hidden = row.classList.contains('streaming');
+    // The fold holds the only prose in this row, so it stays open: collapsing it would
+    // hide the entire answer behind a control labelled "Working".
+    openWork(el);
     paintWorkCount(el);
     return;
   }
+
+  card.classList.remove('empty');
   body.innerHTML = md(parts.report);
   card.hidden = false;
   const n = wordCount(parts.report);
   const over = n > REPORT_BUDGET;
   card.classList.toggle('over', over);
-  const meter = card.querySelector('.report-meter');
   meter.textContent = over ? `${n} / ${REPORT_BUDGET} words` : `${n} words`;
   meter.title = over
     ? `${n} words against a ${REPORT_BUDGET}-word budget: this report is longer than the prompt asked for`
@@ -308,6 +347,16 @@ function openWork(body) {
 function closeWork(body) {
   const fold = body && body.querySelector('.work-fold');
   if (!fold) return;
+  // Repaint from here rather than from the flush above it. `endStream` clears the row's
+  // `streaming` class before calling this, and the no-report notice is only true of a
+  // finished turn - without this second paint the card would stay hidden on exactly the
+  // turns it exists to describe.
+  paintReply(body);
+  // A row with no report keeps its fold open. The working is the only prose there, and
+  // the collapse exists to get commentary out of the way of an answer; with no answer,
+  // obeying it would hide the whole turn.
+  const card = body.querySelector('.report-card');
+  if (card && card.classList.contains('empty')) return;
   // A fold someone opened by hand stays open. The automatic collapse is a guess
   // about what the reader still needs, and they overrode it when they clicked it.
   if (fold.dataset.manual !== '1') fold.classList.remove('open');

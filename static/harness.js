@@ -136,12 +136,13 @@ function renderAppearancePanel() {
         trace and the tool cards, and closes itself when the turn ends. The agent marks the split
         with a heading, so with this off that heading is just a heading - the stored transcript,
         the markdown export and what the model re-reads next turn are all unchanged, and a reply
-        that carries no heading degrades to the whole reply being the report rather than losing
-        it to a fold. The card counts its own words against a ${R ? R.budget : 180}-word budget
-        and turns amber when the reply goes over, so the limit is something you can read off the
-        screen instead of asking for again. With it on, every turn is also told to put its
-        answer under a heading reading <code>## Report</code>, in 220 characters of standing
-        instruction that are absent when it is off. Stored on the server, because it changes
+        that carries no heading is not treated as one: it stays ordinary output and the card
+        says <em>No report written, check the output</em>. The card counts its own words against
+        a ${R ? R.budget : 180}-word budget and turns amber when the reply goes over, so the
+        limit is something you can read off the screen instead of asking for again. With it on,
+        every turn is also told to close with a heading reading <code>## Report</code> and put
+        the answer under it, in 317 characters of standing instruction asked last and absent
+        entirely when the switch is off. Stored on the server, because it changes
         what the agent sends and not only what this browser shows: every device pointed at
         this install gets the same instruction and the same fold.</span>
       <button class="tgl ${on ? 'on' : ''}" id="reportModeTgl" role="switch" aria-checked="${on}"

@@ -112,10 +112,23 @@ Theme, transcript density and Report mode. Density changes how much of a tool re
 
 Report mode does change what the agent sees, which is why it is the only switch on this
 page stored on the server rather than in this browser. Off, the standing prompt is the
-figure the README publishes. On, it gains 220 characters asking for the answer under a
+figure the README publishes. On, it gains 317 characters asking for the answer under a
 heading reading `## Report`, and the transcript splits each reply at that heading: the
 answer in a card that counts its words against a 180-word ceiling, the running commentary
-folded beneath it with its counts showing. A reply with no such heading is shown whole,
-so a model that ignored the instruction still arrives readable.
+folded beneath it with its counts showing.
+
+A reply with no such heading is not treated as a report. It renders as ordinary output and
+the card says `No report written, check the output`. That is the opposite of the first
+version of this, which filed an unmarked reply whole inside the card on the grounds that
+showing the answer was safer than hiding it; in practice a model that ignored the
+instruction produced a 2,400-word card, and a missing deliverable looked like a very long
+one. The heading is also only honoured when it is a heading - `## Report`, or `## Report`
+with a note after a colon or dash. A line reading merely "Report" in the middle of some
+prose no longer splits the reply there, which would have filed everything after it as the
+deliverable.
+
+The instruction is asked for last in the prompt rather than fourth, which is the cheap half
+of making a model obey a one-line formatting rule in a standing prompt that also contains a
+project block, a tool guide, memory rules and a skills listing.
 
 Next: [every knob, with its default](configuration.md).

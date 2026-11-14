@@ -44,9 +44,10 @@ SUDO = """- Root elevation is armed on this machine. Tacit hands the saved passw
 # the one number the card can then show the person measuring it against. Off, this
 # block is not in the prompt at all, so the standing prompt stays the figure the
 # README publishes and the cost panel re-derives.
-REPORT = """- Put the answer, and only the answer, under a heading reading exactly `## Report`:
-  enumerated, under 180 words, no restating the request. Everything above that heading is
-  the working, which the interface folds away."""
+REPORT = """Close every reply with a line reading exactly `## Report`, and under it the deliverable:
+the answer only, enumerated, under 180 words, no restating the request. Write that line even
+when the answer is one sentence - everything above it is folded away, and a reply without it
+is shown as working with nothing reported."""
 
 PROJECT = """Working project: {project}
 
@@ -182,12 +183,11 @@ def system_prompt(project: str | None = None, readonly: bool = False,
     # something the shell guard would refuse, or vice versa.
     vcs = _VCS_ON if config.allow_vcs() else _VCS_OFF
     parts = [(SUBAGENT if subagent else BASE).format(platform=config.PLATFORM, vcs=vcs)]
-    # The report shape is asked for only when the interface is going to fold for it,
-    # and never of a sub-agent: its tool calls and prose never reach a transcript, only
-    # its final message reaches the parent, so a heading for a viewer that will not see
-    # it is a line paid for and never spent.
-    if config.report_mode() and not subagent and not chat:
-        parts.append(REPORT)
+    # Not here. This used to be the second block in the prompt, ahead of the project
+    # folder, the tool guide, the memory rules and the skills listing - four blocks that
+    # are each longer and each describe work rather than shape, which is what a model
+    # attends to when it is deciding how to end a turn. Asked for last, it is the most
+    # recent instruction in the standing prompt rather than the fourth.
     if config.project_usable(project):
         parts.append(PROJECT.format(project=project))
     elif session and not chat:
@@ -217,4 +217,10 @@ def system_prompt(project: str | None = None, readonly: bool = False,
         listing = _skills.index()
         if listing:
             parts.append(listing)
+    # Asked for last, and only when the interface is going to fold for it. Never of a
+    # sub-agent and never in chat mode: a sub-agent's tool calls and prose never reach a
+    # transcript, only its final message reaches the parent, so a heading for a viewer
+    # that will not see it is a line paid for and never spent.
+    if config.report_mode() and not subagent and not chat:
+        parts.append(REPORT)
     return "\n\n".join(parts)
