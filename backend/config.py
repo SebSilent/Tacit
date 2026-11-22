@@ -67,7 +67,7 @@ MEMORY_DB = HOME / "memory.db"
 ADAPTERS_DIR = HOME / "adapters"
 BRIDGES_DIR = ROOT / "bridges"
 BUNDLED_PLUGINS_DIR = BACKEND_DIR / "plugins"
-
+JOBS_DIR = HOME / "jobs"
 HOST = os.environ.get("TACIT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TACIT_PORT", "8550"))
 # The uvicorn.Server, set by main() once it is running. A restart asks this
@@ -311,7 +311,7 @@ def load_env() -> None:
 
 def ensure_home() -> None:
     for d in (HOME, SESSIONS_DIR, SKILLS_DIR, KNOWLEDGE_DIR, PLANS_DIR, CHECKPOINT_DIR,
-              PLUGINS_USER_DIR, ADAPTERS_DIR):
+              JOBS_DIR, PLUGINS_USER_DIR, ADAPTERS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     if not MODELS_FILE.exists():
         MODELS_FILE.write_text(json.dumps({"default": "", "providers": {}}, indent=2), encoding="utf-8")

@@ -29,6 +29,8 @@ Isolation ladder for tacit-micro:
 
 from __future__ import annotations
 
+import codecs
+import locale
 import os
 import shutil
 import signal
@@ -38,7 +40,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import audit, config, providers, sudo
+from . import audit, config, proctools, providers, sudo
 
 IS_POSIX = os.name != "nt"
 SCAN_LIMIT = 4000
@@ -235,7 +237,7 @@ def _spawn(command: str, cwd: str, timeout: int, limits: dict, network: bool,
 
 
 def run(command: str, project: str | None = None, backend: str | None = None,
-        timeout: int | None = None, session: str = "", on_output=None) -> dict:
+        timeout: int | None = None, session: str = "", on_output=None, stop=None) -> dict:
     """Run one command under the selected sandbox. Records it in the ledger.
 
     ``on_output(kind, text)`` streams the command's output as it lands, for a
@@ -274,10 +276,10 @@ def run(command: str, project: str | None = None, backend: str | None = None,
     # What does NOT stream is an image pull, which happens before the command runs
     # and can legitimately take twenty minutes with a silent card.)
     if chosen == "tacit-micro":
-        return _run_micro(cmd, root, box, limit, session, on_output)
+        return _run_micro(cmd, root, box, limit, session, on_output, stop=stop)
     if chosen == "container":
-        return _run_container(cmd, root, box, limit, session, on_output)
-    return _run_none(cmd, root, limit, session, on_output)
+        return _run_container(cmd, root, box, limit, session, on_output, stop=stop)
+    return _run_none(cmd, root, limit, session, on_output, stop=stop)
 
 
 def _result(ok: bool, text: str = "", **fields) -> dict:
@@ -297,140 +299,150 @@ def _result(ok: bool, text: str = "", **fields) -> dict:
 GRACE_SECONDS = 10
 
 
-def _kill_tree(proc) -> None:
-    """Kill the process and everything it started.
+def _kill_tree(proc) -> bool:
+    """Kill the command's containment boundary and report whether it worked.
 
-    Killing only the direct child is not enough. On Windows a ``.bat`` or
-    ``cmd /c`` wrapper leaves its grandchildren running, and they keep the captured
-    pipe open, so the reader blocks long after the timeout fired, measured here as
-    two orphaned processes still alive minutes later. A timeout that a command can
-    outrun is not a timeout, and this is the one guarantee the sandbox makes on a
-    platform where it can enforce nothing else.
+    Root exit is not a reason to skip cleanup: descendants can still be alive and
+    holding the captured pipes. The per-command job/group outlives the root for
+    exactly that case.
     """
-    if proc.poll() is not None:
-        return
+    return proctools.terminate_tree(proc)
+
+
+def _drain_chunks(stream, kind: str, on_output, buf: list, lock, errors: list) -> None:
+    """Drain bytes incrementally, without letting decoding or a viewer kill the reader."""
+    decoder = codecs.getincrementaldecoder(locale.getpreferredencoding(False) or "utf-8")("replace")
     try:
-        if IS_POSIX:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        else:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                           capture_output=True, timeout=15)
-    except Exception:  # noqa: BLE001
+        read = getattr(stream, "read1", stream.read)
+        while True:
+            chunk = read(8192)
+            if not chunk:
+                break
+            text = decoder.decode(chunk)
+            if not text:
+                continue
+            with lock:
+                buf.append(text)
+            if on_output is not None:
+                try:
+                    on_output(kind, text)
+                except Exception:  # a viewer must never stop process drainage
+                    pass
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            with lock:
+                buf.append(tail)
+            if on_output is not None:
+                try:
+                    on_output(kind, tail)
+                except Exception:
+                    pass
+    except Exception as exc:  # surfaced below; never silently mistaken for EOF
+        with lock:
+            errors.append(f"{kind} reader: {exc}")
+    finally:
         try:
-            proc.kill()
-        except Exception:  # noqa: BLE001
+            stream.close()
+        except Exception:
             pass
 
 
-def _drain_lines(stream, kind: str, on_output, buf: list, lock) -> None:
-    """Read one child stream line by line, keeping the whole text for the caller.
+def _run_streamed(proc, timeout: int, on_output, stop=None) -> tuple[int, str, str, bool]:
+    """Supervise the root and both pipes against one monotonic deadline.
 
-    Line-based rather than byte-chunk-based, and that is not a shortcut: with
-    ``text=True`` the stream already translates universal newlines, so a progress
-    bar that rewrites itself with a bare ``\\r`` arrives as a line and streams. A
-    reader thread per stream is also what keeps a chatty stderr from deadlocking a
-    quiet stdout, which is the failure ``communicate()`` was written to avoid.
-
-    Exceptions die quietly on purpose. The command's own result is decided by the
-    exit code; a reader that broke must not turn a successful build into a crash.
-    """
-    try:
-        for line in stream:
-            with lock:
-                buf.append(line)
-            on_output(kind, line)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _run_streamed(proc, timeout: int, on_output) -> tuple[int, str, str, bool]:
-    """``_run_captured``'s blocking path, but handing output to a callback as it lands.
-
-    Returns the same ``(code, stdout, stderr, timed_out)`` as the captured path,
-    with the same 124-on-timeout convention: the model must not see a different
-    result because a human was watching. Only the *timing* of the bytes differs.
+    Captured and live calls share this path. A direct shell that exits while a
+    descendant retains a pipe is not complete: it still owns the command's output
+    and must hit the deadline and containment cleanup just like a live root.
     """
     lock = threading.Lock()
     outs: list = []
     errs: list = []
+    reader_errors: list = []
     readers = [
-        threading.Thread(target=_drain_lines, args=(proc.stdout, "stdout", on_output, outs, lock),
+        threading.Thread(target=_drain_chunks,
+                         args=(proc.stdout, "stdout", on_output, outs, lock, reader_errors),
                          daemon=True, name="tacit-out-reader"),
-        threading.Thread(target=_drain_lines, args=(proc.stderr, "stderr", on_output, errs, lock),
+        threading.Thread(target=_drain_chunks,
+                         args=(proc.stderr, "stderr", on_output, errs, lock, reader_errors),
                          daemon=True, name="tacit-err-reader"),
     ]
-    for t in readers:
-        t.start()
+    for thread in readers:
+        thread.start()
+    deadline = time.monotonic() + max(1, int(timeout))
     timed_out = False
+    cancelled = False
+    cleanup_error = ""
     try:
-        try:
-            code = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            # Kill the tree first, then let the readers hit EOF. The order matters:
-            # draining before the kill is what made the old timeout wait on a pipe
-            # held open by a grandchild that was still alive.
-            timed_out = True
-            _kill_tree(proc)
-            try:
-                proc.wait(timeout=GRACE_SECONDS)
-            except Exception:  # noqa: BLE001
-                pass
-            code = 124
-        for t in readers:
-            t.join(GRACE_SECONDS)
-            if t.is_alive():
-                # A survivor still holding the pipe: closing it is the only way to
-                # unblock the reader, and abandoning it is better than hanging the
-                # turn for a process we have already killed.
+        while True:
+            if stop is not None and stop.is_set():
+                cancelled = True
+                if not _kill_tree(proc):
+                    cleanup_error = "could not terminate the whole command tree"
+                break
+            if proc.poll() is not None and all(not thread.is_alive() for thread in readers):
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                if not _kill_tree(proc):
+                    cleanup_error = "could not terminate the whole command tree"
+                break
+            if proc.poll() is None:
                 try:
-                    (proc.stdout if t.name == "tacit-out-reader" else proc.stderr).close()
-                except Exception:  # noqa: BLE001
+                    proc.wait(timeout=min(0.1, remaining))
+                except subprocess.TimeoutExpired:
                     pass
+            else:
+                # The root is gone but a descendant still owns at least one pipe.
+                time.sleep(min(0.05, remaining))
+
+        # One shared cleanup budget, not ten seconds per stream followed by an
+        # unbounded close. Correct tree termination should produce EOF by itself.
+        cleanup_deadline = time.monotonic() + GRACE_SECONDS
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=max(0, cleanup_deadline - time.monotonic()))
+            except Exception:
+                pass
+        for thread in readers:
+            thread.join(max(0, cleanup_deadline - time.monotonic()))
+        if proc.poll() is None or any(thread.is_alive() for thread in readers):
+            cleanup_error = cleanup_error or "command cleanup did not finish within the grace period"
+
         with lock:
             out, err = "".join(outs), "".join(errs)
-        return code, out, err, timed_out
+            if reader_errors:
+                err += ("\n" if err else "") + "ERROR: " + "; ".join(reader_errors)
+        if cleanup_error:
+            err += ("\n" if err else "") + "ERROR: " + cleanup_error
+        if cancelled:
+            err += ("\n" if err else "") + "ERROR: command cancelled"
+        code = 130 if cancelled else 124 if timed_out else proc.returncode
+        if code is None:
+            code = 1
+        return int(code), out, err, timed_out
     except Exception as exc:  # noqa: BLE001
         _kill_tree(proc)
         return 1, "", f"ERROR: {exc}", False
     finally:
-        for stream in (proc.stdout, proc.stderr):
-            try:
-                if stream:
-                    stream.close()
-            except Exception:  # noqa: BLE001
-                pass
+        if proc.poll() is not None:
+            proctools.reap(proc)
 
 
 def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False,
-                  preexec_fn=None, on_output=None, stdin_data: str | None = None
-                  ) -> tuple[int, str, str, bool]:
-    """Run a command and capture it, with a timeout that actually returns.
+                  preexec_fn=None, on_output=None, stdin_data: str | None = None,
+                  session: str = "", stop=None) -> tuple[int, str, str, bool]:
+    """Run one contained command through the shared wait/drain supervisor.
 
-    Returns ``(code, stdout, stderr, timed_out)``; a timeout reports exit 124, the
-    same convention `timeout(1)` uses. The bounded second read is what makes the
-    timeout real: after the tree is killed, draining is given a short grace period
-    and then abandoned rather than waited on indefinitely.
-
-    ``on_output(kind, text)`` is optional and only ever called from a reader
-    thread. Leaving it None keeps `communicate()`, the one path every non-viewed
-    command has always taken.
-
-    ``stdin_data`` is the one exception to the DEVNULL rule below, and it exists for
-    exactly one caller: `backend/sudo.py`, which feeds a password to `sudo -S`. It is
-    written and the pipe closed straight away, so a command that reads stdin after sudo
-    has taken its line still gets an immediate EOF rather than a hang.
+    ``stdin_data`` is the sole exception to the DEVNULL rule and exists for sudo.
+    Its writer always runs beside the readers, whether or not a viewer is present,
+    so a chatty child cannot deadlock against a password write.
     """
-    # stdin is DEVNULL, never inherited. A turn runs in the worker process, whose
-    # stdin is the parent's control pipe carrying {"cancel": true} and steer lines.
-    # Inheriting it did two things: a command that read stdin blocked forever on a
-    # pipe nobody writes to (this is what hung `python -c`, which reads stdin at
-    # startup), and the child held a read handle on the control pipe, so a control
-    # line could be consumed by a stray shell command instead of the worker that
-    # owns it. DEVNULL gives an immediate EOF: a non-interactive command that asks
-    # for input gets none and moves on, which is the honest answer here.
-    kwargs: dict = {"cwd": cwd, "stdin": subprocess.DEVNULL,
+    # A turn's stdin is the worker's control pipe. Agent commands must never
+    # inherit it: an input read would either wait forever or consume cancel/steer.
+    kwargs: dict = {"stdin": subprocess.DEVNULL,
                     "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
-                    "text": True, "env": env}
+                    "env": env}
     if stdin_data is not None:
         kwargs["stdin"] = subprocess.PIPE
     if shell:
@@ -438,41 +450,15 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     if preexec_fn is not None:
         kwargs["preexec_fn"] = preexec_fn
     if IS_POSIX:
-        # Its own process group, so the whole tree can be signalled at once.
         kwargs["start_new_session"] = True
-    proc = subprocess.Popen(argv if not shell else argv, **kwargs)
+    proc = proctools.spawn("tacit-shell", argv, session=session, cwd=cwd,
+                           contain=True, mark=False, **kwargs)
+    if IS_POSIX:
+        proc._tacit_group = True
     if stdin_data is not None:
-        # Written from its own thread on the streamed path, because a child that
-        # prints its output before it reads its input would fill the pipe and wait
-        # for a reader that is busy waiting for the write. The close is what makes
-        # this an EOF and not a hang.
-        if on_output is not None:
-            threading.Thread(target=_write_stdin, args=(proc, stdin_data),
-                             daemon=True).start()
-    if on_output is not None:
-        # A caller that wants it live. The captured path below stays untouched so
-        # every command nobody is watching behaves exactly as it always did.
-        return _run_streamed(proc, timeout, on_output)
-    try:
-        out, err = proc.communicate(timeout=timeout,
-                                    input=stdin_data if stdin_data is not None else None)
-        return proc.returncode, out or "", err or "", False
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
-        try:
-            out, err = proc.communicate(timeout=GRACE_SECONDS)
-        except Exception:  # noqa: BLE001
-            out, err = "", ""
-            for stream in (proc.stdout, proc.stderr):
-                try:
-                    if stream:
-                        stream.close()
-                except Exception:  # noqa: BLE001
-                    pass
-        return 124, out or "", err or "", True
-    except Exception as exc:  # noqa: BLE001
-        _kill_tree(proc)
-        return 1, "", f"ERROR: {exc}", False
+        threading.Thread(target=_write_stdin, args=(proc, stdin_data),
+                         daemon=True, name="tacit-shell-stdin").start()
+    return _run_streamed(proc, timeout, on_output, stop=stop)
 
 
 def _write_stdin(proc, data: str) -> None:
@@ -482,13 +468,14 @@ def _write_stdin(proc, data: str) -> None:
     reading leaves a closed pipe, and whatever it wrote to stderr and its exit code say
     what happened."""
     try:
-        proc.stdin.write(data)
+        encoding = locale.getpreferredencoding(False) or "utf-8"
+        proc.stdin.write(str(data).encode(encoding, errors="replace"))
         proc.stdin.close()
     except Exception:  # noqa: BLE001
         pass
 
 
-def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) -> dict:
+def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None, stop=None) -> dict:
     started = time.time()
     # Elevation is supplied here and nowhere else. This is the one backend that runs the
     # command on this machine as this user, which is all `sudo` means; the other two
@@ -496,7 +483,9 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
     run = sudo.prepare(cmd)
     code, out, err, timed_out = _run_captured(run["command"], cwd=str(root), timeout=limit,
                                               shell=True, on_output=on_output,
-                                              stdin_data=run["stdin"])
+                                              stdin_data=run["stdin"], session=session,
+                                              stop=stop)
+    cancelled = stop is not None and stop.is_set()
     sudo_note = None
     if run["elevated"]:
         sudo_note = (f"sudo: the saved password was supplied to {run['fed']} command(s). "
@@ -509,6 +498,15 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
         # silence is what let a model read `sudo: no password was provided` as root having
         # been withdrawn and report that back as a fact about the machine.
         sudo_note = sudo.explain(run, code, f"{out}\n{err}") or None
+    if cancelled:
+        note = "ERROR: command cancelled"
+        if err and "command cancelled" not in err:
+            note += "\n" + err
+        res = _result(False, note, backend="none", cwd=str(root), code=130,
+                      stdout=out, duration_ms=int((time.time() - started) * 1000))
+        audit.record("sandbox_run", session=session, tool="run_shell", backend="none",
+                     status="cancelled", code=130, timeout=limit, command=cmd)
+        return res
     if timed_out:
         partial = (out or "").strip()
         note = (f"ERROR: timed out after {limit}s. That is this shell's cap, not the task's "
@@ -516,7 +514,10 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None) ->
                 "cannot beat the cap is a bug in the approach: shrink the search space, "
                 "vectorize, cut the loop, or precompute. Rerunning this exact command unchanged "
                 "cannot pass - change something first.")
-        res = _result(False, note, backend="none", cwd=str(root))
+        if err:
+            note += "\n" + err
+        res = _result(False, note, backend="none", cwd=str(root), code=124,
+                      duration_ms=int((time.time() - started) * 1000))
         if partial:
             # Whatever the command printed before the kill is usually exactly the state the next
             # attempt needs, diffs collected, candidates ranked. This used to be discarded, so a
@@ -557,7 +558,7 @@ def _sudo_unsupplied(cmd: str) -> str:
 
 
 def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
-               on_output=None) -> dict:
+               on_output=None, stop=None) -> dict:
     started = time.time()
     network = bool(box.get("network"))
     readonly = bool(box.get("readonly_project"))
@@ -569,7 +570,9 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
     argv, kwargs, notes = _spawn(cmd, str(root), limit, limits, network, readonly)
     code, out, err, timed_out = _run_captured(
         argv, cwd=kwargs.get("cwd") or str(root), env=kwargs.get("env"),
-        timeout=limit, preexec_fn=kwargs.get("preexec_fn"), on_output=on_output)
+        timeout=limit, preexec_fn=kwargs.get("preexec_fn"), on_output=on_output,
+        session=session, stop=stop)
+    cancelled = stop is not None and stop.is_set()
     if code == 1 and not out and str(err).startswith("ERROR:"):
         return _result(False, err, backend="tacit-micro", cwd=str(root))
 
@@ -603,16 +606,21 @@ def _run_micro(cmd: str, root: Path, box: dict, limit: int, session: str,
     if sudo.uses_sudo(cmd):
         notes.append(_sudo_unsupplied(cmd))
 
+    stopped = cancelled or timed_out
+    error_text = ("ERROR: command cancelled" if cancelled else
+                  f"ERROR: timed out after {limit}s" if timed_out else err)
+    if stopped and err and err not in error_text:
+        error_text += "\n" + err
     res = _result(
-        True, backend="tacit-micro", cwd=str(root),
-        code=124 if timed_out else code,
-        stdout=out, stderr=(f"ERROR: timed out after {limit}s" if timed_out else err),
+        not stopped, backend="tacit-micro", cwd=str(root),
+        code=130 if cancelled else 124 if timed_out else code,
+        stdout=out, stderr=error_text,
         changed=changed, notes=notes, enforced=enforced,
         requested={"network": network, "timeout": limit, **limits},
         duration_ms=int((time.time() - started) * 1000))
 
     audit.record("sandbox_run", session=session, tool="run_shell", backend="tacit-micro",
-                 mode="micro", status="timeout" if timed_out else
+                 mode="micro", status="cancelled" if cancelled else "timeout" if timed_out else
                  ("ok" if code == 0 else f"exit {code}"),
                  code=res["code"], timeout=limit, changed=changed["count"],
                  enforced=enforced, network=network, command=cmd)
@@ -701,24 +709,20 @@ def _image_present(image: str) -> bool:
         return False
 
 
-def _kill_container(name: str) -> None:
-    """Stop the container itself, not just the CLI that started it.
-
-    Killing `docker run` leaves the container running: the timeout would be
-    reported to the user while the command carried on underneath, which is the one
-    thing a sandbox must never do.
-    """
+def _kill_container(name: str) -> bool:
+    """Stop the daemon-side container and report whether the runtime accepted it."""
     runtime = _container_runtime()
     if not runtime:
-        return
+        return False
     try:
-        subprocess.run([runtime, "kill", name], capture_output=True, timeout=20)
+        result = subprocess.run([runtime, "kill", name], capture_output=True, timeout=20)
+        return result.returncode == 0
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
-                   on_output=None) -> dict:
+                   on_output=None, stop=None) -> dict:
     started = time.time()
     runtime = _container_runtime()
     if not runtime:
@@ -754,16 +758,21 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
                           limits=limits, name=name, pids_limit=settings["pids_limit"])
     before = _scan(root)
     code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit,
-                                              on_output=on_output)
-    if timed_out:
+                                              on_output=on_output, session=session, stop=stop)
+    cancelled = stop is not None and stop.is_set()
+    if timed_out or cancelled:
         # The runtime, not just the client: `docker run` dying leaves the container
         # alive, so the command would carry on after Tacit reported it stopped.
-        _kill_container(name)
+        killed = _kill_container(name)
+    else:
+        killed = False
 
     changed = _diff(before, _scan(root))
     notes = [f"ran in {_runtime_label(runtime)} image '{image}'"]
-    if timed_out:
-        notes.append(f"timed out after {limit}s; the container was killed, not just the client")
+    if timed_out or cancelled:
+        notes.append((f"timed out after {limit}s" if timed_out else "cancelled")
+                     + ("; the container was killed, not just the client" if killed
+                        else "; ERROR: the runtime did not confirm that the container was killed"))
     if sudo.uses_sudo(cmd):
         # Not a gap to close: `no-new-privileges` is set on the run argv (see
         # container_argv), so the kernel drops the setuid bit that sudo depends on, and
@@ -783,15 +792,21 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
         "pids_limit": True,
         "no_new_privileges": True,
     }
-    res = _result(True, backend="container", cwd=str(root),
-                  code=124 if timed_out else code, stdout=out,
-                  stderr=(f"ERROR: timed out after {limit}s" if timed_out else err),
+    stopped = cancelled or timed_out
+    error_text = ("ERROR: command cancelled" if cancelled else
+                  f"ERROR: timed out after {limit}s" if timed_out else err)
+    if stopped and err and err not in error_text:
+        error_text += "\n" + err
+    res = _result(not stopped, backend="container", cwd=str(root),
+                  code=130 if cancelled else 124 if timed_out else code, stdout=out,
+                  stderr=error_text,
                   changed=changed, notes=notes, enforced=enforced,
                   requested={"network": network, "timeout": limit, "image": image, **limits},
                   duration_ms=int((time.time() - started) * 1000), container=name)
     audit.record("sandbox_run", session=session, tool="run_shell", backend="container",
                  mode="container", image=image,
-                 status="timeout" if timed_out else ("ok" if code == 0 else f"exit {code}"),
+                 status="cancelled" if cancelled else "timeout" if timed_out else
+                 ("ok" if code == 0 else f"exit {code}"),
                  code=res["code"], timeout=limit, changed=changed["count"],
                  enforced=enforced, network=network, command=cmd)
     return res

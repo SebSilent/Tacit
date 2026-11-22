@@ -7,7 +7,7 @@ impeccable.design fails on the same words.
 
     python scripts/check_prose.py                 # the documentation set
     python scripts/check_prose.py --all           # plus installer and UI strings
-    python scripts/check_prose.py docs/install.md # one file
+    python scripts/check_prose.py site/md/install.md # one file
 
 Exit is 0 when nothing is banned, 1 when something is. Patterns the brief says
 need human judgment are reported as warnings and never fail the run: a rule that
@@ -109,7 +109,7 @@ WARNINGS = [
 ]
 
 # Files the documentation set covers.
-DOC_SET = ["README.md", "CONTRIBUTING.md", "docs"]
+DOC_SET = ["README.md", "CONTRIBUTING.md", "site/md"]
 
 # Extra places checked by --all: strings a person actually reads. `site` is in the
 # list because the generated pages and the interface demo are the copy a stranger
@@ -118,7 +118,7 @@ DOC_SET = ["README.md", "CONTRIBUTING.md", "docs"]
 STRINGS = ["install.sh", "install.ps1", "run.sh", "run.bat", "static", "site"]
 
 ALLOW = {
-    # ("docs/install.md", 12, "double hyphen standing in for an em dash"),
+    # ("site/md/install.md", 12, "double hyphen standing in for an em dash"),
 }
 
 

@@ -1,20 +1,40 @@
 /*
- * Renders a markdown file into the page with the app's own renderer, vendored at
- * assets/markdown.js. The markdown is the single source: the site does not keep a
- * second copy of the prose that could drift from the repository.
+ * Two jobs, in order:
+ *  1. The mobile documentation drawer (masthead button toggles the sidebar).
+ *  2. Render the page's markdown with the app's own renderer, vendored at
+ *     assets/markdown.js. The markdown under site/md is the single source.
  */
 
 (function () {
+  // ── mobile nav drawer ────────────────────────────────────────────────
+  const toggle = document.querySelector('.nav-toggle');
+  const nav = document.getElementById('doc-nav');
+  if (toggle && nav) {
+    const setOpen = (open) => {
+      document.body.classList.toggle('nav-open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    toggle.addEventListener('click', () => {
+      setOpen(!document.body.classList.contains('nav-open'));
+    });
+    nav.addEventListener('click', (e) => {
+      if (e.target.closest('a')) setOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    });
+  }
+
+  // ── markdown page ────────────────────────────────────────────────────
   const page = document.getElementById('page');
   if (!page) return;
 
   const src = page.getAttribute('data-md');
 
   // A link to a .md file is a link to a page of this site. The files are siblings
-  // here, so only the last segment of the path matters.
-  // The last segment only, lowercased: the pages are siblings here, and GitHub
-  // Pages serves from a case-sensitive filesystem, so `CONTRIBUTING.md` has to land
-  // on `contributing.html` the same way `configuration.md` does.
+  // here, so only the last segment of the path matters, lowercased: GitHub Pages
+  // serves from a case-sensitive filesystem, so `CONTRIBUTING.md` lands on
+  // `contributing.html` the same way `configuration.md` does.
   function htmlHref(href) {
     const clean = href.replace(/\.md$/i, '');
     const seg = clean.split('/').pop();
@@ -74,8 +94,8 @@
     .then((text) => {
       page.innerHTML = window.TacitMarkdown.md(text);
       decorate(page);
-      document.title = (document.querySelector('#page h1') || {}).textContent
-        || document.title;
+      const h1 = document.querySelector('#page h1');
+      if (h1 && h1.textContent) document.title = h1.textContent + ' · Tacit';
     })
     .catch(() => fail('This page could not read its markdown.'));
 })();

@@ -19,9 +19,41 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from backend import config, session_runtime, session_state, store, turn_worker
 from tests.helpers import drain_turns, state_paths
+
+
+class TurnWorkerEventTest(unittest.TestCase):
+    """The parent's terminal-event contract, independent of a model transport."""
+
+    def _read(self, emitted, returncode=0):
+        proc = mock.Mock()
+        proc.stdout = [json.dumps(event) + "\n" for event in emitted]
+        proc.poll.return_value = returncode
+        proc.returncode = returncode
+        worker = turn_worker.TurnWorker("tw-events")
+        worker.proc = proc
+        with mock.patch.object(turn_worker.proctools, "reap") as reap:
+            events = list(worker.events())
+        reap.assert_called_once_with(proc)
+        return events
+
+    def test_a_done_event_makes_a_clean_exit_normal(self):
+        self.assertEqual(self._read([{"type": "text", "delta": "answer"},
+                                     {"type": "done"}]),
+                         [{"type": "text", "delta": "answer"}, {"type": "done"}])
+
+    def test_a_clean_exit_without_done_still_errors(self):
+        events = self._read([{"type": "text", "delta": "partial"}])
+        self.assertEqual(events[-1].get("type"), "error")
+        self.assertIn("clean exit but no done event", events[-1].get("message"))
+
+    def test_a_nonzero_exit_still_errors_after_done(self):
+        events = self._read([{"type": "done"}], returncode=7)
+        self.assertEqual(events[-1],
+                         {"type": "error", "message": "turn worker exited with code 7"})
 
 
 class TurnWorkerTest(unittest.TestCase):
@@ -164,6 +196,9 @@ class TurnWorkerTest(unittest.TestCase):
             self.fail(f"no text event; errors: {errs}")
         self.assertIn("text", kinds, f"the model's answer must stream, got {kinds}")
         self.assertIn("usage", kinds)
+        self.assertIn("done", kinds, "a successful model response must finish with done")
+        self.assertEqual([e for e in events if e.get("type") == "error"], [],
+                         "normal done must not gain a trailing clean-exit error")
         # The step the worker completed is in the parent's trace.
         self.assertTrue(w._trace, "a completed step must reach the parent")
         self.assertIn("the answer", w._trace[-1].get("text") or "")

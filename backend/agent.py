@@ -311,7 +311,7 @@ def _audit_overlap(cmd: str, hit: dict, mode: str, chars: int, session: str) -> 
 
 
 def t_run_shell(command: str, project: str | None = None, timeout: int | None = None,
-                session: str = "", on_output=None) -> str:
+                session: str = "", on_output=None, stop=None) -> str:
     """Run one shell command. `on_output` is injected by `call_tool`, never by the
     model; it is not in the tool schema, so no argument list can bring one in. It
     exists only so a person watching the card sees the run while it is happening;
@@ -337,7 +337,7 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
     # Everything runs through the sandbox layer, so which backend ran it, and what
     # it changed, is recorded whether or not isolation was in force.
     res = sandbox.run(cmd, project=project, timeout=timeout, session=session,
-                      on_output=on_output)
+                      on_output=on_output, stop=stop)
     if not res.get("ok"):
         err = (res.get("stderr") or "ERROR: the command did not run").strip()
         if "timed out" in err:
@@ -348,7 +348,10 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
                     "re-running the same command will usually hang the same way. On Windows a "
                     "piped find/findstr/more can block on a full pipe buffer; use a different "
                     "command shape, or pass a longer timeout if the work is genuinely slow.")
-        return err
+        partial = (res.get("stdout") or "").strip()
+        if partial:
+            err += ("\n[stdout]\n" if err else "") + partial
+        return _clip(err)
     out = res.get("stdout") or ""
     if res.get("stderr"):
         out += ("\n[stderr]\n" if out else "") + res["stderr"]
@@ -670,7 +673,10 @@ READONLY_BLOCKED |= {"task", "mcp_call", "mcp_activate_tools", "memory_add"}
 # Tools that read in one action and write in another. The guard below refuses the
 # writing action rather than dropping the tool, so `evidence get` still works for
 # a read-only caller.
-READONLY_BLOCKED_ACTIONS = {"evidence": {"add"}}
+READONLY_BLOCKED_ACTIONS = {
+    "evidence": {"add"},
+    "browser": {"click", "type", "screenshot", "close"},
+}
 
 
 def readonly_guard(name: str, args: dict) -> str:
@@ -970,7 +976,7 @@ def tools_for(readonly: bool = False, depth: int = 0) -> list[dict]:
     # pinned (unless the user turned on direct mode). Failures here must never
     # break an ordinary turn.
     try:
-        rows.extend(plugin_manager.collect_tools())
+        rows.extend(plugin_manager.collect_tools(readonly=readonly))
     except Exception:  # noqa: BLE001
         pass
     # The direct MCP schemas are appended below every filter above, so the
@@ -1925,6 +1931,10 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         if refusal:
             out["result"] = refusal
             return
+    allowed = ctx.get("allowed_tools")
+    if allowed is not None and name not in allowed:
+        out["result"] = f"ERROR: '{name}' is not available to this caller"
+        return
     # The archive reader is refused at the call, not merely hidden from the
     # schema: a model that remembers the name from an earlier turn can still
     # emit it, and a refusal it can read is the honest answer.
@@ -1958,6 +1968,13 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         return
     fn = EXECS.get(name)
     if fn is None and name != "research":
+        if ctx.get("readonly"):
+            safe_plugins = {t["function"]["name"]
+                            for t in plugin_manager.collect_tools(readonly=True)}
+            if name not in safe_plugins:
+                out["result"] = (f"ERROR: plugin tool '{name}' is not declared read-only "
+                                 "and is unavailable to this caller")
+                return
         plugin_result = plugin_manager.call_tool(name, args, ctx)
         if plugin_result is not None:
             out["result"] = str(plugin_result)
@@ -1969,6 +1986,8 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         args = {**args, "project": ctx.get("project")}
     if "session" not in args and "session" in params:
         args = {**args, "session": ctx.get("session") or ""}
+    if "stop" in params:
+        args = {**args, "stop": ctx.get("stop")}
     try:
         if "on_output" in params and parent_call_id:
             # A tool that can report while it runs, and a card to report to. With
@@ -2397,7 +2416,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     steps = max_steps or config.max_steps()
     tools = [] if chat else tools_for(readonly, depth)
     ctx = {"project": project, "ref": ref, "depth": depth, "readonly": readonly,
-           "session": session, "stop": stop}
+           "session": session, "stop": stop,
+           # Schemas advertise intent; this set is the dispatch-time boundary.
+           # Chat therefore carries an empty set rather than merely tools=None.
+           "allowed_tools": frozenset(t["function"]["name"] for t in tools)}
     # One budget for the whole turn, derived from the model's real window rather
     # than a flat constant that suits neither a 1M-token model nor an 8k one.
     budget = config.AGENT_CONTEXT_BUDGET if chat else context_budget(ref)

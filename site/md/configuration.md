@@ -74,7 +74,7 @@ A turn's start, a compaction's summariser call, and terminal commands run on two
 rather than the default executor, which `asyncio.to_thread` shares with git operations and the
 updater (`backend/routers/chat.py:54-57`): a few terminals holding their threads for minutes used to
 queue the next turn start behind them, and every session's prompt hung with nothing running. The
-split keeps the two long-latency kinds apart — a terminal cannot starve a turn start, and a
+split keeps the two long-latency kinds apart: a terminal cannot starve a turn start, and a
 compaction cannot starve a terminal. `TACIT_TURN_POOL` sizes the turn pool, `TACIT_TERM_POOL` the
 terminal one.
 
@@ -105,7 +105,7 @@ reproduce whole (`backend/config.py:90`, `:99`).
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:235` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
-than written out, so the sentence cannot drift away from the caps (`backend/agent.py:748`-744`).
+than written out, so the sentence cannot drift away from the caps (`backend/agent.py:755-760`).
 
 ### Context and compaction
 
@@ -135,7 +135,7 @@ model deliberately.
 The stored transcript's own trigger gets headroom over the wire's (`backend/config.py:161-171`): the
 *billed* measure fires at the plain fill target, the *stored* measure at the target times
 `TACIT_STORE_COMPACT_FACTOR`, because a store somewhat over the target makes elision stub rows rather
-than make the request over budget — folding the store at the plain target summarised records whose
+than make the request over budget; folding the store at the plain target summarised records whose
 wire was fine, which is how 1.0.8 came to compact sessions that needed no fold. `1.0` restores the
 old behaviour.
 
@@ -172,7 +172,7 @@ outright (`backend/config.py:975-980`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:17`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:726`-722`), and that sentence has to be testable.
+it runs on (`backend/agent.py:733-735`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -192,7 +192,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:34`), written through
 | `reportMode` | `backend/config.py:511` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
 | `allowVersionControl` | `backend/config.py:569` | absent means the agent may not run git |
 | `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
-| `disabledTools` | `backend/agent.py:920`, `backend/profiles.py:236` | tool names removed from the registry |
+| `disabledTools` | `backend/agent.py:925-929`, `backend/profiles.py:236` | tool names removed from the registry |
 | `archiveTool` | `backend/config.py:474` | the archive reader's switch; absent means on |
 | `projectRoots` | `backend/config.py:783` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |
@@ -221,7 +221,7 @@ silent.
 
 Container settings live in `capabilities.json` rather than in the environment because they are a
 capability choice: `container_image`, `container_auto_pull` and `container_pids_limit` are read at
-`backend/sandbox.py:653`-649`.
+`backend/sandbox.py:652-664`.
 
 ## Installer variables
 

@@ -3619,6 +3619,65 @@ class TestAutonomyLaunchGate(Isolated):
                 self.assertFalse(st["enabled"])
                 self.assertIn(word, st["reason"].lower())
 
+    def test_an_unsuccessful_reply_cannot_execute_a_fenced_directive(self):
+        """A direction inside a failed or partial reply is not an authorisation."""
+        answers = ("```\nCONTINUE\n```", "```\nDONE\n```",
+                   "```text\nRun the unattended step.\n```")
+        for status in ("error", "cut", "stopped"):
+            for answer in answers:
+                with self.subTest(status=status, answer=answer):
+                    sid = self._armed()
+                    launches, events = self._drive(sid, answer=answer, status=status)
+                    st = assistant.autonomy_of(store.get(sid))
+                    self.assertEqual(launches, [])
+                    self.assertFalse(st["enabled"])
+                    self.assertEqual(st["reason"], assistant.CUT_REASONS[status])
+                    self.assertEqual(st["cycles"], 0)
+                    self.assertEqual(self._ticks(events), [])
+
+    def test_any_other_non_success_status_fails_closed(self):
+        """Only the two documented success statuses can authorise a handoff."""
+        for status in ("", "timeout", "ANSWERED"):
+            with self.subTest(status=status):
+                sid = self._armed()
+                launches, _events = self._drive(
+                    sid, answer="```\nDONE\n```", status=status)
+                st = assistant.autonomy_of(store.get(sid))
+                self.assertEqual(launches, [])
+                self.assertFalse(st["enabled"])
+                self.assertIn("did not complete successfully", st["reason"])
+
+    def test_an_unterminated_block_never_authorises_autonomous_work(self):
+        """Manual extraction may salvage a cut-off block; unattended execution may not."""
+        answers = ("```\nCONTINUE\n", "```\nDONE\n",
+                   "```text\nRun the unattended step.\n")
+        for status in ("answered", "closed"):
+            for answer in answers:
+                with self.subTest(status=status, answer=answer):
+                    sid = self._armed()
+                    launches, events = self._drive(sid, answer=answer, status=status)
+                    st = assistant.autonomy_of(store.get(sid))
+                    self.assertEqual(launches, [])
+                    self.assertFalse(st["enabled"])
+                    self.assertIn("unterminated", st["reason"])
+                    self.assertEqual(st["cycles"], 0)
+                    self.assertEqual(self._ticks(events), [])
+
+    def test_closed_is_a_successful_handoff_status(self):
+        """The tool-less closing round can still launch work or report the Goal met."""
+        sid = self._armed(answer="```text\nDo the closing round's next step.\n```")
+        launches, _events = self._drive(
+            sid, answer="```text\nDo the closing round's next step.\n```", status="closed")
+        self.assertEqual([row["text"] for row in launches],
+                         ["Do the closing round's next step."])
+
+        sid = self._armed(answer="```\nDONE\n```")
+        launches, _events = self._drive(sid, answer="```\nDONE\n```", status="closed")
+        st = assistant.autonomy_of(store.get(sid))
+        self.assertEqual(launches, [])
+        self.assertFalse(st["enabled"])
+        self.assertIn("Goal met", st["reason"])
+
     def test_a_silent_cycle_does_not_replay_the_last_one_that_spoke(self):
         """The second half of the same bug: with no reply this cycle, the gate used
         to walk back through the stored history and hand over the *previous*

@@ -290,6 +290,15 @@ def _autonomy_after_turn(sid: str, rec: dict, loop) -> None:
         _autonomy_note(sid, res.get("error") or "the Assistant could not start")
 
 
+def _autonomy_blocks_terminated(answer: str) -> bool:
+    """Manual extraction may salvage a cut-off block; autonomous execution may not."""
+    open_fence = False
+    for line in str(answer or "").splitlines():
+        if line.strip().startswith("```"):
+            open_fence = not open_fence
+    return not open_fence
+
+
 def _autonomy_after_assistant(sid: str, rec: dict, loop, answer: str | None = None,
                               status: str = "answered") -> None:
     """The Assistant answered: its last fenced block is the next agent prompt.
@@ -318,9 +327,18 @@ def _autonomy_after_assistant(sid: str, rec: dict, loop, answer: str | None = No
         # never stopped. Returning WITHOUT disabling is the whole point: a
         # manual question must not cost the run its remaining budget.
         return
+    if status not in ("answered", "closed"):
+        # A failed, stopped or otherwise incomplete reply authorises nothing,
+        # even when its partial text happens to contain a well-formed block.
+        _autonomy_off(sid, assistant.CUT_REASONS.get(status)
+                      or "the Assistant's reply did not complete successfully")
+        return
     if answer is None:
         rows = (store.get(sid) or {}).get("assistant") or []
         answer = str(rows[-1].get("content") or "") if rows else ""
+    if not _autonomy_blocks_terminated(answer):
+        _autonomy_off(sid, "the Assistant's last fenced block was unterminated")
+        return
     direction = assistant.directive(answer)
     if direction["kind"] == "done":
         _autonomy_off(sid, "the Assistant reported the Goal met")

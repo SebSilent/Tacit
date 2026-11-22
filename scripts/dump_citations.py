@@ -7,8 +7,8 @@ blank line and a docstring title instead of the sentence being quoted. That gap 
 closed by reading, not by asserting, and this makes the reading possible at scale: it
 prints the doc line, the citation, and the real source lines side by side.
 
-    python scripts/dump_citations.py             # README, CONTRIBUTING and docs/
-    python scripts/dump_citations.py docs/tools.md
+    python scripts/dump_citations.py             # README, CONTRIBUTING and site/md/
+    python scripts/dump_citations.py site/md/tools.md
 
 It handles the three forms a citation takes in these docs: ``path:N``, ``path:N-M``,
 and a bare ``:N-M`` that repeats the path it follows on the same line. Exit is 1 when
@@ -28,7 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # lost 800 lines went on being cited by line numbers that no longer existed.
 CITE = re.compile(
     r"(?<![\w./-])"
-    r"((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
+    r"((?:backend|static|scripts|tests|docs|site)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
     r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
     r"(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?"
 )
@@ -52,7 +52,7 @@ def _lines(rel: str) -> list[str] | None:
 def _doc_files(argv: list[str]) -> list[pathlib.Path]:
     if argv:
         return [ROOT / a for a in argv]
-    return [ROOT / "README.md", ROOT / "CONTRIBUTING.md"] + sorted((ROOT / "docs").glob("*.md"))
+    return [ROOT / "README.md", ROOT / "CONTRIBUTING.md"] + sorted((ROOT / "site" / "md").glob("*.md"))
 
 
 def _spans(line: str) -> list[tuple[str, int, int]]:

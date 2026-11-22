@@ -32,6 +32,7 @@ directory itself (`backend/config.py:29-30`). The defaults are your home and `~/
 | `evidence.jsonl` | `backend/config.py:43` | citable facts recorded during turns |
 | `workspaces/` | `backend/config.py:40` | one scratch folder per session with no project |
 | `checkpoints/` | `backend/config.py:50` | workspace snapshots, one folder per turn that wrote |
+| `jobs/` | `backend/config.py:70` | one JSON registry row and combined output log per background job, including stopped and exited jobs |
 | `plans/` | `backend/config.py:49` | plan artifacts |
 | `folders.json` | `backend/config.py:62` | the folder list the workspace picker shows |
 | `benchmarks.json` | `backend/config.py:48` | per-model settings; the name predates its current use (`:44-47`) |

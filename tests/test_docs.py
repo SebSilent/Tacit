@@ -48,7 +48,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
-DOCS = ROOT / "docs"
+DOCS = ROOT / "site" / "md"
 
 # Where a variable name can be read. Anything outside this set is a name the docs
 # invented: installers and run scripts count, because they do set real variables.
@@ -58,7 +58,7 @@ CODE_FILES = ("install.sh", "install.ps1", "run.sh", "run.bat")
 
 # CONTRIBUTING.md is in the set because it cites the README by line number, and the
 # last README rewrite moved every one of those numbers and nothing noticed.
-DOC_GLOBS = ("README.md", "CONTRIBUTING.md", "docs/*.md", "docs/**/*.md")
+DOC_GLOBS = ("README.md", "CONTRIBUTING.md", "site/md/*.md", "site/md/**/*.md")
 
 ENV_RE = re.compile(r"TACIT_[A-Z0-9_]+")
 # `backend/config.py:477`, `static/app.js:1181`, `install.ps1:16`, `README.md:13-15` -
@@ -67,7 +67,7 @@ ENV_RE = re.compile(r"TACIT_[A-Z0-9_]+")
 # catch-all would make every page of prose a citation target and then demand a line
 # check against files nobody means to cite by line.
 CITE_RE = re.compile(
-    r"(?<![\w./-])((?:backend|static|scripts|tests|docs)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
+    r"(?<![\w./-])((?:backend|static|scripts|tests|docs|site)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
     r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
     r"(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?")
 # `:93`, the shorthand that repeats the path it follows. The lookbehind is what keeps
@@ -122,7 +122,7 @@ def _doc_files() -> list[pathlib.Path]:
     seen: list[pathlib.Path] = []
     for pat in DOC_GLOBS:
         for p in sorted(ROOT.glob(pat)):
-            if p.is_file() and p not in seen:
+            if p.is_file() and p not in seen and p not in (DOCS / "README.md", DOCS / "CONTRIBUTING.md"):  # skip generated copies
                 seen.append(p)
     return seen
 
@@ -325,7 +325,7 @@ class TestCitationsResolve(unittest.TestCase):
         """
         code = _read(ROOT / "backend" / "agent.py").splitlines()
         rows = re.findall(r"^\| `([a-z_]+)` \|[^|]*\|[^|]*`backend/agent\.py:(\d+)",
-                          _read(ROOT / "docs" / "tools.md"), re.M)
+                          _read(DOCS / "tools.md"), re.M)
         self.assertGreaterEqual(len(rows), 20,
                                 "the tool table stopped looking like a tool table")
         wrong = []
@@ -376,19 +376,19 @@ class TestDocSetIsComplete(unittest.TestCase):
     def test_every_page_is_reachable_from_the_index(self):
         index = DOCS / "index.md"
         self.assertTrue(index.is_file(),
-                        "docs/index.md is the entry point and it is not there")
+                        "site/md/index.md is the entry point and it is not there")
         text = _read(index)
         orphans = [p.name for p in sorted(DOCS.rglob("*.md"))
-                   if p != index and f"]({p.relative_to(DOCS)}".replace("\\", "/")
-                                   not in text]
+                   if p != index and p.name not in ("README.md", "CONTRIBUTING.md")
+                   and f"]({p.relative_to(DOCS)}".replace("\\", "/") not in text]
         self.assertEqual(orphans, [],
                          f"pages the index does not mention: {orphans}")
 
-    def test_readme_points_at_the_docs(self):
+    def test_readme_points_at_the_hosted_docs(self):
         text = _read(README)
-        self.assertIn("docs/", text,
-                      "the README never mentions docs/, so a reader arriving from "
-                      "the repository root cannot find them")
+        self.assertIn("https://sebsilent.github.io/Tacit/", text,
+                      "the README must point readers to the hosted documentation, "
+                      "not a local docs directory")
 
 
 class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
@@ -514,7 +514,7 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
         text = _read(DOCS / "cost-and-profiles.md")
         default = self.measured["default"]["total"]
         self.assertIn(f"{default:,} on Default", text,
-                      "docs/cost-and-profiles.md publishes a different default figure")
+                      "site/md/cost-and-profiles.md publishes a different default figure")
 
 
 if __name__ == "__main__":

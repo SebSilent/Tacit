@@ -26,6 +26,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -92,6 +93,8 @@ if os.name == "nt":
         ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     _kernel32.AssignProcessToJobObject.restype = ctypes.c_bool
     _kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _kernel32.TerminateJobObject.restype = ctypes.c_bool
+    _kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint]
     _kernel32.CloseHandle.restype = ctypes.c_bool
     _kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 
@@ -130,9 +133,42 @@ def _assign_job(proc) -> None:
         pass
 
 
+def terminate_tree(proc) -> bool:
+    """Terminate a contained process tree, even after its root has exited.
+
+    A Windows Job Object remains the containment boundary after the root process
+    disappears. Falling straight to taskkill in that case loses the descendants
+    that still hold the command's pipes. POSIX shells owned by the sandbox have
+    their own process group, so their pgid is the equivalent boundary.
+    """
+    if proc is None:
+        return True
+    try:
+        if os.name == "nt":
+            job = getattr(proc, "_tacit_job", None)
+            if job and _kernel32.TerminateJobObject(job, 1):
+                return True
+            if proc.poll() is None:
+                result = subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=15)
+                return result.returncode == 0
+            return False
+        if getattr(proc, "_tacit_group", False):
+            # start_new_session makes the root pid the durable pgid. Looking it
+            # up through the root would fail precisely when only children remain.
+            os.killpg(proc.pid, signal.SIGKILL)
+        elif proc.poll() is None:
+            os.kill(proc.pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return True
+    except Exception:
+        return False
+
+
 def _release_job(proc) -> None:
-    """Close the job handle deliberately (normal reaping). The child is
-    already gone, so the kill-on-close has nothing to kill."""
+    """Close the job handle deliberately after execution has settled."""
     job = getattr(proc, "_tacit_job", None)
     if job:
         try:

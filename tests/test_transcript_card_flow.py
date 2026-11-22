@@ -24,7 +24,7 @@ and `test_md_escapes.py`: the repo's suite stays offline and installs nothing, s
 headless browser is not available here. What is pinned is the structure that makes
 the behaviour what it is. The visual result (one card per answer, no stray empty
 bubble) is still a browser call, recorded at the bottom of
-`docs/interface.md`'s sibling work and repeated in the report.
+`site/md/interface.md`'s sibling work and repeated in the report.
 """
 import re
 import unittest

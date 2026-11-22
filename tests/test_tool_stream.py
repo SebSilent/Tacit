@@ -35,6 +35,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -440,6 +441,70 @@ class CallToolGateTests(unittest.TestCase):
                         "already do with tool_end")
         self.assertIn("first", out["result"])
         self.assertIn("second", out["result"])
+
+    def test_an_unoffered_call_never_reaches_its_handler(self):
+        ran = []
+
+        def forbidden():
+            ran.append(True)
+            return "ran"
+
+        self.agent.EXECS["forbidden_probe"] = forbidden
+        self.ctx["allowed_tools"] = frozenset()
+        _parts, out = self._call("forbidden_probe", {}, None)
+        self.assertEqual(ran, [])
+        self.assertIn("not available", out["result"])
+
+    def test_chat_cannot_execute_an_unoffered_model_call(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        target = Path(tmp.name) / "forbidden.txt"
+        rounds = 0
+
+        def malicious_provider(_messages, **_kwargs):
+            nonlocal rounds
+            rounds += 1
+            if rounds == 1:
+                yield {"type": "tool_calls", "calls": [{
+                    "id": "not-offered", "name": "write_file",
+                    "arguments": json.dumps({"path": str(target), "content": "no"})}]}
+            else:
+                yield {"type": "text", "delta": "I cannot use tools in Chat mode."}
+            yield {"type": "done", "finish": "stop"}
+
+        with mock.patch.object(self.agent.engine, "stream_chat", malicious_provider):
+            events = list(self.agent.run_turn(
+                [{"role": "system", "content": "chat"},
+                 {"role": "user", "content": "hello"}],
+                project=str(target.parent), ref="p/m", chat=True, max_steps=2))
+        self.assertFalse(target.exists())
+        self.assertEqual(rounds, 2)
+        results = [e for e in events if e.get("type") == "tool_end"]
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["is_error"])
+        self.assertIn("not available", results[0]["result"])
+
+    def test_readonly_plugins_require_an_explicit_declaration(self):
+        safe = {"type": "function", "function": {
+            "name": "safe_plugin", "x-tacit-readonly": True}}
+        self.ctx["readonly"] = True
+        with mock.patch.object(self.agent.plugin_manager, "collect_tools", return_value=[safe]), \
+                mock.patch.object(self.agent.plugin_manager, "call_tool",
+                                  return_value="safe result") as call:
+            _parts, refused = self._call("unsafe_plugin", {}, None)
+            self.assertIn("not declared read-only", refused["result"])
+            call.assert_not_called()
+            _parts, accepted = self._call("safe_plugin", {}, None)
+            self.assertEqual(accepted["result"], "safe result")
+            call.assert_called_once()
+
+    def test_readonly_browser_allows_only_non_mutating_actions(self):
+        for action in ("click", "type", "screenshot", "close"):
+            with self.subTest(action=action):
+                self.assertIn("read-only", self.agent.readonly_guard(
+                    "browser", {"action": action}))
+        for action in ("open", "text", "links"):
+            self.assertEqual(self.agent.readonly_guard("browser", {"action": action}), "")
 
 
 class BoundaryTests(unittest.TestCase):

@@ -1,10 +1,11 @@
+import atexit
 import html
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -13,35 +14,178 @@ import httpx
 
 from . import config, launcher, proctools
 
+# Only this process's Popen handles live here. The JSON rows under JOBS_DIR are
+# authoritative: a later turn worker has no handle, but can still read and stop
+# the job by its persisted pid/pgid.
 BG: dict[str, dict] = {}
 TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
 BLOCK_RE = re.compile(r"</(p|div|li|h[1-6]|tr|section|article)>", re.I)
 ANY_TAG = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"[ \t]+")
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+JOB_STOP_TIMEOUT = 5.0
 
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:6]
 
 
-def _drain(proc, buf: list, cap: int):
-    def run(stream):
-        try:
-            for line in iter(stream.readline, ""):
-                buf.append(line)
-                if len(buf) > 4000:
-                    del buf[:1000]
-        except Exception:
-            pass
-        finally:
-            try:
-                stream.close()
-            except Exception:
-                pass
+def _job_path(bid: str) -> Path:
+    return config.JOBS_DIR / f"{bid}.json"
 
-    for stream in (proc.stdout, proc.stderr):
-        if stream is not None:
-            threading.Thread(target=run, args=(stream,), daemon=True).start()
+
+def _load_job(bid: str) -> dict | None:
+    key = str(bid or "").strip()
+    if not JOB_ID_RE.fullmatch(key):
+        return None
+    rec = config.read_json(_job_path(key), None)
+    if not isinstance(rec, dict) or not rec.get("pid") or str(rec.get("id") or key) != key:
+        return None
+    rec["id"] = key
+    return rec
+
+
+def _job_records() -> list[dict]:
+    try:
+        paths = sorted(config.JOBS_DIR.glob("*.json"))
+    except OSError:
+        return []
+    return [rec for path in paths if (rec := _load_job(path.stem)) is not None]
+
+
+def _local_proc(bid: str, rec: dict):
+    proc = (BG.get(bid) or {}).get("proc")
+    try:
+        return proc if proc is not None and proc.pid == int(rec["pid"]) else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _root_alive(rec: dict, proc=None) -> bool:
+    if proc is not None:
+        return proc.poll() is None
+    try:
+        return proctools._pid_alive(int(rec["pid"]))
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def _tree_alive(rec: dict, proc=None) -> bool:
+    """Check the durable kill boundary, not just a shell that may have exited."""
+    # Poll a local handle first even on POSIX: that reaps an exited root instead
+    # of mistaking its zombie for a live process group.
+    root_alive = _root_alive(rec, proc)
+    if os.name == "nt":
+        # Windows has no durable process-group id. taskkill /T is the tree
+        # boundary while its root exists; a dead root is handled as exited.
+        return root_alive
+    try:
+        os.killpg(int(rec.get("pgid") or rec["pid"]), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (KeyError, TypeError, ValueError, OSError):
+        return _root_alive(rec, proc)
+
+
+def _job_state(bid: str, rec: dict) -> str:
+    if rec.get("state") == "stopped":
+        return "stopped"
+    proc = _local_proc(bid, rec)
+    if proc is not None:
+        code = proc.poll()
+        if code is not None:
+            return f"exited {code}"
+    return "running" if _root_alive(rec) else "exited"
+
+
+def _read_tail(path: Path, tail: int) -> tuple[str, bool]:
+    """Read at most four UTF-8 bytes per requested character, from the end."""
+    try:
+        limit = max(0, int(tail))
+    except (TypeError, ValueError):
+        limit = 4000
+    try:
+        with path.open("rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            count = min(size, limit * 4)
+            if not count:
+                return "", bool(size)
+            fh.seek(-count, os.SEEK_END)
+            raw = fh.read(count)
+    except FileNotFoundError:
+        return "", False
+    text = raw.decode("utf-8", "replace")
+    truncated = size > count or len(text) > limit
+    return text[-limit:], truncated
+
+
+def _signal_tree(rec: dict) -> tuple[bool, str]:
+    try:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(int(rec["pid"]))],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                errors="replace", timeout=15)
+            if result.returncode:
+                detail = (result.stderr or result.stdout or
+                          f"taskkill exited {result.returncode}").strip()
+                return False, detail
+            return True, ""
+        pgid = int(rec.get("pgid") or 0)
+        if pgid:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            os.kill(int(rec["pid"]), signal.SIGKILL)
+        return True, ""
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def _wait_tree(rec: dict, proc=None) -> bool:
+    deadline = time.monotonic() + JOB_STOP_TIMEOUT
+    while True:
+        if proc is not None:
+            try:
+                proc.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+        if not _tree_alive(rec, proc):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _stop_record(bid: str, rec: dict) -> tuple[str, str]:
+    proc = _local_proc(bid, rec)
+    if rec.get("state") == "stopped":
+        return "already", f"already stopped [{bid}]"
+    if not _tree_alive(rec, proc):
+        return "already", f"already exited [{bid}]"
+    ok, detail = _signal_tree(rec)
+    if not ok:
+        # A concurrent stop or a natural exit can win the race. That is not a
+        # successful kill by this call, and must not be reported as one.
+        if not _wait_tree(rec, proc):
+            return "error", f"ERROR: could not stop [{bid}]: {detail}"
+        return "already", f"already exited [{bid}]"
+    if not _wait_tree(rec, proc):
+        return "error", (f"ERROR: could not stop [{bid}]: process tree is still running "
+                         f"after {JOB_STOP_TIMEOUT:.0f}s")
+    rec["state"] = "stopped"
+    rec["stopped"] = time.time()
+    try:
+        config.write_json(_job_path(bid), rec)
+    except Exception as e:  # noqa: BLE001
+        BG.pop(bid, None)
+        return "error", f"ERROR: terminated [{bid}], but could not update its registry: {e}"
+    BG.pop(bid, None)
+    return "stopped", f"stopped [{bid}]"
 
 
 def bg_start(command: str, project: str | None = None, cwd: str | None = None,
@@ -52,79 +196,95 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
     # No explicit `cwd` and no usable project means this session's scratch folder, not
     # the user's home directory; the same rule `agent._root` uses.
     work = cwd or str(config.work_root(project, session))
-    try:
-        # Registry-only identity: the user's command must not be corrupted by
-        # an argv marker, so the child is identified by TACIT_ROLE /
-        # TACIT_SESSION_ID in its environment and by its registry row, not by
-        # its command line. The job object still contains it: a crashed parent
-        # takes its bg children down too.
-        proc = proctools.spawn(
-            "tacit-bg", cmd, session=str(session or ""), cwd=work,
-            contain=True, mark=False, shell=True, text=True,
-            # DEVNULL, not inherited: a background job must never sit on the
-            # worker's control pipe, nor hold a handle on it after the turn ends.
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-    except Exception as e:
-        return f"ERROR: {e}"
+    config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
     bid = _new_id()
-    out: list[str] = []
-    # The session tag is what makes a turn's background jobs stoppable with
-    # the turn (stage 3): call_tool injects it, and stop_session uses it.
-    BG[bid] = {"proc": proc, "cmd": cmd, "cwd": work, "out": out,
-               "started": time.time(), "session": str(session or "")}
-    _drain(proc, out, 4000)
+    while _job_path(bid).exists():
+        bid = _new_id()
+    output = config.JOBS_DIR / f"{bid}.log"
+    proc = None
+    rec = None
+    try:
+        # contain=False is deliberate: an ordinary turn-worker exit must not
+        # close a kill-on-close job and take the background command with it.
+        # Closing the parent's log handle after spawn is safe; the child keeps
+        # its own duplicated handle and never inherits the worker control pipe.
+        with output.open("wb") as log:
+            kwargs = {} if os.name == "nt" else {"start_new_session": True}
+            proc = proctools.spawn(
+                "tacit-bg", cmd, session=str(session or ""), cwd=work,
+                contain=False, mark=False, shell=True,
+                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                **kwargs)
+        rec = {"id": bid, "pid": proc.pid,
+               "pgid": None if os.name == "nt" else proc.pid,
+               "session": str(session or ""), "command": cmd, "cwd": work,
+               "started": time.time(), "output": str(output), "state": "running"}
+        config.write_json(_job_path(bid), rec)
+    except Exception as e:  # noqa: BLE001
+        # Never leave an unregistered process behind when persistence fails.
+        if proc is not None and rec is not None:
+            _signal_tree(rec)
+            _wait_tree(rec, proc)
+        return f"ERROR: {e}"
+    BG[bid] = {"proc": proc, **rec}
     return f"started [{bid}] in {work}: {cmd}\nread it with bg_output(id='{bid}')"
 
 
 def bg_output(bid: str, tail: int = 4000) -> str:
-    rec = BG.get(str(bid or "").strip())
+    key = str(bid or "").strip()
+    rec = _load_job(key)
     if not rec:
-        names = ", ".join(BG) or "none"
+        names = ", ".join(r["id"] for r in _job_records()
+                          if _job_state(str(r.get("id") or ""), r) == "running") or "none"
         return f"ERROR: no background job '{bid}'. Running: {names}"
-    body = "".join(rec["out"])
-    if len(body) > tail:
-        body = "...(truncated)\n" + body[-tail:]
-    code = rec["proc"].poll()
-    state = "running" if code is None else f"exited {code}"
-    return f"[{bid}] {state} | {round(time.time() - rec['started'], 1)}s\n{body.strip() or '(no output yet)'}"
+    try:
+        body, truncated = _read_tail(Path(rec.get("output") or
+                                           config.JOBS_DIR / f"{key}.log"), tail)
+    except OSError as e:
+        return f"ERROR: could not read background job '{key}': {e}"
+    if truncated:
+        body = "...(truncated)\n" + body
+    state = _job_state(key, rec)
+    try:
+        elapsed = round(time.time() - float(rec["started"]), 1)
+    except (KeyError, TypeError, ValueError):
+        elapsed = 0
+    return f"[{key}] {state} | {elapsed}s\n{body.strip() or '(no output yet)'}"
 
 
 def bg_stop(bid: str) -> str:
     key = str(bid or "").strip()
-    rec = BG.get(key)
+    rec = _load_job(key)
     if not rec:
         return f"ERROR: no background job '{key}'"
-    if rec["proc"].poll() is None:
-        try:
-            rec["proc"].terminate()
-        except Exception:
-            pass
-    BG.pop(key, None)
-    return f"stopped [{key}]"
+    return _stop_record(key, rec)[1]
 
 
 def stop_session_jobs(session: str) -> int:
-    """Stop every background job a session started. Returns how many.
-
-    Part of the kill contract (stage 3): a turn's work does not outlive the
-    turn. Jobs started outside any session are nobody's to stop here.
-    """
+    """Stop every persisted job owned by this session; count actual stops."""
     key = str(session or "")
     if not key:
         return 0
-    n = 0
-    for bid, rec in list(BG.items()):
-        if rec.get("session") != key:
-            continue
-        if rec["proc"].poll() is None:
-            try:
-                rec["proc"].terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        BG.pop(bid, None)
-        n += 1
-    return n
+    count = 0
+    for rec in _job_records():
+        bid = str(rec.get("id") or "")
+        if rec.get("session") == key and _stop_record(bid, rec)[0] == "stopped":
+            count += 1
+    return count
+
+
+def _stop_jobs_at_server_exit() -> None:
+    """A worker exit preserves jobs; the actual server's normal exit does not."""
+    if config.SERVER is None:
+        return
+    for rec in _job_records():
+        try:
+            _stop_record(str(rec.get("id") or ""), rec)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+atexit.register(_stop_jobs_at_server_exit)
 
 
 def fetch(url: str, max_chars: int | None = None) -> str:

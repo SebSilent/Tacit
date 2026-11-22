@@ -36,7 +36,7 @@ const render = sandbox.window.TacitMarkdown.md;
 const cases = [
   ['index.md', ['<h1>Documentation</h1>', '<table>', 'configuration.md']],
   ['configuration.md', ['<h1>Configuration</h1>', 'TACIT_HOME', '<table>']],
-  ['README.md', ['<h1>Tacit</h1>', '<table>', 'docs/index.md']],
+  ['README.md', ['<h1>Tacit</h1>', '<table>', 'https://sebsilent.github.io/Tacit/']],
   ['tools.md', ['<h1>Tools</h1>', 'memory_recall', '<table>']],
   ['testing-and-benchmarks.md', ['<h1>Testing and benchmarks</h1>', 'code-block', 'unittest']],
   ['isolation-and-audit.md', ['<h1>Isolation and audit</h1>', '<table>', 'backend/sandbox.py']],

@@ -261,15 +261,25 @@ def _enabled_modules():
             continue
 
 
-def collect_tools() -> list[dict]:
-    """Tool schemas contributed by enabled plugins."""
+def collect_tools(readonly: bool = False) -> list[dict]:
+    """Tool schemas contributed by enabled plugins.
+
+    Plugins are arbitrary code, so a read-only caller fails closed unless the
+    schema explicitly declares `x-tacit-readonly: true`. The declaration is the
+    plugin's contract with the user; mixed-action tools such as `tasks` cannot
+    use it without enforcing action-level restrictions themselves.
+    """
     rows = []
     for pid, module in _enabled_modules():
         fn = getattr(module, "tools", None)
         if callable(fn):
             try:
-                rows.extend(fn() or [])
-            except Exception as exc:  # noqa: BLE001
+                offered = list(fn() or [])
+                if readonly:
+                    offered = [tool for tool in offered
+                               if (tool.get("function") or {}).get("x-tacit-readonly") is True]
+                rows.extend(offered)
+            except Exception as exc:
                 _ERRORS[pid] = str(exc)
     return rows
 

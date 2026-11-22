@@ -51,16 +51,10 @@ WAIT_S = 30
 # to justify it instead of quietly adding a site to a private set.
 ALLOWED_INHERIT = {
     "backend/proctools.py:taskkill",
-    "backend/sandbox.py:taskkill",
     "backend/turn_worker.py:taskkill",
     "backend/sandbox.py:image",
     "backend/sandbox.py:kill",
     "backend/sandbox.py:pull",
-    # Not a fixed probe: this is `Popen(argv, **kwargs)`, whose stdin arrives via
-    # the forwarded dict, so the scan cannot see it. test_forwarded_kwargs_carry_
-    # devnull below checks the builder instead -- forwarding is verified, never
-    # assumed, or the scan's blind spot becomes the bug's hiding place.
-    "backend/sandbox.py:?",
 }
 
 

@@ -1,14 +1,12 @@
 """Build the GitHub Pages site into `site/`.
 
-The prose stays in the repository. This reads `README.md`, `CONTRIBUTING.md` and `docs/*.md`,
-copies them into `site/md/`, and writes one HTML shell per page that renders its markdown with
-the app's own renderer (`static/markdown.js`, vendored into `site/assets/`). So the site has no
-second copy of any sentence, and no build toolchain beyond this file.
+Canonical documentation lives in `site/md/`. The build writes one HTML shell per page,
+vendors the app's Markdown renderer, and refreshes the two repository pages from their
+root sources. There is no second documentation directory and no frontend toolchain.
 
     python scripts/build_site.py
 
-The order of the navigation and the landing cards comes from the table in `docs/index.md`, which
-is the same list a reader of the repository sees first. Nothing here duplicates it.
+Navigation and landing cards come from the table in `site/md/index.md`.
 """
 
 from __future__ import annotations
@@ -37,39 +35,46 @@ TEMPLATE = """<!DOCTYPE html>
 <title>{title}</title>
 <meta name="description" content="{description}">
 <meta name="theme-color" content="#14171d">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23111510'/%3E%3Cpath d='M14 17h36M32 17v31' stroke='%23d6c77a' stroke-width='7'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/nocturne-tokens.css">
 <link rel="stylesheet" href="assets/site.css">
 </head>
-<body>
+<body class="{body_class}">
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="masthead">
   <div class="masthead-inner">
-    <a class="wordmark" href="index.html">Tacit</a>
+    <a class="wordmark" href="index.html" aria-label="Tacit home"><span class="wordmark-mark" aria-hidden="true">T</span><span>Tacit</span></a>
     <span class="masthead-tag">{tagline}</span>
-    <nav class="masthead-links">
+    <nav class="masthead-links" aria-label="Primary">
+      <a href="index.html#evidence">Evidence</a>
       <a href="demo.html">Interface</a>
-      <a href="readme.html">README</a>
-      <a href="contributing.html">Contributing</a>
-      <a href="{source_link}" rel="noopener noreferrer" target="_blank">Repository</a>
+      <a href="install.html">Install</a>
     </nav>
+    <a class="repository-link" href="{source_link}" rel="noopener noreferrer" target="_blank">GitHub <span aria-hidden="true">↗</span></a>
+    <button class="nav-toggle" type="button" aria-controls="doc-nav" aria-expanded="false">Documentation</button>
   </div>
 </header>
 
 <div class="shell">
-  <nav class="nav" aria-label="Documentation">
-    {nav_docs}
-    {nav_repo}
-  </nav>
+  <aside class="sidebar">
+    <nav class="nav" id="doc-nav" aria-label="Documentation">
+      {nav_docs}
+      {nav_repo}
+    </nav>
+  </aside>
 
-  <main class="page">
-{hero}    <article class="prose" id="page" data-md="{md_src}"></article>
-  </main>
+  <main class="page" id="main">
+{hero}{article}  </main>
 </div>
 
 <footer class="footer">
   <div class="footer-inner">
-    <span>Tacit {version}</span>
-    <span>Everything stays on your machine. No accounts, no telemetry, no tracking.</span>
-    <a href="https://github.com/{repo}" rel="noopener noreferrer" target="_blank">github.com/{repo}</a>
+    <a class="footer-brand" href="index.html">Tacit <span>{version}</span></a>
+    <span>Local files. Chosen providers. No account or tracking.</span>
+    <a href="https://github.com/{repo}" rel="noopener noreferrer" target="_blank">Source on GitHub ↗</a>
   </div>
 </footer>
 
@@ -79,11 +84,15 @@ TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+ARTICLE = """    <div class="article-head"><span>Reference</span><span>Source-linked documentation</span></div>
+    <article class="prose" id="page" data-md="{md_src}"></article>
+"""
+
 NAV_ITEM = '<li><a href="{href}"{current}>{label}</a></li>'
 NAV_GROUP = '<div class="nav-group">\n      <p class="nav-label">{label}</p>\n      <ul>{items}</ul>\n    </div>'
 
 CARD = ('<a class="card" href="{href}"><span class="card-key">{key}</span>'
-        '<h2>{title}</h2><p>{description}</p></a>')
+        '<h2>{title}</h2><p>{description}</p><span class="card-go" aria-hidden="true">→</span></a>')
 
 # The interface, embedded at full width. The frame is `demo.html`: the app's own markup
 # and the app's own stylesheet, with a scripted turn running in it. Everything inside the
@@ -92,45 +101,105 @@ DEMO = """    <section class="demo-band" id="demo" aria-label="Tacit at work">
       <div class="demo-band-head">
         <div>
           <p class="eyebrow">The interface</p>
-          <h2>The whole app, with no server behind it</h2>
+          <h2>The real app, running with no server</h2>
         </div>
-        <p>The frame below loads <code>demo.html?view=basic</code>, which the build
-        generates out of <code>static/index.html</code> and <code>static/style.css</code>
-        rather than drawing: the top bar, the transcript, the tool cards and the meter are
-        the real parts, driven by one scripted turn with a pointer that moves to the
-        composer, types the ask and presses send. The sidebar is dropped inside the frame,
-        because a list of sessions nobody can click is decoration. The whole thing, with
-        the Assistant asked several questions per session, the Delegation panel, the
-        terminal, the Git panel and the Prompts tab, is <code>demo.html</code> full
-        screen. The documentation pages are text.</p>
+        <p>This frame is generated from the app's own markup and stylesheet, driven by one
+        scripted turn. It is not a drawing of the interface. Type in the composer and it
+        answers. The full surface, including the Assistant, Delegation, terminal, Git and
+        Prompts panels, is <code>demo.html</code> full screen.</p>
         <div class="demo-actions">
           <a href="demo.html" target="_blank" rel="noopener">Open full screen</a>
           <a href="interface.html">How the interface works</a>
         </div>
       </div>
       <div class="demo-frame-wrap">
-        <iframe class="demo-frame" src="demo.html?view=basic" title="Tacit interface, running without a server"></iframe>
+        <iframe class="demo-frame" src="demo.html?view=basic" title="Tacit interface, running without a server" loading="lazy"></iframe>
       </div>
-      <p class="demo-note">Nothing in the frame touches your machine: there is no backend,
-      no WebSocket and no disk. The transcript is a script, the theme list and the prompt
-      texts are copied out of the repository at build time, and the handlers are written
-      against the app's markup rather than being the app's own, because the app's scripts
-      have no server here to talk to.</p>
+      <p class="demo-note">Nothing in the frame touches your machine: no backend, no WebSocket,
+      no disk. The transcript is a script and the prompt texts are copied from the repository
+      at build time.</p>
     </section>
 
 """
 
 HERO = """    <section class="hero">
-      <p class="eyebrow">A coding agent you run yourself</p>
-      <h1>{headline}</h1>
-      <p>{lead}</p>
-      <div class="hero-rule"></div>
-      <p>One Python program serving plain web pages. No build step, no frontend toolchain, no
-      database to install. The fixed cost per turn is the smallest in its class, nothing optional
-      is on until you turn it on, and the sandbox reports what it actually enforces.</p>
+      <div class="hero-copy">
+        <p class="eyebrow">Local-first coding agent</p>
+        <h1>{headline}</h1>
+        <p class="hero-lead">{lead}</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="install.html">Install</a>
+          <a class="btn" href="demo.html">See it run</a>
+          <a class="btn" href="readme.html">Read the README</a>
+        </div>
+      </div>
+      <aside class="hero-panel" aria-label="Measured cost of a turn">
+        <div class="panel-head"><span>Fixed cost per turn</span><span class="panel-tag">measured</span></div>
+        <div class="panel-row"><span class="panel-key">Standing prompt</span><span class="panel-val">974 chars</span></div>
+        <div class="panel-row"><span class="panel-key">Minimal profile</span><span class="panel-val">~768 tokens</span></div>
+        <div class="panel-row"><span class="panel-key">Default profile</span><span class="panel-val">~2,039 tokens</span></div>
+        <p class="panel-note">Re-derived from the code by a test on every run. Characters divided
+        by four, the same heuristic the token meter uses. A smaller preamble is not a lower bill;
+        it is one term you can see and set.</p>
+        <a class="panel-link" href="cost-and-profiles.html">How the figure is produced →</a>
+      </aside>
     </section>
 
-{demo}    <p class="eyebrow">Start here</p>
+    <section class="proof-strip" aria-label="Key facts">
+      <div class="proof"><span class="proof-num">9/9</span><span class="proof-label">tasks solved, Linux default, OpenBench</span></div>
+      <div class="proof"><span class="proof-num">1</span><span class="proof-label">process per turn, so Stop means stop</span></div>
+      <div class="proof"><span class="proof-num">23</span><span class="proof-label">tools in the registry, gated by profile</span></div>
+      <div class="proof"><span class="proof-num">0</span><span class="proof-label">accounts, telemetry or tracking</span></div>
+    </section>
+
+    <section class="principles" aria-label="What Tacit refuses to hide">
+      <div class="principle">
+        <span class="principle-key">01</span>
+        <h3>Nothing optional is on</h3>
+        <p>Memory, sandboxing and learning start off. A capability you did not enable costs no
+        schema, no prompt text and no worker.</p>
+      </div>
+      <div class="principle">
+        <span class="principle-key">02</span>
+        <h3>Nothing enforced is unreported</h3>
+        <p>Where the platform cannot isolate a command, the sandbox says so in the result rather
+        than claiming a guarantee it does not have.</p>
+      </div>
+      <div class="principle">
+        <span class="principle-key">03</span>
+        <h3>Nothing is learned without you</h3>
+        <p>A proposal is a stored artifact you read and decide on. The analyzer registers no tool
+        and adds no prompt text.</p>
+      </div>
+    </section>
+
+{demo}    <section class="evidence" id="evidence" aria-label="Benchmark evidence">
+      <div class="evidence-head">
+        <p class="eyebrow">Evidence</p>
+        <h2>One model, three tasks, both operating systems</h2>
+        <p>GLM 5.2 on the fp8 endpoint, run by OpenBench's own runner with its checkers untouched.
+        Three trials per task, one build. Tokens are uncached input plus output, cache reads
+        excluded. These rows show the plumbing did not break on these tasks; they do not rank
+        harnesses on hard work.</p>
+      </div>
+      <div class="evidence-grid">
+        <div class="evidence-card">
+          <span class="evidence-os">Linux</span>
+          <div class="evidence-row"><span>Default</span><strong>9/9</strong><em>156,466 tok/solve</em></div>
+          <div class="evidence-row"><span>Minimal</span><strong>9/9</strong><em>133,881 tok/solve</em></div>
+        </div>
+        <div class="evidence-card">
+          <span class="evidence-os">Windows</span>
+          <div class="evidence-row"><span>Default</span><strong>6/6</strong><em>106,522 tok/solve</em></div>
+          <div class="evidence-row"><span>Minimal</span><strong>5/6</strong><em>82,841 tok/solve</em></div>
+        </div>
+      </div>
+      <p class="evidence-note">Schemelike is graded on Linux only: its checker reads
+      <code>os.O_NONBLOCK</code>, which Windows Python does not provide.
+      <a href="testing-and-benchmarks.html">Methodology and per-task cells →</a></p>
+    </section>
+
+    <p class="eyebrow section-label">Documentation</p>
     <div class="card-grid">
 {cards}
     </div>
@@ -146,14 +215,14 @@ def read(p: pathlib.Path) -> str:
 
 
 def index_rows() -> list[tuple[str, str, str]]:
-    """(title, file, description) for every page, in the order docs/index.md lists them."""
+    """(title, file, description) for every page, in canonical navigation order."""
     rows = []
-    for line in read(ROOT / "docs" / "index.md").splitlines():
+    for line in read(MD_OUT / "index.md").splitlines():
         m = ROW_RE.match(line.strip())
         if m:
             rows.append((m.group(1).strip(), m.group(2).strip(), m.group(3).strip()))
     if not rows:
-        raise SystemExit("docs/index.md no longer holds the page table this build reads")
+        raise SystemExit("site/md/index.md no longer holds the page table this build reads")
     return rows
 
 
@@ -255,13 +324,11 @@ def main() -> None:
     tagline = "The coding agent where nothing is hidden"
 
     pages = index_rows()
-    # docs/index.md itself is the landing page, so it is not repeated in the nav.
+    # The canonical index supplies navigation; it is not repeated in the sidebar.
     nav_items = [(title, slug_of(file) + ".html", description)
                  for title, file, description in pages if slug_of(file) != "index"]
 
-    if MD_OUT.exists():
-        shutil.rmtree(MD_OUT)
-    MD_OUT.mkdir(parents=True)
+    MD_OUT.mkdir(parents=True, exist_ok=True)
     ASSETS.mkdir(parents=True, exist_ok=True)
 
     shutil.copyfile(ROOT / "static" / "markdown.js", ASSETS / "markdown.js")
@@ -271,27 +338,24 @@ def main() -> None:
     shutil.copyfile(ROOT / "static" / "style.css", ASSETS / "app.css")
     (SITE / ".nojekyll").write_text("", encoding="utf-8")
 
-    # docs/index.md is the landing page's prose, and it is not in its own table.
+    # Root pages remain canonical on the repository side. Their Pages copies adapt
+    # asset paths because the site directory is the web root on the gh-pages branch.
+    for name, _slug in REPO_PAGES:
+        source = ROOT / name
+        if not source.is_file():
+            raise SystemExit(f"{source} is missing; the site build needs it")
+        text = read(source).replace("](site/", "](")
+        (MD_OUT / name).write_text(text, encoding="utf-8")
+
     doc_files = ["index.md"] + [p[1].rsplit("/", 1)[-1] for p in pages]
-    sources = [(ROOT / "docs" / name, "md/" + name, name.removesuffix(".md") + ".html",
-                title_of(ROOT / "docs" / name, name)) for name in doc_files]
-    # The repository pages get the href they are linked as, lowercased: GitHub Pages
-    # serves from a case-sensitive filesystem, and `README.md` is not `readme.html`.
-    sources += [(ROOT / name, "md/" + name, slug + ".html", title_of(ROOT / name, name))
+    sources = [(MD_OUT / name, "md/" + name, name.removesuffix(".md") + ".html",
+                title_of(MD_OUT / name, name)) for name in doc_files]
+    sources += [(MD_OUT / name, "md/" + name, slug + ".html", title_of(MD_OUT / name, name))
                 for name, slug in REPO_PAGES]
 
-    for path, out_rel, _href, _title in sources:
+    for path, _out_rel, _href, _title in sources:
         if not path.is_file():
             raise SystemExit(f"{path} is missing; the site build needs it")
-        if path.parent == ROOT:
-            # A repository page is read in two places. On GitHub an asset is spelled from
-            # the checkout root, `site/assets/demo.gif`; on Pages the same file is served
-            # at `/assets/demo.gif`, because the site folder *is* the root there. The copy
-            # the browser fetches gets the second spelling, so one README works on both.
-            text = path.read_text(encoding="utf-8").replace("](site/", "](")
-            (SITE / out_rel).write_text(text, encoding="utf-8")
-        else:
-            shutil.copyfile(path, SITE / out_rel)
 
     def nav_html(active_href: str) -> tuple[str, str]:
         docs = "".join(NAV_ITEM.format(href=href, label=title,
@@ -315,38 +379,36 @@ def main() -> None:
             tagline=esc_attr(tagline),
             nav_docs=docs_html,
             nav_repo=repo_html,
-            md_src=out_rel,
-            # Documentation pages are text only. The interface is shown in one place,
-            # `demo.html`, which the landing page embeds and links to.
+            article=ARTICLE.format(md_src=out_rel),
             hero="",
+            body_class="doc",
             version=esc_attr(version),
             repo=repo,
             source_link=f"https://github.com/{repo}",
         ), encoding="utf-8")
 
-    # The landing page: hero and cards, then the index's own prose.
-    cards = "\n".join(CARD.format(href=href, title=esc_attr(title), key=href.replace(".html", ".md"),
+    # The landing page: hero, proof strip, demo, evidence, then the doc cards.
+    cards = "\n".join(CARD.format(href=href, title=esc_attr(title), key=href.replace(".html", ""),
                                    description=esc_attr(desc))
                       for title, href, desc in nav_items)
     docs_html, repo_html = nav_html("index.html")
-    # The hero's headline is the tagline the masthead already carries, not a second
-    # sentence written for the site: the build's rule is that it holds no prose the
-    # repository does not. The page's own H1 comes from docs/index.md below.
     hero = HERO.format(headline=esc_attr(tagline),
-                       lead=esc_attr("How Tacit works, where each setting lives, and which line of "
-                                     "code decides it. Every citation is a file and a line you can "
-                                     "open."),
+                       lead=esc_attr("A coding agent you run yourself. One Python program, plain "
+                                     "web pages, no database. Every decision lands in a file you "
+                                     "can read, and the cost of a turn is measured before you "
+                                     "send it."),
                        demo=DEMO,
                        cards=cards)
     (SITE / "index.html").write_text(TEMPLATE.format(
-        title="Tacit · Documentation",
-        description="Documentation for Tacit, a coding agent you run yourself: architecture, "
-                    "configuration, tools, isolation, memory and cost.",
+        title="Tacit · The coding agent where nothing is hidden",
+        description="Tacit is a local-first coding agent. Measured prompt cost, killable turns, "
+                    "honest sandbox reporting, and documentation that cites the code.",
         tagline=esc_attr(tagline),
         nav_docs=docs_html,
         nav_repo=repo_html,
-        md_src="md/index.md",
+        article="",
         hero=hero,
+        body_class="home",
         version=esc_attr(version),
         repo=repo,
         source_link=f"https://github.com/{repo}",
@@ -376,7 +438,7 @@ def verify() -> list[str]:
     """Every link the site can follow has to land on a page that was written.
 
     The renderer turns `[Install](install.md)` into `install.html` in the browser, so a
-    typo in `docs/index.md` or a renamed file would only show up as a 404 after a
+    typo in `site/md/index.md` or a renamed file would only show up as a 404 after a
     push. Checked here instead, where a build can fail.
     """
     pages = {p.name for p in SITE.glob("*.html")}

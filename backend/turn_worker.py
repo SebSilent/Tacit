@@ -197,6 +197,7 @@ class TurnWorker:
         proc = self.proc
         if proc is None:
             return
+        saw_done = False
         try:
             for line in proc.stdout:
                 line = line.strip()
@@ -206,6 +207,8 @@ class TurnWorker:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if ev.get("type") == "done":
+                    saw_done = True
                 if ev.get("type") == "trace":
                     # Kill-safe: the worker re-sends its cumulative trace after
                     # every step, so the LAST one seen is the most complete. A
@@ -220,7 +223,7 @@ class TurnWorker:
                 exit_code = proc.returncode
                 if exit_code != 0:
                     yield {"type": "error", "message": f"turn worker exited with code {exit_code}"}
-                else:
+                elif not saw_done:
                     yield {"type": "error", "message": "turn worker exited unexpectedly (clean exit but no done event)"}
         finally:
             # The registry row dies with the process, however consumption ends.
