@@ -61,6 +61,9 @@
 	        "Noto Sans", "Helvetica Neue", Arial, sans-serif;
 	--mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas,
 	        "DejaVu Sans Mono", monospace;
+	/* Display face for the landing headline only. A serif gives the page an editorial,
+	   journal-like character; body and UI stay on the app's own stack. No download. */
+	--font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
 
 	/* Nine steps, adjacent ratio 1.125, floor 10px. */
 	--fs-1: 10px;

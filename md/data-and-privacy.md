@@ -32,6 +32,7 @@ directory itself (`backend/config.py:29-30`). The defaults are your home and `~/
 | `evidence.jsonl` | `backend/config.py:43` | citable facts recorded during turns |
 | `workspaces/` | `backend/config.py:40` | one scratch folder per session with no project |
 | `checkpoints/` | `backend/config.py:50` | workspace snapshots, one folder per turn that wrote |
+| `jobs/` | `backend/config.py:70` | one JSON registry row and combined output log per background job, including stopped and exited jobs |
 | `plans/` | `backend/config.py:49` | plan artifacts |
 | `folders.json` | `backend/config.py:62` | the folder list the workspace picker shows |
 | `benchmarks.json` | `backend/config.py:48` | per-model settings; the name predates its current use (`:44-47`) |
@@ -53,31 +54,31 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:906-924`):
+One rule, shared by every caller (`backend/config.py:920-938`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
 - a project that is named but missing counts as no project, because silently working in the home
   folder is worse than working in a scratch folder and stale paths arrive from stored sessions;
 - only then does the session get `~/.tacit/workspaces/<sanitized id>`, created on demand
-  (`backend/config.py:856-870`).
+  (`backend/config.py:870-884`).
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:911-914`). The scratch folder is why
+blocklist in the way (`backend/config.py:925-928`). The scratch folder is why
 `WORKSPACES_DIR` exists at all (`backend/config.py:37-39`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:852-853`).
+an underscore and the result capped at 48 characters (`backend/config.py:866-867`).
 
 ## Deleting
 
 `remove_workspace` deletes one session's scratch folder when the session is removed, because a deleted
 session's files would otherwise sit in `workspaces/` forever: nothing else collects them, and they are
-the thing the model wrote while nobody had chosen a project for it (`backend/config.py:873-896`). It
+the thing the model wrote while nobody had chosen a project for it (`backend/config.py:887-910`). It
 refuses anything that is not a real per-session folder, since an empty id maps to the shared `default`
 and a path outside `WORKSPACES_DIR` is not Tacit's to delete, and it returns false rather than raising,
-because a failed cleanup must not make the delete look like it failed (`backend/config.py:880-896`).
+because a failed cleanup must not make the delete look like it failed (`backend/config.py:894-910`).
 
 The audit ledger is the exception. It is append-only and nothing in it is edited or removed, so the
 interface action that looks like clearing it is a rotation: the file is renamed, kept, and the rotation
@@ -100,7 +101,7 @@ runtime is three packages (`requirements.txt:3-5`). What that buys: the password
 What it does not buy: anything reading both files as this user can decrypt it, and the agent runs as
 this user. Its own file tools are stopped by the name list above, and `run_shell` cannot reach
 `~/.tacit` at all, because a shell without a project is rooted in a scratch folder rather than in your
-home (`backend/config.py:856-870`), so `cat ~/.tacit/secret.key` comes back `outside the project`. A
+home (`backend/config.py:870-884`), so `cat ~/.tacit/secret.key` comes back `outside the project`. A
 process running as your user with no such rule in the way is not stopped by this.
 
 The ledger masks on the way in rather than on the way out, at any depth, and the MCP layer redacts

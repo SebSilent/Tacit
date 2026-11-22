@@ -55,15 +55,16 @@ The lifecycle is three steps (`backend/turn_worker.py:9-21`):
 1. The session's handler spawns `python -m backend.turn_worker` with the turn's parameters on argv,
    and nothing secret anywhere in the environment it did not already have.
 2. The worker runs the same `agent.run_turn` the in-process path ran, and streams events to the
-   parent as JSON lines on stdout.
+   parent as JSON lines on stdout. The parent tracks the terminal `done` event: a clean exit without
+   one is an error, not a silently successful turn (`backend/turn_worker.py:188-227`).
 3. Stop is two-stage. The parent first sends `{"cancel": true}` on stdin, so the worker stops between
    events, closes its model stream, kills its own shell trees and exits with the partial transcript
    preserved. If it has not exited within the grace period the parent kills the process tree outright,
-   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:299-304`).
+   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:295-307`).
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:23-25`, `backend/config.py:417`).
+(`backend/turn_worker.py:23-25`, `backend/config.py:481-496`).
 
 ## What the server does at startup
 
@@ -86,7 +87,7 @@ dead pid wearing this boot's marker (`:91-96`).
 
 The orphan sweep identifies children by a command-line marker and by the `TACIT_ROLE` /
 `TACIT_SESSION_ID` pair in their environment, never by the executable name
-(`backend/proctools.py:8-12`, `:295-302`). A dead pid is dropped from the registry; a live pid whose
+(`backend/proctools.py:8-12`, `:331-369`). A dead pid is dropped from the registry; a live pid whose
 command line still proves it is Tacit's is killed as an orphan from a previous crash.
 
 ## Blocking code does not run on the event loop
@@ -109,17 +110,17 @@ frontend with no build step (`backend/main.py:175`).
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
 - **Compaction.** `should_compact` decides whether the transcript is over budget, answering
-  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1172`,
-  `stored_tokens` at `backend/agent.py:1163`): a mid-turn compaction shrinks the prompt on
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1178-1211`,
+  `stored_tokens` at `backend/agent.py:1169-1175`): a mid-turn compaction shrinks the prompt on
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
-  between turns (`backend/agent.py:1560`) and `compact_messages` does it inside a growing turn
-  (`backend/agent.py:1695`), which is what `TACIT_COMPACT_MID_TURN` controls
-  (`backend/config.py:156-159`). A turn runs in its own process while its parent writes the
+  between turns (`backend/agent.py:1569-1624`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1704-1751`), which is what `TACIT_COMPACT_MID_TURN` controls
+  (`backend/config.py:177-180`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
-  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1618`),
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1627-1676`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
-  (`backend/session_runtime.py:549`), because a hand compaction that moves neither the meter
+  (`backend/session_runtime.py:567-609`), because a hand compaction that moves neither the meter
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).
@@ -130,10 +131,10 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:1012-1015`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:1026-1029`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:1010-1011`).
+(`backend/config.py:1024-1025`).
 
 Next: [cost and profiles](cost-and-profiles.md).

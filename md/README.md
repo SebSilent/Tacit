@@ -44,14 +44,14 @@ Every row below has a line behind it. The right column names the section that ca
 | Property | Tacit | Where it is decided |
 |---|:---:|---|
 | Runs on your machine, in your browser | ✓ | [Quick start](#quick-start) |
-| Database to install | ✗ | [Architecture](docs/architecture.md) |
+| Database to install | ✗ | [Architecture](https://sebsilent.github.io/Tacit/architecture.html) |
 | Build step or frontend toolchain | ✗ | [Contributing](CONTRIBUTING.md) |
 | Accounts, sign-in, or a service to install | ✗ | [Security and control](#security-privacy-and-control) |
-| Telemetry, analytics, or tracking | ✗ | [Data and privacy](docs/data-and-privacy.md) |
+| Telemetry, analytics, or tracking | ✗ | [Data and privacy](https://sebsilent.github.io/Tacit/data-and-privacy.html) |
 | Another agent harness required or contacted | ✗ | [Quick start](#quick-start) |
 | Fixed cost of a turn published, and re-measured by a test | ✓ | [What a turn costs](#what-a-turn-costs-against-the-alternatives) |
-| A turn you can kill, because it is a process | ✓ | [Architecture](docs/architecture.md) |
-| Optional capabilities on by default | ✗ | [Memory and learning](docs/memory-and-learning.md) |
+| A turn you can kill, because it is a process | ✓ | [Architecture](https://sebsilent.github.io/Tacit/architecture.html) |
+| Optional capabilities on by default | ✗ | [Memory and learning](https://sebsilent.github.io/Tacit/memory-and-learning.html) |
 | Versioned releases | ✗ | [Status and known limits](#status-and-known-limits) |
 
 ---
@@ -100,7 +100,7 @@ python -m venv .venv
 
 Both launchers start on `.venv` and refuse to start without it, printing the two commands above rather
 than using whatever `python` is first on your PATH. Full instructions, including relocating and removing
-an install: [docs/install.md](docs/install.md).
+an install: [Install](https://sebsilent.github.io/Tacit/install.html).
 
 ---
 
@@ -135,13 +135,13 @@ Tacit/
 │   ├── plugins/        bundled plugins, one file each
 │   └── routers/        thin HTTP and WebSocket surfaces, one per domain
 ├── static/             the frontend, served as-is from config.STATIC_DIR
-├── docs/               the documentation set, indexed at docs/index.md
+├── site/               the hosted website; markdown source in site/md/
 ├── scripts/            the checkers, the site build, and the two measurement scripts
 └── tests/              the offline suite, plus helpers.py and fake_mcp_server.py
 ```
 
-[docs/interface.md](docs/interface.md) covers the regions, snapshots and restart;
-[docs/settings.md](docs/settings.md) says which tab owns which switch and which file it writes.
+[Interface](https://sebsilent.github.io/Tacit/interface.html) covers the regions, snapshots and restart;
+[Settings](https://sebsilent.github.io/Tacit/settings.html) says which tab owns which switch and which file it writes.
 
 ---
 
@@ -157,7 +157,7 @@ rather than a fork.
 **Capabilities load when they are used, not when they are installed.** Skills and knowledge are listed by
 name and fetched only when the agent asks (`backend/skills.py:50`). An MCP server's tool descriptions stay
 out of the prompt: the agent gets four helpers to search, activate and call, and with no server configured
-even those schemas are withdrawn (`backend/agent.py:875`-871`). Your project's instruction files are indexed
+even those schemas are withdrawn (`backend/agent.py:935-943`). Your project's instruction files are indexed
 by name and size instead of inlined, at 110 characters plus 40 per entry
 (`backend/project_context.py:191-194`). A server with fifty tools costs nothing until one is used, so the
 prompt grows with what you exercise rather than with what you installed.
@@ -169,7 +169,7 @@ tokens of usable context, and an 8K model at 5,200, leaving too little to answer
 (`backend/config.py:119`). The tail is kept by token budget, a pre-pass clears bulky tool output before the
 summariser sees it, a failed summary still leaves a deterministic digest, compaction runs mid-turn as well
 as between turns, and the standing prompt and the task are pinned against elision.
-[docs/cost-and-profiles.md](docs/cost-and-profiles.md) has each mechanic with the line that implements it,
+[Cost and profiles](https://sebsilent.github.io/Tacit/cost-and-profiles.html) has each mechanic with the line that implements it,
 the row-by-row comparison against Claude Code, Hermes, little-coder and DSH, where each idea came from,
 and the three places Tacit is still behind.
 
@@ -181,7 +181,7 @@ partial transcript, then a process-tree kill after the grace period. Sessions do
 turn state is keyed by session id, a second prompt for a busy session is refused from any window, abort
 cannot cross a session boundary, one WebSocket per session keeps a turn streaming while you look
 elsewhere, and a viewer that arrives mid-turn is replayed from the event buffer.
-[docs/architecture.md](docs/architecture.md).
+[Architecture](https://sebsilent.github.io/Tacit/architecture.html).
 
 **Nothing optional is on, and nothing learns without you.** The capability defaults live in one dict,
 `backend/providers.py:22-38`: sandbox `none`, memory `off`, learning `learn-off`. Memory's budget is
@@ -192,7 +192,7 @@ on a thread that does not start while the mode is `learn-off`, registers no tool
 and its model pass is a second switch that is off (`backend/proposal_pass.py:52`). A proposal carries the
 session, the turn and the exact sentence that triggered it, and approving one writes to memory under the
 memory budget or to a skill file, so an approved rule goes back through the same budgets as everything
-else. [docs/memory-and-learning.md](docs/memory-and-learning.md).
+else. [Memory and learning](https://sebsilent.github.io/Tacit/memory-and-learning.html).
 
 ---
 
@@ -269,7 +269,7 @@ Tacit uses the strategy the endpoint actually supports.
 | Any other OpenAI-compatible server | provider-side automatic | **nothing added** |
 
 The last row matters most: prefix caching needs no markers there, and a server that has never seen
-`cache_control` may reject the body outright. Around the rest (`backend/config.py:1018-1023`): a rejection is
+`cache_control` may reject the body outright. Around the rest (`backend/config.py:1032-1037`): a rejection is
 retried once without the markers, detected before any event streams, so nothing is half-sent and repeated;
 `TACIT_PROMPT_CACHE=off` turns marking off; and what is in force is reported with the hit rate observed.
 One measured run on an OpenAI-compatible endpoint reported **71.1%** of prompt tokens served from cache.
@@ -324,11 +324,11 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:467-475`, `backend/agent.py:831`-828`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:568-583`, `backend/agent.py:838-842`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four
-  blocked repeats (`backend/agent.py:822`-825`), because one cell spent 26 of its 29 shell calls on refused
+  blocked repeats (`backend/agent.py:828-837`), because one cell spent 26 of its 29 shell calls on refused
   repeats and ended with nothing written.
 - **The uncapped retry** re-asks a round this harness's own output ceiling destroyed, so thinking is never
   billed as waste, and that one is not part of the delivery switch.
@@ -341,7 +341,7 @@ Tacit's profiles and prefs are the tuning surface. Send your rows back through a
 with the jsonl attached and your arm gets a line in the table with your name on it.
 
 Methodology, the per-task breakdown, and how each row is audited:
-[docs/testing-and-benchmarks.md](docs/testing-and-benchmarks.md).
+[Testing and benchmarks](https://sebsilent.github.io/Tacit/testing-and-benchmarks.html).
 
 ---
 
@@ -355,7 +355,7 @@ actually get. `tacit-micro` uses the strongest primitive the OS does offer, bubb
 `sandbox-exec` on macOS. The `container` backend, opt-in and available wherever Docker or Podman runs,
 Windows included over WSL2, adds a network namespace, a read-only or read-write project bind, private
 `/tmp`, memory and CPU ceilings, a PID limit and privilege escalation off. It was checked by hand against
-Docker Engine 29.8.1 over WSL2, and [docs/isolation-and-audit.md](docs/isolation-and-audit.md) lists what
+Docker Engine 29.8.1 over WSL2, and [Isolation and audit](https://sebsilent.github.io/Tacit/isolation-and-audit.html) lists what
 came back: a refused connection under `--network none`, a read-only bind rejected by the kernel, a write
 from inside landing on the host and in the change report, `NoNewPrivs` at 1, and no surviving container
 after a timeout. `test_isolation.py` covers the logic against a stubbed runtime on every commit; no
@@ -371,7 +371,7 @@ proposal and approval is appended to `~/.tacit/audit.jsonl`: plain JSONL, creden
 including a token in a URL's query string. Nothing is edited or removed: the *clear* action retires the file
 under a timestamped name and records the rotation as the first entry of the new one. All state lives under
 that folder and deleting it removes all of it, file by file in
-[docs/data-and-privacy.md](docs/data-and-privacy.md).
+[Data and privacy](https://sebsilent.github.io/Tacit/data-and-privacy.html).
 
 **Undo is a person's instrument.** A snapshot is taken once per turn, before the first change, whether it
 arrives through `write_file`, `edit_file` or a shell command, and a failed snapshot is reported without
@@ -398,26 +398,26 @@ archive cannot tell "they removed this" from "you added this".
 
 ## Documentation
 
-The README states what Tacit is and what it costs. `docs/` states how it works, where each setting lives,
+The README states what Tacit is and what it costs. The website states how it works, where each setting lives,
 and which line of code decides it. Every citation there is a file and a line you can open, and a test
-opens all of them. Start at [docs/index.md](docs/index.md).
+opens all of them. Start at [the documentation](https://sebsilent.github.io/Tacit/).
 
 | Page | What it answers |
 |---|---|
-| [Install](docs/install.md) | getting it running, and what the installers do |
-| [Interface](docs/interface.md) | the three regions, snapshots, restart, sounds |
-| [Settings](docs/settings.md) | which tab owns which switch and which file it writes |
-| [Configuration](docs/configuration.md) | every environment variable, every preference key, and which one wins |
-| [Tools](docs/tools.md) | the 22 tools in the registry, and the four rules that decide how many a session is offered |
-| [Architecture](docs/architecture.md) | server, session runtime, turn worker, routers, the agent loop |
-| [Cost and profiles](docs/cost-and-profiles.md) | how a token figure is produced, what each profile changes, and how a long session is managed against the alternatives |
-| [Isolation and audit](docs/isolation-and-audit.md) | what a command was allowed to touch, what it changed, and the container results |
-| [Memory and learning](docs/memory-and-learning.md) | the four memory modes, the budget, and how a proposal becomes a rule |
-| [MCP and plugins](docs/mcp-and-plugins.md) | external tools without the prompt cost |
-| [Data and privacy](docs/data-and-privacy.md) | every file Tacit writes and what is in it |
-| [Testing and benchmarks](docs/testing-and-benchmarks.md) | how to run the suite and what the published figures came from |
+| [Install](https://sebsilent.github.io/Tacit/install.html) | getting it running, and what the installers do |
+| [Interface](https://sebsilent.github.io/Tacit/interface.html) | the three regions, snapshots, restart, sounds |
+| [Settings](https://sebsilent.github.io/Tacit/settings.html) | which tab owns which switch and which file it writes |
+| [Configuration](https://sebsilent.github.io/Tacit/configuration.html) | every environment variable, every preference key, and which one wins |
+| [Tools](https://sebsilent.github.io/Tacit/tools.html) | the 23 tools in the registry, and the five rules that decide how many a session is offered |
+| [Architecture](https://sebsilent.github.io/Tacit/architecture.html) | server, session runtime, turn worker, routers, the agent loop |
+| [Cost and profiles](https://sebsilent.github.io/Tacit/cost-and-profiles.html) | how a token figure is produced, what each profile changes, and how a long session is managed against the alternatives |
+| [Isolation and audit](https://sebsilent.github.io/Tacit/isolation-and-audit.html) | what a command was allowed to touch, what it changed, and the container results |
+| [Memory and learning](https://sebsilent.github.io/Tacit/memory-and-learning.html) | the four memory modes, the budget, and how a proposal becomes a rule |
+| [MCP and plugins](https://sebsilent.github.io/Tacit/mcp-and-plugins.html) | external tools without the prompt cost |
+| [Data and privacy](https://sebsilent.github.io/Tacit/data-and-privacy.html) | every file Tacit writes and what is in it |
+| [Testing and benchmarks](https://sebsilent.github.io/Tacit/testing-and-benchmarks.html) | how to run the suite and what the published figures came from |
 
-[docs/configuration.md](docs/configuration.md) is where you look up a knob. Every `TACIT_*` name in this
+[Configuration](https://sebsilent.github.io/Tacit/configuration.html) is where you look up a knob. Every `TACIT_*` name in this
 README is read from the environment by name in `backend/config.py`, and a name that is not in that table is
 not a setting. Where a variable duplicates something **Settings** can set, the environment wins and the
 interface says so.
@@ -441,7 +441,7 @@ Two rules are executable rather than editorial.
 
 - **The documentation is a specification:** `tests/test_docs.py` checks that every `TACIT_*` name in a doc
   is read by code, that every `path:line` citation points at a real non-blank line inside a real file, that
-  relative links resolve, and that every page in `docs/` is reachable from the index.
+  relative links resolve, and that every page in `site/md/` is reachable from the index.
 - **The prose has a denylist:** `scripts/check_prose.py` fails on em dashes, hollow adjectives and
   throat-clearing openers. If you cannot point at the line you do not know the answer, and you do not write
   the sentence: that is why the figures here carry a method instead of an adjective.

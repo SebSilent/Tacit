@@ -7,7 +7,7 @@ Nine tabs, four of them visible until you ask for the rest. Every one of them wr
 | **General** | Profile selector, project roots, permissions, the fallback model, the Interface section with both sound switches, their audition button and transcript density, server, updater, Restart server | `prefs.json`, `.env`, and this browser's `localStorage` for density (`static/app.js:115-122`) |
 | **Providers** | Endpoints, keys, per-model capabilities | `models.json`, `.env` |
 | **Skills & Tools** | Skills, knowledge, the tool list with a cost figure per tool | `~/.tacit/skills/`, `~/.tacit/knowledge/`, `prefs.json` |
-| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones | this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`) |
+| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones; Report mode, with the view control beside it | theme in this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`); Report mode in `prefs.json` (`backend/config.py:511`), because it changes what the agent is told |
 | **Capabilities** | Sandbox backend, container image, PID ceiling, turn timeout | `capabilities.json` |
 | **Learning** | The mode selector, the proposal queue, the analyzer | `learning.json` (`backend/config.py:65`) |
 | **MCP** | Servers, allow and deny lists, Direct MCP, the audit log | `~/.tacit/mcp.json`, `mcp_audit.jsonl` |
@@ -92,7 +92,7 @@ The analyzer runs on a daemon thread named `tacit-analyzer` (`backend/analyzer.p
 
 One switch, four modes: `off` (default), `explicit`, `jit`, `full` (`backend/memory_modes.py:7-13`). The budget is a hard cap on the rendered block, default 120 tokens, and an entry that does not fit is deferred rather than silently dropped. Every entry carries its provenance and is editable, and a pinned entry survives a prune.
 
-`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:444`-448`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:456`-456`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:463`-459`).
+`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:446-470`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:461-466`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:467-469`).
 
 ## MCP
 
@@ -108,6 +108,27 @@ Each plugin shows what it contributes and what that costs, enabled or not. A plu
 
 ## Appearance
 
-Theme and transcript density. Density changes how much of a tool result sits in the transcript before you expand it; it does not change what the agent sees.
+Theme, transcript density and Report mode. Density changes how much of a tool result sits in the transcript before you expand it; it does not change what the agent sees.
+
+Report mode does change what the agent sees, which is why it is the only switch on this
+page stored on the server rather than in this browser. Off, the standing prompt is the
+figure the README publishes. On, it gains 317 characters asking for the answer under a
+heading reading `## Report`, and the transcript splits each reply at that heading: the
+answer in a card that counts its words against a 180-word ceiling, the running commentary
+folded beneath it with its counts showing.
+
+A reply with no such heading is not treated as a report. It renders as ordinary output and
+the card says `No report written, check the output`. That is the opposite of the first
+version of this, which filed an unmarked reply whole inside the card on the grounds that
+showing the answer was safer than hiding it; in practice a model that ignored the
+instruction produced a 2,400-word card, and a missing deliverable looked like a very long
+one. The heading is also only honoured when it is a heading - `## Report`, or `## Report`
+with a note after a colon or dash. A line reading merely "Report" in the middle of some
+prose no longer splits the reply there, which would have filed everything after it as the
+deliverable.
+
+The instruction is asked for last in the prompt rather than fourth, which is the cheap half
+of making a model obey a one-line formatting rule in a standing prompt that also contains a
+project block, a tool guide, memory rules and a skills listing.
 
 Next: [every knob, with its default](configuration.md).

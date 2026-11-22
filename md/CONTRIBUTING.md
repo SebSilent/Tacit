@@ -24,7 +24,7 @@ runner, and Tacit installs neither (`README.md:434-435`).
 | `backend/plugins/` | bundled plugins, one file each |
 | `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:27`, `backend/main.py:175`) |
 | `tests/` | the suite, plus `tests/helpers.py` and `tests/fake_mcp_server.py` |
-| `docs/` | the documentation set, indexed at `docs/index.md` |
+| `site/` | the hosted website; canonical documentation markdown lives in `site/md/` |
 | `scripts/` | `check_prose.py`, `bump_version.py`, `build_site.py`, `demo_shell.py` (the mock's shell, patched out of `static/index.html`), `make_demo_gif.js` (the README's GIF), the two measurement scripts, and the two doc checkers |
 | `install.sh`, `install.ps1`, `run.sh`, `run.bat`, `restart.ps1` | installers and launchers |
 | `VERSION` | the release identity; `package.json` mirrors it (`package.json:4`) |
@@ -37,13 +37,13 @@ optional and only needed for browser automation (`package.json:6-10`). `scripts/
 
 **The documentation is a specification.** `tests/test_docs.py` checks that every `TACIT_*` name in a doc
 is actually read from the environment, that every `path:line` citation points at a real file and a real
-non-blank line inside it, that relative links resolve, and that every page in `docs/` is reachable from
-`docs/index.md` (`tests/test_docs.py:159-365`). If you add a setting, add the line that reads it. If you
+non-blank line inside it, that relative links resolve, and that every page in `site/md/` is reachable from
+`site/md/index.md` (`tests/test_docs.py:159-365`). If you add a setting, add the line that reads it. If you
 cannot point at the line, you do not know the answer, and you do not write the sentence
 (`tests/test_docs.py:39-40`).
 
 **The prose has a denylist.** `scripts/check_prose.py` fails on em dashes, hollow adjectives and
-throat-clearing openers in `README.md`, `CONTRIBUTING.md` and `docs/`, and `--all` extends it to the
+throat-clearing openers in `README.md`, `CONTRIBUTING.md` and `site/md/`, and `--all` extends it to the
 installer text and the UI strings (`scripts/check_prose.py:29-60`, `:70-74`). Patterns that need
 judgment are warnings and never fail the run (`:12-14`). If a match is genuinely wrong, add it to `ALLOW`
 with the file, the line and the reason, so the exception is auditable instead of a widened regex
@@ -60,11 +60,11 @@ additionally gated on the learning mode, so with learning off its thread never s
 block, no worker.
 The memory tools are removed from the registry when the mode is off, and `memory_recall` is removed
 again when the mode cannot retrieve, because a tool that can only answer "not enabled" is a dead end with
-a schema attached (`backend/agent.py:911`-919`).
+a schema attached (`backend/agent.py:947-961`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced
-(`backend/sandbox.py:587`-596`). Windows has no isolation primitive in the base OS, and the correct fix for
+(`backend/sandbox.py:590-605`). Windows has no isolation primitive in the base OS, and the correct fix for
 that is the honest note plus the opt-in container backend, not a fake
 (`backend/sandbox.py:25-27`, `backend/providers.py:82-90`).
 
@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:769-774` both exist because a cached path made a redirected test write into the real
+`backend/config.py:783-788` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not
@@ -92,7 +92,7 @@ writer, and a session switch, a reconnect or any idle report clears it, so it ca
 turn is using; `openCard` is the record that does (`static/app.js:53`). Adopting "the last assistant bubble"
 instead put a new turn's deltas inside the previous answer, and only a reload drew it correctly, because
 the stored rows were never the problem. The ordering that makes it happen is in the runtime: the session is
-marked busy (`backend/session_runtime.py:934`) before the prompt is published (`:977`), so a view that arms
+marked busy (`backend/session_runtime.py:961-974`) before the prompt is published (`:1009-1026`), so a view that arms
 itself on the busy signal is holding the turn that just ended. `tests/test_transcript_card_flow.py` pins
 the structure, for the same reason the listener rule does.
 
@@ -131,13 +131,13 @@ checker is on the list of cells the table wants next (`README.md:338-339`).
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
 (`README.md:340-341`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
-somebody else can re-run (`docs/testing-and-benchmarks.md:153-155`).
+somebody else can re-run (`site/md/testing-and-benchmarks.md:153-155`).
 
 Templates for both are in `.github/`.
 
 ## Reading
 
-- `docs/index.md` for the documentation set and the three rules that hold across it
-- `docs/architecture.md` before touching the server, the worker or the loop
-- `docs/configuration.md` before adding a setting
-- `docs/testing-and-benchmarks.md` for how the published numbers were produced
+- [Documentation](https://sebsilent.github.io/Tacit/) for the page set and the three rules that hold across it
+- [Architecture](https://sebsilent.github.io/Tacit/architecture.html) before touching the server, the worker or the loop
+- [Configuration](https://sebsilent.github.io/Tacit/configuration.html) before adding a setting
+- [Testing and benchmarks](https://sebsilent.github.io/Tacit/testing-and-benchmarks.html) for how the published numbers were produced
