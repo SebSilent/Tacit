@@ -12,7 +12,7 @@ python -m unittest discover -s tests -t .
 ```
 
 The suite runs offline. It needs no network, no real model, no container daemon and no benchmark
-runner, and Tacit installs neither (`README.md:434-435`).
+runner, and Tacit installs neither (`README.md:309-310`).
 
 ## Layout
 
@@ -121,15 +121,15 @@ Node, so it is run by hand and never from `unittest`, which stays offline and in
 
 The benchmark table wants more arms on the same cells: any first-party or fp8 route for kimi and qwen,
 DeepSeek and Qwen as the model, an Apple silicon lane, and a rerun on whatever hardware you have
-(`README.md:336-339`). Tuning is welcome and is part of the point, since the profiles and prefs are the
-tuning surface (`README.md:339-340`).
+(`README.md:244-247`). Tuning is welcome and is part of the point, since the profiles and prefs are the
+tuning surface (`README.md:247-248`).
 
 One concrete port is named in the README: schemelike is graded on Linux only because its checker reads
-`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:299-300`), and a Windows port of that
-checker is on the list of cells the table wants next (`README.md:338-339`).
+`os.O_NONBLOCK`, which Windows Python does not provide (`README.md:209-210`), and a Windows port of that
+checker is on the list of cells the table wants next (`README.md:246-247`).
 
 A pull request, an issue with the results file attached, or any row you can reproduce is a contribution
-(`README.md:340-341`). Every row must carry the checker's output verbatim, the byte counts and sha256
+(`README.md:248-249`). Every row must carry the checker's output verbatim, the byte counts and sha256
 digests of what it graded, and the per-call audit ledger, so that a claimed solve stays a transcript
 somebody else can re-run (`site/md/testing-and-benchmarks.md:153-155`).
 

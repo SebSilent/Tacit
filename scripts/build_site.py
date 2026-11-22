@@ -139,8 +139,8 @@ HERO = """    <section class="hero">
         <div class="panel-row"><span class="panel-key">Minimal profile</span><span class="panel-val">~768 tokens</span></div>
         <div class="panel-row"><span class="panel-key">Default profile</span><span class="panel-val">~2,039 tokens</span></div>
         <p class="panel-note">Re-derived from the code by a test on every run. Characters divided
-        by four, the same heuristic the token meter uses. A smaller preamble is not a lower bill;
-        it is one term you can see and set.</p>
+        by four, the same heuristic the token meter uses. The preamble is one term you can see and
+        set; the bill also depends on steps and transcript.</p>
         <a class="panel-link" href="cost-and-profiles.html">How the figure is produced →</a>
       </aside>
     </section>
@@ -161,9 +161,9 @@ HERO = """    <section class="hero">
       </div>
       <div class="principle">
         <span class="principle-key">02</span>
-        <h3>Nothing enforced is unreported</h3>
-        <p>Where the platform cannot isolate a command, the sandbox says so in the result rather
-        than claiming a guarantee it does not have.</p>
+        <h3>It reports what it enforces</h3>
+        <p>Where the platform cannot isolate a command, the result says so plainly. The sandbox
+        only claims a guarantee it can actually keep.</p>
       </div>
       <div class="principle">
         <span class="principle-key">03</span>

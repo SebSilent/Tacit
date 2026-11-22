@@ -68,6 +68,14 @@ BANNED = [
      r"game.?changer|cutting.edge|next.generation|unleash|supercharge|effortless|"
      r"blazing(?:ly)? (?:fast|performance)|revolutionary)\b",
      "an invented metric or a marketing claim", "a measured figure with the measurement named"),
+
+    # Inflated significance and AI scenery, per Wikipedia's "Signs of AI writing".
+    (r"\b(?:is|stands|serves) as a testament\b", "inflated significance", "state what it does"),
+    (r"\bevolving landscape\b|\bindelible mark\b|\bdeeply rooted\b", "AI scenery / inflated significance", "cut it, or name the thing"),
+    (r"\b(?:crucial|vital) (?:role|moment|part)\b", "inflated significance", "name the role plainly"),
+    (r"\bfostering (?:a|an|the)\b", "superficial -ing analysis", "say what it does"),
+    (r"\bleverag(?:e|es|ed|ing)\b", "business jargon", "use"),
+    (r"\brealm\b", "AI scenery noun", "area, field"),
 ]
 
 # ---- the visual tells -------------------------------------------------------
@@ -106,6 +114,14 @@ WARNINGS = [
      "negation pivot: make the positive claim directly"),
     (r"\b\w+, \w+, and \w+\.\s*\n",
      "possible triadic list: vary the count"),
+    (r"\bnot (?:just|merely|only)\b[^.\n]{0,60}\bbut\b",
+     "negative parallelism (not just X but Y): state the positive"),
+    (r", not (?:a|an|the|just|merely)\b",
+     "negative parallelism (X, not Y): state the positive"),
+    (r"\bnothing\b[^.\n]{0,40}\b(?:not|never|un(?!til|der|less|to)[a-z]+)\b",
+     "double negative: state the positive"),
+    (r"\bnot\b[^.\n]{0,20}\bun(?!til|der|less|to)[a-z]+\b",
+     "double negative: state the positive"),
 ]
 
 # Files the documentation set covers.

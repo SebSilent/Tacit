@@ -28,8 +28,8 @@ the reason written next to them (`backend/providers.py:32-34`), and the analyzer
 (`:31`), which `sync_worker` still gates on the learning mode, so with learning off the thread never
 starts (`backend/analyzer.py:683-694`).
 
-**Nothing is enforced that is not reported.** Where the platform cannot isolate a command, the
-sandbox says so in the result rather than claiming a guarantee it does not have
+**It reports what it enforces.** Where the platform cannot isolate a command, the sandbox says so
+in the result, and only claims a guarantee it can keep
 (`backend/sandbox.py:21-27`).
 
 **Nothing is learned without you.** A proposal is a stored artifact you read and decide on
