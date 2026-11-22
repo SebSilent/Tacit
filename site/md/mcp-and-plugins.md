@@ -64,7 +64,7 @@ at most three times (`backend/mcp_registry.py:43-44`).
 The allow and deny lists are checked when a tool is *called*, not only when it is offered, which is why
 `mcp_call` is removed from read-only callers entirely: a model can hand itself `confirm=true`
 (`backend/agent.py:663-703`). Dispatch enforces both the read-only refusal and the set of schemas
-actually offered to the caller (`backend/agent.py:1928-1968`, `:2417-2422`).
+actually offered to the caller (`backend/agent.py:1952-1992`, `:2447-2452`).
 
 ## Plugins
 
@@ -88,7 +88,7 @@ Plugin tools are appended to the registry at request time, never baked into the 
 there must never break an ordinary turn (`backend/agent.py:974-981`). A read-only caller receives only
 plugin schemas whose `function` object declares `x-tacit-readonly: true`. Undeclared plugin tools fail
 closed at schema collection and again at dispatch (`backend/plugin_manager.py:264-284`,
-`backend/agent.py:1970-1977`).
+`backend/agent.py:1994-2001`).
 
 ### The one bundled plugin
 

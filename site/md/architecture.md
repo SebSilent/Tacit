@@ -16,9 +16,13 @@ in `static/` mounted as-is (`backend/config.py:27`, `backend/main.py:175`).
 | Providers | `backend/providers.py`, `backend/ai/` | what model runs, what capabilities it declares, how it is called |
 | Policy | `backend/sandbox.py`, `backend/mcp_registry.py`, `backend/memory_modes.py` | what a command may touch, what may be injected |
 | State | `backend/store.py`, `backend/config.py` | sessions on disk, paths and defaults |
+| Evidence | `backend/audit.py`, `backend/manifest.py`, `backend/metrics.py` | the append-only ledger, one manifest per evaluated run, one usage arithmetic |
 
 The router list is complete and short because a router is a thin HTTP surface. The decision each one
-exposes lives in the module it calls.
+exposes lives in the module it calls. The evidence layer is what makes a claim about a run checkable
+afterwards: the ledger records every action as it happens, and a run manifest collects one evaluated
+run's requests, tools, mutations, costs and terminal status into one inspectable JSON artifact
+(`backend/manifest.py:139-155`; see [testing and benchmarks](testing-and-benchmarks.md)).
 
 ## A session id is the anchor
 
@@ -70,7 +74,7 @@ a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:29-31`, `backend/config.py:481-496`).
+(`backend/turn_worker.py:29-31`, `backend/config.py:495-510`).
 
 ## What the server does at startup
 
@@ -127,7 +131,7 @@ frontend with no build step (`backend/main.py:175`).
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
   between turns (`backend/agent.py:1569-1624`) and `compact_messages` does it inside a growing turn
   (`backend/agent.py:1704-1751`), which is what `TACIT_COMPACT_MID_TURN` controls
-  (`backend/config.py:177-180`). A turn runs in its own process while its parent writes the
+  (`backend/config.py:180-183`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
   `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1627-1676`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
@@ -143,10 +147,10 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:1026-1029`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:1040-1043`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:1024-1025`).
+(`backend/config.py:1038-1039`).
 
 Next: [cost and profiles](cost-and-profiles.md).

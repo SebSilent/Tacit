@@ -37,8 +37,8 @@ import asyncio
 import threading
 import time
 
-from . import (agent, assistant, audit, config, extras, mcp_registry, memory_modes,
-               memory_store, metrics, plugin_manager, project_context,
+from . import (agent, assistant, audit, config, extras, manifest, mcp_registry,
+               memory_modes, memory_store, metrics, plugin_manager, project_context,
                session_state, store, turn_bus, turn_worker)
 from . import tokens as token_mod
 from .ai import prompts
@@ -691,6 +691,16 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     worker = run.get("worker")
     started = time.time()
     terminal = None
+    # Opt-in evidence: the same event stream this driver already consumes feeds
+    # one manifest per run, in both worker modes. Off unless TACIT_MANIFEST says
+    # on; a benchmark (headless) records through its own path regardless.
+    man = None
+    if config.manifest_mode() == "on":
+        man = manifest.RunManifest(
+            session=sid, model=ref or "", project=project or "", kind="interactive",
+            prompt_text=str((messages[0].get("content") if messages else "") or ""))
+        run["manifest"] = man
+    last_error = None
     # A compaction that ran inside the worker, held for the epilogue: the stored
     # transcript is written there, and it is the only place the reclamation can
     # still be seen by the next turn.
@@ -703,6 +713,10 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                                  trace=trace))
         for ev in stream:
             kind = ev.get("type")
+            if man is not None:
+                man.event(ev)
+            if kind == "error":
+                last_error = str(ev.get("message") or "unknown error")
             # Delegated work is invisible in the main transcript by design,
             # the sub-agent's calls never enter it, so the only way the
             # person can see what it is doing is a dedicated event.
@@ -768,6 +782,7 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                 continue
             bus.publish({**ev, "sid": sid})
     except Exception as e:  # noqa: BLE001
+        last_error = str(e)
         bus.publish({"type": "error", "message": str(e), "sid": sid})
     finally:
         # An orphan is never left behind: a worker still alive after the
@@ -838,6 +853,12 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
         # arriving later that the transcript in the record is the whole
         # story; forgetting an unwatched bus is what keeps idle sessions free.
         turn_bus.finish(sid)
+        if man is not None:
+            try:
+                man.finish(ok=terminal is not None and last_error is None,
+                           error=last_error, wall_s=time.time() - started)
+            except Exception:  # noqa: BLE001
+                pass
         # The autonomous chain runs after the stream is closed, so a cycle that
         # starts here publishes on a fresh bus rather than into one that viewers
         # have already been told to stop replaying.
@@ -1240,6 +1261,9 @@ def cancel(sid: str) -> dict:
     if run is not None:
         run["stop"].set()
         run["steer"].clear()
+        man = run.get("manifest")
+        if man is not None:
+            man.note_cancel()
         w = run.get("worker")
         if w is not None and w.alive():
             # Two-stage: cooperative cancel first, tree kill after the grace.
@@ -1280,6 +1304,9 @@ def steer(sid: str, text: str) -> bool:
         run = _turns.get(sid)
     if run is None:
         return False
+    man = run.get("manifest")
+    if man is not None:
+        man.note_steering(text)
     w = run.get("worker")
     if w is not None and w.steer(text):
         return True

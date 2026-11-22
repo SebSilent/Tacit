@@ -31,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import agent, audit, config, metrics, project_context, thinking
+from . import agent, audit, config, manifest, metrics, project_context, thinking
 from .ai import prompts
 
 
@@ -166,6 +166,17 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
     messages.append({"role": "user", "content": instruction})
     store_append(rec, "user", instruction)
 
+    # A benchmark run always produces its evidence artifact, whatever the
+    # interactive setting says: a comparison without manifests is exactly the
+    # unverifiable claim the manifest exists to prevent. The env is restored in
+    # the finally so an embedded caller's setting survives the run.
+    prev_manifest = os.environ.get("TACIT_MANIFEST")
+    os.environ["TACIT_MANIFEST"] = "on"
+    man = manifest.RunManifest(session=rec["id"], model=ref, project=workdir,
+                               kind="benchmark", profile=profile or "", reasoning=level,
+                               prompt_text=messages[0]["content"], max_steps=max_steps)
+    man_summary: dict = {}
+
     totals = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0,
               "fresh": 0}
     trace: list[dict] = []
@@ -184,6 +195,7 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
                                  reasoning=effort,
                                  max_steps=max_steps, trace=trace, deadline=deadline):
             kind = ev.get("type")
+            man.event(ev)
             if kind == "usage":
                 # Every usage event is counted, including the ones tagged `subagent`:
                 # the server adds them to the same totals too, and a sub-agent's API
@@ -209,6 +221,12 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
         error = f"{type(exc).__name__}: {exc}"
     finally:
         store_save(rec)
+        man_summary = man.finish(ok=error is None and not timed_out, error=error,
+                                 wall_s=time.time() - started)
+        if prev_manifest is None:
+            os.environ.pop("TACIT_MANIFEST", None)
+        else:
+            os.environ["TACIT_MANIFEST"] = prev_manifest
         # Nothing to flush: audit.record() opens, appends and closes the ledger per
         # entry, so every line is on disk by the time the call returns. There is no
         # audit.flush() to call, and pretending there was would hide the fact that
@@ -256,6 +274,8 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
         "profile_skipped": [s.get("what") for s in (prof.get("skipped") or [])],
         "tools_offered": (prof.get("applied_now") or {}).get("tool_count"),
         "instruction_tokens": int(instructions.get("tokens") or 0),
+        "manifest": man_summary.get("path") or "",
+        "manifest_id": man_summary.get("id") or "",
         "trace": trace,
     }
 

@@ -12,7 +12,7 @@ The standing prompt is assembled in one function (`backend/ai/prompts.py:169`-19
 |---|---|---|
 | Base instructions | `backend/ai/prompts.py:9-25` | always, or `SUBAGENT` (`:55-62`) for a delegated run |
 | The version-control rule | `backend/ai/prompts.py:3-7`, chosen at `:165` | always, and it tracks the setting so the prompt never claims something the shell guard would refuse |
-| Project scope | `backend/ai/prompts.py:42`-37`, added at `:167-168` | when the session has a usable project (`backend/config.py:717`) |
+| Project scope | `backend/ai/prompts.py:42`-37`, added at `:167-168` | when the session has a usable project (`backend/config.py:731`) |
 | Scratch-workspace notice | `backend/ai/prompts.py:48`-44`, added at `:169-174` | when there is no usable project and a session id, so the model is told where it is working |
 | Read-only or chat notice | `backend/ai/prompts.py:55`-50`, added at `:179-182` | per mode |
 | Skill index | added at `backend/ai/prompts.py:200`-195` | only when skills exist; bodies are fetched on demand by the `skill` tool |
@@ -144,7 +144,7 @@ None of this was invented here.
   Tacit used a flat 0.65 and was wrong at both ends: it compacted a 1M-token model at 650,000, throwing
   away 350,000 tokens of usable context, and an 8K model at 5,200, leaving too little to answer in.
   Adopting the reserve model is worth 317,000 extra usable tokens on a 1M window, and the triggers now
-  agree with Claude Code's (`backend/config.py:115-125`).
+  agree with Claude Code's (`backend/config.py:118-128`).
 - **The compaction mechanics are Hermes'.** Its `context_compressor.py` was ahead of what was here: a
   token-budget tail rather than a fixed message count, a cheap pre-pass that clears old tool output
   before paying a model to summarise it, iterative summaries that refine one handover note instead of
@@ -168,7 +168,7 @@ None of this was invented here.
 - **A cheap pre-pass clears bulky tool output** from the rows about to be folded away, keeping the head
   of each result plus the fact that there was more (`backend/agent.py:1325-1353`). It shrinks what the
   summariser is sent; it does not replace it, and the summariser is still called.
-- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:135-137`). Six
+- **The tail is kept by token budget**, between 4 and 40 messages (`backend/config.py:138-140`). Six
   messages is six huge tool results on one turn and six one-line answers on the next: the first
   overflows the summariser's input and the second discards recent work that was cheap to keep.
 - **Repeated compaction refines one handover note** instead of stacking summaries, because an earlier
@@ -212,8 +212,8 @@ injected, and what was avoided by lazy loading, budgeting, compaction and delega
 schemas, then four savings counters, one per avoidance mechanism (`backend/metrics.py:22-25`).
 
 Two ceilings stop a turn from running away. `TACIT_TURN_TOKEN_BUDGET` is a hard token ceiling that
-defaults to no ceiling at all (`backend/config.py:163`), and `TACIT_COST_WARN` is the set of window
-fractions at which a turn tells you what it is costing (`:149`). Compaction is decided against a
+defaults to no ceiling at all (`backend/config.py:166`), and `TACIT_COST_WARN` is the set of window
+fractions at which a turn tells you what it is costing (`:152`). Compaction is decided against a
 reserve model rather than a flat fraction by default: `TACIT_CONTEXT_RESERVE` leaves 33,000 tokens free
 for the next turn's work (`:108`) and `TACIT_CONTEXT_FILL_FLOOR` refuses to compact below half the
 window, so a small model is not starved (`:114`). The machinery itself is in

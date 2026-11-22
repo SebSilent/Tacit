@@ -21,7 +21,7 @@ from it, so tests that believed they were isolated wrote fixture sessions into t
 deliberately excluded, because tests must be able to read those (`:14-15`).
 
 Redirecting a path works because the store re-reads it on every call rather than caching it at import
-(`backend/store.py:9-17`, `backend/config.py:783-788`). A test that redirected `WORKSPACES_DIR` had to
+(`backend/store.py:9-17`, `backend/config.py:797-802`). A test that redirected `WORKSPACES_DIR` had to
 actually redirect it.
 
 ## What the suite holds down
@@ -122,6 +122,75 @@ sandbox, the way a page loads it, and asserts the output contains the structures
 this checks the renderer. It needs Node, so it is never run by `unittest`, which stays offline and
 installs nothing (`scripts/check_site_render.js:13-15`).
 
+## The evidence system
+
+A benchmark row is a claim, and a claim without its evidence is narration. Three pieces make every
+evaluated run reproducible and inspectable: a run manifest, a scripted local provider for process-level
+conformance, and an evaluation matrix that keeps tuning and held-out tasks apart.
+
+### Run manifests
+
+`backend/manifest.py` writes one plain JSON artifact per evaluated run under `~/.tacit/manifests`:
+the build identity (VERSION, a source fingerprint of the loop and control plane, the git commit and
+dirty flag where a checkout exists), hashes of the configuration and the standing prompt, the model,
+provider, endpoint class and reasoning effort, every model call's normalized usage (nested sub-agent
+calls charged to the parent), every tool call with its argument hash, duration, outcome and a bounded
+result excerpt, file mutations with before/after content hashes, compactions, delegations, steering,
+cancellation, and the terminal status (`backend/manifest.py:1-23`, `:139-275`).
+
+Secrets never land in a manifest: arguments pass the audit ledger's masker, free text is additionally
+redacted against the registry's actual key values, and configuration and prompts are recorded as
+hashes, never content (`backend/manifest.py:106-131`, `:278-308`). Usage goes through
+`metrics.normalize_usage`, the one parser the live meter and the headless runner already share, so a
+manifest and a benchmark row cannot disagree about what a token is (`backend/metrics.py:42-69`).
+
+Interactive recording is opt-in with `TACIT_MANIFEST=on` (`backend/config.py:484-492`); the turn
+driver feeds the same event stream it already consumes, in both worker modes
+(`backend/session_runtime.py:697-703`). A headless benchmark run always records, whatever the
+interactive setting says, because a comparison without manifests is exactly the unverifiable claim
+the manifest exists to prevent (`backend/headless.py:169-178`).
+
+### The scripted provider
+
+A worker subprocess cannot see a fake engine patched into the test process, so conformance tests that
+need process semantics fake the model at the only seam that crosses the boundary:
+`tests/fake_provider.py` serves deterministic OpenAI-shaped SSE from a local HTTP server, scripted per
+request. The script covers the shapes the suite needs: plain answers, tool calls, delays, hangs,
+truncated tool JSON, repeated identical calls, malformed bodies, HTTP 429/500 and connection resets
+(`tests/fake_provider.py:1-33`). `tests/test_fake_provider.py` drives each shape through a real worker
+and asserts the observable contract: a severed call never executes, identical calls hit the repeat
+guard, a malformed body reaches a terminal event without hanging, and provider failures surface as
+errors. All traffic is loopback; all state lives under a temporary `TACIT_HOME`.
+
+### The evaluation matrix
+
+`scripts/eval_matrix.py` runs the task catalog in `scripts/eval_tasks.json`: one task is one isolated
+run (a fresh `TACIT_HOME`, a prepared workdir, one headless turn, one checker, one manifest), and the
+raw artifacts stay beside the report for inspection (`scripts/eval_matrix.py:106-191`).
+
+```sh
+python scripts/eval_matrix.py --offline --out eval-artifacts     # pipeline conformance, no keys
+python scripts/eval_matrix.py --live --model provider/id --out eval-artifacts
+```
+
+Two classification rules are the point of the runner:
+
+- **Infrastructure failures are counted apart from task failures.** A run whose plumbing failed
+  (error, timeout, crash) is an infrastructure failure; a clean run the checker rejects is a task
+  failure. A harness is not graded on the model's mistakes (`scripts/eval_matrix.py:158-164`).
+- **Tuning and held-out splits are never merged.** Tasks used to develop prompts and policies live in
+  `tuning`; release claims come from `held_out`, and the report aggregates them separately
+  (`scripts/eval_matrix.py:209-224`). The offline run proves the pipeline; capability measurement
+  comes from live runs. Its scripted answers show the plumbing carries work to a verified artifact,
+  nothing more.
+
+The starter catalog spans feature, bugfix, refactor, documentation and research classes, including a
+conformance task that must classify as an infrastructure failure and a documentation-only task whose
+manifest must show no execution. Competitor arms (Claude Code, OpenCode) run the same tasks and
+checkers through their own harnesses and contribute rows with a different `arm`; the report format
+reserves the field, and the adapters plus the first expanded live baseline are the remaining Phase 0B
+work.
+
 ## Where the published numbers come from
 
 The benchmark section of the README is the evidence for the architecture, not the argument itself: one
@@ -162,7 +231,7 @@ which results were helped by them.
 **The delivery guarantee** finishes a write the turn started and missed, makes it run, and spends the last
 minutes of wall budget landing the artifact, so a failed cell is still a graded artifact
 (`README.md:233-237`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
-(`backend/config.py:467-475`). What opens the phase is evidence rather than the prompt: a `write_file` or
+(`backend/config.py:470-478`). What opens the phase is evidence rather than the prompt: a `write_file` or
 `edit_file` call the turn made and did not land. It used to open on a filename appearing in the task text,
 and that guess is not sound, because a name in a prompt can be a session title, an input, a question or an
 order, and only the sentence says which; a turn that wrote nothing and attempted nothing now gets the
@@ -172,12 +241,12 @@ is bounded, because an unbounded "one more chance" is how a turn becomes two tur
 (`backend/agent.py:838-842`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
-blocked repeats in a row ends the turn early (`backend/agent.py:828-837`, `:3120-3130`). It exists
+blocked repeats in a row ends the turn early (`backend/agent.py:828-837`, `:3154-3164`). It exists
 because one cell spent 26 of its 29 shell calls on refused repeats and ended with nothing written
 (`backend/agent.py:820-825`, `:833-836`).
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch
-(`README.md:238-239`, `backend/config.py:446-450`).
+(`README.md:238-239`, `backend/config.py:449-453`).
 
 Next: [contributing](CONTRIBUTING.md).

@@ -28,7 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # lost 800 lines went on being cited by line numbers that no longer existed.
 CITE = re.compile(
     r"(?<![\w./-])"
-    r"((?:backend|static|scripts|tests|docs|site)/[\w./-]+?\.(?:py|js|mjs|css|html|md)"
+    r"((?:backend|static|scripts|tests|docs|site)/[\w./-]+?\.(?:py|json|js|mjs|css|html|md)"
     r"|README\.md|CONTRIBUTING\.md|[\w-]+\.(?:sh|ps1|bat))"
     r"(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?"
 )

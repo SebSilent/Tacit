@@ -68,6 +68,9 @@ ADAPTERS_DIR = HOME / "adapters"
 BRIDGES_DIR = ROOT / "bridges"
 BUNDLED_PLUGINS_DIR = BACKEND_DIR / "plugins"
 JOBS_DIR = HOME / "jobs"
+# One JSON evidence artifact per evaluated run (backend/manifest.py). Interactive
+# recording is opt-in via TACIT_MANIFEST; headless benchmark runs always record.
+MANIFESTS_DIR = HOME / "manifests"
 HOST = os.environ.get("TACIT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TACIT_PORT", "8550"))
 # The uvicorn.Server, set by main() once it is running. A restart asks this
@@ -311,7 +314,7 @@ def load_env() -> None:
 
 def ensure_home() -> None:
     for d in (HOME, SESSIONS_DIR, SKILLS_DIR, KNOWLEDGE_DIR, PLANS_DIR, CHECKPOINT_DIR,
-              JOBS_DIR, PLUGINS_USER_DIR, ADAPTERS_DIR):
+              JOBS_DIR, PLUGINS_USER_DIR, ADAPTERS_DIR, MANIFESTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     if not MODELS_FILE.exists():
         MODELS_FILE.write_text(json.dumps({"default": "", "providers": {}}, indent=2), encoding="utf-8")
@@ -476,6 +479,17 @@ def summariser_ref(ref: str | None) -> str:
     if chosen:
         return chosen
     return str((resolve_model(ref) or {}).get("ref") or "")
+
+
+def manifest_mode() -> str:
+    """Whether interactive turns record a run manifest (backend/manifest.py).
+
+    Off by default: an interactive session pays no manifest overhead unless the
+    operator asks for it. Headless benchmark runs record regardless, because a
+    comparison without evidence is the claim this system exists to prevent.
+    """
+    raw = os.environ.get("TACIT_MANIFEST", "").strip().lower()
+    return "on" if raw in ("1", "on", "true", "yes") else "off"
 
 
 def turn_worker_mode() -> str:

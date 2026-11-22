@@ -15,105 +15,46 @@ test can read, then sleeps. Nothing here needs a real provider.
 """
 
 import asyncio
-import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from backend import config, proctools, session_runtime, session_state, store, turn_worker
+from tests.fake_provider import FakeProvider
 from tests.helpers import drain_turns, state_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _sse(payloads: list[dict]) -> bytes:
-    return ("".join("data: " + json.dumps(p) + "\n\n" for p in payloads)
-            + "data: [DONE]\n\n").encode()
-
-
-def _tool_call(command: str, timeout: int) -> bytes:
-    return _sse([
-        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_shell_1",
-                                               "function": {"name": "run_shell",
-                                                            "arguments": json.dumps(
-                                                                {"command": command,
-                                                                 "timeout": timeout})}}]}}]},
-        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}],
-         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
-    ])
-
-
-def _text(text: str) -> bytes:
-    return _sse([
-        {"choices": [{"delta": {"content": text}}]},
-        {"choices": [{"delta": {}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
-    ])
-
-
 class ScriptedModel:
-    """A local OpenAI-shaped endpoint: first a tool call, then plain text.
+    """The cancellation scenario's script: first a run_shell call, then text.
 
-    ``hang=True`` accepts the request and never answers, the shape of a model
-    read a stop flag cannot interrupt from inside. The hang is interruptible so
-    teardown never waits it out.
+    A thin wrapper over the reusable FakeProvider; ``hang=True`` accepts the
+    request and never answers, the shape of a model read a stop flag cannot
+    interrupt from inside.
     """
 
     def __init__(self, command: str = "", timeout: int = 60, hang: bool = False):
-        self.command = command
-        self.timeout = timeout
-        self.hang = hang
-        self.requests = 0
-        self.request_seen = threading.Event()
-        self.release = threading.Event()
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def do_POST(self):
-                self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                outer.requests += 1
-                outer.request_seen.set()
-                if outer.hang:
-                    while not outer.release.is_set():
-                        time.sleep(0.1)
-                    self.close_connection = True
-                    return
-                body = (_tool_call(outer.command, outer.timeout)
-                        if outer.requests == 1 else _text("all done"))
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                self.wfile.flush()
-
-            def log_message(self, *a):
-                pass
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.server.daemon_threads = True
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.port = self.server.server_address[1]
+        script = ([{"hang": True}] if hang else
+                  [{"tool": {"name": "run_shell", "id": "call_shell_1",
+                             "arguments": {"command": command, "timeout": timeout}}},
+                   {"text": "all done"}])
+        self._fp = FakeProvider(script)
+        self.requests = self._fp.requests
+        self.request_seen = self._fp.request_seen
+        self.release = self._fp.release
+        self.port = self._fp.port
 
     def stop(self):
-        self.release.set()
-        self.server.shutdown()
-        self.server.server_close()
+        self._fp.stop()
 
     def register(self):
-        config.save_registry({"default": "p/m", "providers": {"p": {
-            "baseUrl": f"http://127.0.0.1:{self.port}/v1", "apiKey": "k",
-            "models": [{"id": "m", "contextWindow": 100000}]}}})
+        self._fp.register()
 
 
 class RuntimeFixture(unittest.TestCase):
@@ -138,7 +79,7 @@ class RuntimeFixture(unittest.TestCase):
         config.ensure_home()
         self._env = {}
         for key in ("TACIT_TURN_WORKER", "TACIT_HOME", "TACIT_DISABLE_JOB_OBJECTS",
-                    "TACIT_WORKER_MAX_S"):
+                    "TACIT_WORKER_MAX_S", "TACIT_MANIFEST"):
             self._env[key] = os.environ.get(key)
         self.addCleanup(self._restore_env)
         os.environ["TACIT_HOME"] = str(self.home)

@@ -53,9 +53,9 @@ published figure counts what the profile owns; the runtime figure counts what th
 `mcp_activate_tools` and `memory_add` (`backend/agent.py:663-671`). `evidence` keeps its read actions
 but refuses `add`; `browser` keeps `open`, `text` and `links`, but refuses the mutating `click`,
 `type`, `screenshot` and `close` actions (`backend/agent.py:676-703`). Hiding a schema does not stop a
-call, so `readonly_guard` runs again at dispatch (`backend/agent.py:1928-1933`). Every caller also
+call, so `readonly_guard` runs again at dispatch (`backend/agent.py:1952-1957`). Every caller also
 gets an `allowed_tools` set built from the exact schemas offered for that turn, and dispatch refuses
-any other name, including every tool in chat (`backend/agent.py:2417-2422`, `:1934-1937`).
+any other name, including every tool in chat (`backend/agent.py:2447-2452`, `:1958-1961`).
 
 **3. The MCP helpers appear only when a server is configured.** With nothing in `mcp.json` the four
 helpers are four dead ends that cost tokens and invite calls that can only fail
@@ -70,9 +70,9 @@ injects what you approved and retrieves nothing, so the tool could only ever ans
 **5. The archive reader follows its own switch.** `session_archive` is removed when the archive
 switch is off (`backend/agent.py:965-970`), and the same gate is enforced again at dispatch, because
 a model that remembers the name from an earlier turn can still emit it and a refusal it can read is
-the honest answer (`backend/agent.py:1938-1944`). The switch lives in Settings > Tools and its
+the honest answer (`backend/agent.py:1962-1968`). The switch lives in Settings > Tools and its
 default is on: a fold the model cannot read back is the loss the person feels, and the reader is
-what makes a fold a reorganisation instead of a deletion (`backend/config.py:525-542`). It shipped
+what makes a fold a reorganisation instead of a deletion (`backend/config.py:539-556`). It shipped
 off and paid nothing for it, which was the problem: the fold still happened. `TACIT_ARCHIVE_TOOL=0`
 pins it off for an install that wants neither.
 
@@ -84,7 +84,7 @@ live only in the code.
 `run_shell` states the shell and the operating system it is running on, read from config at the
 moment the registry is built (`backend/agent.py:733-735`). `research` quotes
 its own budget, `RESEARCH_ASPECTS`, `RESEARCH_STEPS` and `RESEARCH_TIMEOUT`, taken from
-`backend/config.py:242`, `:252` and `:256` rather than written into the sentence, so the description
+`backend/config.py:245`, `:255` and `:259` rather than written into the sentence, so the description
 cannot drift away from the caps (`backend/agent.py:755-760`). `memory_add` says plainly that a
 proposal lands pending review and is injected nowhere until you approve it
 (`backend/agent.py:789-795`).
@@ -115,7 +115,7 @@ to die, and returns an error rather than claiming success if it is still running
 handle first proves the persisted pid is still the process the record registered, by its birth
 identity; a reused pid or a record with no identity is refused, not killed
 (`backend/extras.py:168-196`). The Stop control stops every persisted job belonging to
-that session, without touching another session's jobs (`backend/session_runtime.py:1227-1268`). A
+that session, without touching another session's jobs (`backend/session_runtime.py:1248-1292`). A
 normal server exit stops all remaining jobs (`backend/extras.py:351-375`). Stopped and exited rows
 and logs remain available for later `bg_output` calls; stopping a job which has already exited does
 not claim to have killed it. Finished records and logs are kept for a week and capped at 200, pruned
@@ -125,7 +125,7 @@ on the next start; running jobs are never pruned (`backend/extras.py:281-318`).
 
 `MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:809-813`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:895-922`, `:2929-2934`). `run_shell` is in that set because a command can rewrite
+(`backend/agent.py:895-922`, `:2961-2966`). `run_shell` is in that set because a command can rewrite
 the tree, and the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to
@@ -136,7 +136,7 @@ the person using Tacit (`backend/agent.py:638-661`).
 The same call with the same arguments runs three times in a turn, and after that it is answered from
 cache instead (`backend/agent.py:828-846`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:3120-3130`).
+(`backend/agent.py:3154-3164`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the

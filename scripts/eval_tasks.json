@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "note": "Starter evaluation matrix (P0B.3). tuning tasks are for prompt/policy development; held_out tasks are for release claims and must never be tuned against. offline_script drives the FakeProvider for the offline conformance run; tasks without one are live-only. Checkers read the workdir after the run; a command checker passes on exit 0.",
+  "tasks": [
+    {
+      "id": "write-greeting",
+      "class": "feature",
+      "split": "tuning",
+      "instruction": "Create a file named hello.txt in the project root containing exactly the word hello followed by a newline. Do nothing else.",
+      "setup": {},
+      "checker": {"type": "file_equals", "path": "hello.txt", "content": "hello\n"},
+      "budget": {"max_steps": 6, "timeout_s": 120},
+      "offline_script": [
+        {"tool": {"name": "write_file", "arguments": {"path": "hello.txt", "content": "hello\n"}}},
+        {"text": "Created hello.txt with the requested content."}
+      ]
+    },
+    {
+      "id": "fix-off-by-one",
+      "class": "bugfix",
+      "split": "tuning",
+      "instruction": "sum_to.py is supposed to return the sum of 1..n inclusive, but sum_to(3) returns 3 instead of 6. Fix the bug with a minimal edit.",
+      "setup": {"files": {"sum_to.py": "def sum_to(n):\n    total = 0\n    for i in range(1, n):\n        total += i\n    return total\n"}},
+      "checker": {"type": "command", "command": "python -c \"import sum_to; assert sum_to.sum_to(3) == 6, sum_to.sum_to(3)\""},
+      "budget": {"max_steps": 8, "timeout_s": 180},
+      "offline_script": [
+        {"tool": {"name": "edit_file", "arguments": {"path": "sum_to.py", "find": "range(1, n)", "replace": "range(1, n + 1)"}}},
+        {"text": "Fixed the range to include n."}
+      ]
+    },
+    {
+      "id": "rename-helper",
+      "class": "refactor",
+      "split": "tuning",
+      "instruction": "Rename the function old_name to new_name in util.py and update its caller in main.py. Behavior must not change.",
+      "setup": {"files": {"util.py": "def old_name(x):\n    return x * 2\n", "main.py": "from util import old_name\n\nprint(old_name(21))\n"}},
+      "checker": {"type": "command", "command": "python main.py"},
+      "budget": {"max_steps": 8, "timeout_s": 180},
+      "offline_script": [
+        {"tools": [
+          {"name": "edit_file", "arguments": {"path": "util.py", "find": "def old_name(x):", "replace": "def new_name(x):"}},
+          {"name": "edit_file", "arguments": {"path": "main.py", "find": "from util import old_name", "replace": "from util import new_name"}},
+          {"name": "edit_file", "arguments": {"path": "main.py", "find": "print(old_name(21))", "replace": "print(new_name(21))"}}
+        ]},
+        {"text": "Renamed the helper and updated the caller."}
+      ]
+    },
+    {
+      "id": "infra-provider-down",
+      "class": "conformance",
+      "split": "tuning",
+      "instruction": "Create ok.txt containing ok.",
+      "setup": {},
+      "checker": {"type": "file_equals", "path": "ok.txt", "content": "ok"},
+      "budget": {"max_steps": 4, "timeout_s": 60},
+      "offline_script": [{"status": 500}, {"status": 500}, {"status": 500}],
+      "expect_infra_failure": true
+    },
+    {
+      "id": "docs-note",
+      "class": "documentation",
+      "split": "held_out",
+      "instruction": "Add a line reading 'Status: stable' to the end of NOTES.md. This is a documentation-only change; no command needs to run.",
+      "setup": {"files": {"NOTES.md": "# Notes\n\nSome existing notes.\n"}},
+      "checker": {"type": "file_contains", "path": "NOTES.md", "content": "Status: stable"},
+      "budget": {"max_steps": 6, "timeout_s": 120},
+      "offline_script": [
+        {"tool": {"name": "edit_file", "arguments": {"path": "NOTES.md", "find": "Some existing notes.", "replace": "Some existing notes.\n\nStatus: stable"}}},
+        {"text": "Added the status line to NOTES.md."}
+      ]
+    },
+    {
+      "id": "research-summary",
+      "class": "research",
+      "split": "held_out",
+      "instruction": "Read the documents in sources/ and write summary.md with a one-paragraph synthesis and a list of the source files you used.",
+      "setup": {"files": {"sources/a.md": "Alpha: the first document, about beginnings.\n", "sources/b.md": "Beta: the second document, about middles.\n"}},
+      "checker": {"type": "file_contains", "path": "summary.md", "content": "sources/"},
+      "budget": {"max_steps": 12, "timeout_s": 300},
+      "offline_script": null
+    }
+  ]
+}

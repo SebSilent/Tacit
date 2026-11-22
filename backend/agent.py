@@ -1925,6 +1925,30 @@ def _stream_tool(fn, args: dict, name: str, out: dict, call_id: str):
     out["result"] = done.get("result", "ERROR: the tool produced no result")
 
 
+def _file_sha(p: Path) -> str | None:
+    import hashlib
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def _mutation_before(args: dict, ctx: dict) -> dict | None:
+    """The before side of a file mutation's evidence, for run manifests.
+
+    Only called when manifest recording is on, so an ordinary interactive turn
+    pays nothing for it. The path resolves through the same guard the tool
+    itself uses; a refused path produces no evidence, not a crash.
+    """
+    try:
+        p = _safe(args.get("path"), ctx.get("project"), write=True,
+                  session=ctx.get("session") or "")
+    except ToolError:
+        return None
+    return {"path": _rel(p, ctx.get("project"), ctx.get("session") or ""),
+            "before": _file_sha(p), "_target": p}
+
+
 def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = None):
     if ctx.get("readonly"):
         refusal = readonly_guard(name, args)
@@ -2002,7 +2026,13 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
             # unwinds straight past this block instead of waiting on the command.
             yield from _stream_tool(fn, args, name, out, str(parent_call_id))
         else:
+            mutation = (_mutation_before(args, ctx)
+                        if name in WRITE_TOOLS and config.manifest_mode() == "on"
+                        else None)
             out["result"] = str(fn(**args))
+            if mutation is not None:
+                mutation["after"] = _file_sha(mutation.pop("_target"))
+                out["mutation"] = mutation
     except ToolError as e:
         out["result"] = f"ERROR: {e}"
     except TypeError as e:
@@ -2584,6 +2614,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # `backend`/`changed` ride the same path as `elapsed_ms`: onto the stored
             # record (so a reload keeps them) and onto the live event.
             _card = _shell_card_fields(c["name"], result)
+            if out.get("mutation"):
+                _card["mutation"] = out["mutation"]
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
                                "result": result, "is_error": failed,
                                "elapsed_ms": _ms, **_card})
@@ -3012,6 +3044,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # record, so a reload keeps them, and onto the live event, so the card
             # can say what ran the command while it is still running.
             _card = _shell_card_fields(c["name"], result)
+            if out.get("mutation"):
+                _card["mutation"] = out["mutation"]
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
                                "result": result, "is_error": failed,
                                "elapsed_ms": _ms, **_card})
