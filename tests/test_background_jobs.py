@@ -46,9 +46,24 @@ class TestBackgroundJobs(unittest.TestCase):
         self.env["PYTHONPATH"] = str(ROOT) + os.pathsep + self.env.get("PYTHONPATH", "")
         self.jobs: dict[str, dict] = {}
         self.descendants: set[int] = set()
+        self._orphan_handles: list = []
         self._old_bg = extras.BG.copy()
         extras.BG.clear()
         self.addCleanup(self._cleanup_jobs)
+
+    def _clear_bg(self):
+        """Simulate a cold cache without leaking the handles this process owns.
+
+        The tests clear BG to prove the persisted record is authoritative, but
+        this process spawned the children and still owns their reaping: the
+        handles move to a list the cleanup waits on, instead of falling to the
+        GC while the processes run.
+        """
+        for entry in extras.BG.values():
+            proc = entry.get("proc")
+            if proc is not None:
+                self._orphan_handles.append(proc)
+        extras.BG.clear()
 
     def _restore_config(self):
         config.HOME = self._home
@@ -94,6 +109,21 @@ class TestBackgroundJobs(unittest.TestCase):
             self._force_stop(int(rec["pid"]))
         for pid in self.descendants:
             self._force_stop(pid)
+        # Reap every local handle before dropping it: a Popen discarded while
+        # its process is still running (or unreaped) is a ResourceWarning and,
+        # on POSIX, a zombie this process would carry until it exits.
+        for entry in extras.BG.values():
+            proc = entry.get("proc")
+            if proc is not None:
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+        for proc in self._orphan_handles:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
         extras.BG.clear()
         extras.BG.update(self._old_bg)
 
@@ -146,7 +176,7 @@ class TestBackgroundJobs(unittest.TestCase):
             "print('cross-process-ready', flush=True); time.sleep(120)")
         bid, rec = self._remote_start(cmd, "reader-session")
         # The process which owned Popen has exited, and this process has no cache row.
-        extras.BG.clear()
+        self._clear_bg()
         self.assertTrue(self._alive(rec["pid"]))
         output = self._output_with(bid, "cross-process-ready", tail=80)
         self.assertIn("running", output)
@@ -161,7 +191,7 @@ class TestBackgroundJobs(unittest.TestCase):
                       "import time; print('stop-me', flush=True); time.sleep(120)")
         bid, rec = self._start(cmd, "stop-session")
         self._output_with(bid, "stop-me")
-        extras.BG.clear()
+        self._clear_bg()
         result = self._remote(
             "import sys; from backend import extras; print(extras.bg_stop(sys.argv[1]))", bid)
         self.assertEqual(result, f"stopped [{bid}]")
@@ -210,7 +240,7 @@ class TestBackgroundJobs(unittest.TestCase):
         bid_b, rec_b = self._start(cmd_b, "session-b")
         self._output_with(bid_a, "job-a")
         self._output_with(bid_b, "job-b")
-        extras.BG.clear()
+        self._clear_bg()
         self.assertEqual(extras.stop_session_jobs("session-a"), 1)
         self._wait_dead(rec_a["pid"])
         self.assertTrue(self._alive(rec_b["pid"]))
@@ -247,7 +277,7 @@ class TestBackgroundJobs(unittest.TestCase):
             time.sleep(0.05)
         self.assertIn("exited 0", output)
         self.assertIn("finished-output", output)
-        extras.BG.clear()
+        self._clear_bg()
         remote = self._remote(
             "import sys; from backend import extras; print(extras.bg_output(sys.argv[1]))", bid)
         self.assertIn("exited", remote)
@@ -261,6 +291,82 @@ class TestBackgroundJobs(unittest.TestCase):
         self.assertEqual(config.JOBS_DIR, self.home / "jobs")
         self.assertTrue(config.JOBS_DIR.is_dir())
         self.assertIn("JOBS_DIR", state_paths(config))
+
+    def test_stop_refuses_a_record_whose_identity_does_not_match(self):
+        """A persisted pid whose birth identity differs from the record is a
+        reused pid, a stranger. The stop must refuse, not kill."""
+        cmd = command(sys.executable, "-c", "import time; time.sleep(120)")
+        bid, rec = self._start(cmd, "identity-session")
+        self._clear_bg()
+        stored = json.loads((config.JOBS_DIR / f"{bid}.json").read_text(encoding="utf-8"))
+        self.assertIsNotNone(stored.get("identity"),
+                             "a new record must carry the process's birth identity")
+        stored["identity"] = stored["identity"] + 1
+        config.write_json(config.JOBS_DIR / f"{bid}.json", stored)
+        result = extras.bg_stop(bid)
+        self.assertIn("ERROR: could not stop", result)
+        self.assertIn("identity", result)
+        self.assertTrue(self._alive(rec["pid"]),
+                        "an unproven record must never produce a kill")
+        # Restore the true identity: the stop then works, proving the refusal
+        # was the identity check and not a broken stop path.
+        stored["identity"] = rec.get("identity")
+        config.write_json(config.JOBS_DIR / f"{bid}.json", stored)
+        self.assertEqual(extras.bg_stop(bid), f"stopped [{bid}]")
+        self._wait_dead(rec["pid"])
+
+    def test_a_legacy_record_without_identity_is_refused_cross_process(self):
+        cmd = command(sys.executable, "-c", "import time; time.sleep(120)")
+        bid, rec = self._start(cmd, "legacy-session")
+        self._clear_bg()
+        stored = json.loads((config.JOBS_DIR / f"{bid}.json").read_text(encoding="utf-8"))
+        stored.pop("identity", None)
+        config.write_json(config.JOBS_DIR / f"{bid}.json", stored)
+        result = extras.bg_stop(bid)
+        self.assertIn("ERROR: could not stop", result)
+        self.assertTrue(self._alive(rec["pid"]))
+
+    def test_retention_prunes_old_finished_jobs_and_keeps_running_ones(self):
+        running_bid, running_rec = self._start(
+            command(sys.executable, "-c", "import time; time.sleep(120)"), "keep-session")
+        now = time.time()
+
+        def fake_record(bid: str, age_s: float) -> Path:
+            rec = {"id": bid, "pid": 999999, "pgid": None, "session": "old",
+                   "command": "x", "cwd": str(self.work), "started": now - age_s,
+                   "stopped": now - age_s, "output": str(config.JOBS_DIR / f"{bid}.log"),
+                   "state": "stopped"}
+            config.write_json(config.JOBS_DIR / f"{bid}.json", rec)
+            (config.JOBS_DIR / f"{bid}.log").write_text("old output", encoding="utf-8")
+            return config.JOBS_DIR / f"{bid}.json"
+
+        old = fake_record("old001", extras.JOB_RETENTION_S + 3600)
+        recent = fake_record("new001", 60)
+        extras._prune_jobs()
+        self.assertFalse(old.exists(), "a finished job past retention is pruned")
+        self.assertFalse((config.JOBS_DIR / "old001.log").exists(),
+                         "the log goes with the record")
+        self.assertTrue(recent.exists(), "a recently finished job is kept")
+        self.assertTrue((config.JOBS_DIR / f"{running_bid}.json").exists(),
+                        "a running job is never pruned")
+        self.assertTrue(self._alive(running_rec["pid"]))
+
+    def test_retention_caps_the_finished_record_count(self):
+        now = time.time()
+        for i in range(extras.JOB_MAX_RECORDS + 5):
+            bid = f"cap{i:04d}"
+            rec = {"id": bid, "pid": 999999, "pgid": None, "session": "cap",
+                   "command": "x", "cwd": str(self.work), "started": now - 100 + i,
+                   "stopped": now - 100 + i,
+                   "output": str(config.JOBS_DIR / f"{bid}.log"), "state": "stopped"}
+            config.write_json(config.JOBS_DIR / f"{bid}.json", rec)
+            (config.JOBS_DIR / f"{bid}.log").write_text("x", encoding="utf-8")
+        extras._prune_jobs()
+        left = list(config.JOBS_DIR.glob("cap*.json"))
+        self.assertLessEqual(len(left), extras.JOB_MAX_RECORDS)
+        # The newest survive: the cap drops the oldest finished records.
+        self.assertTrue((config.JOBS_DIR / f"cap{extras.JOB_MAX_RECORDS + 4:04d}.json").exists())
+        self.assertFalse((config.JOBS_DIR / "cap0000.json").exists())
 
 
 if __name__ == "__main__":

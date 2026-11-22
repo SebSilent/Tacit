@@ -401,14 +401,30 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
     the suite rather than the reader's wallet.
     """
 
+    # The published figures were measured on Windows, and the standing prompt and
+    # the run_shell description both name the platform they run on
+    # (backend/config.py:17-21, backend/agent.py:715-735). The measurement is
+    # therefore pinned to the published condition, the same way the home below is
+    # pinned to a fresh install: TACIT_OS and TACIT_PLATFORM are read at import
+    # time, so a child process with those set measures the Windows figures on any
+    # host. The drift guard below proves the live platform differs ONLY in those
+    # platform-named fragments.
+    PUBLISHED_OS = "Windows"
+    PUBLISHED_PLATFORM = "Windows (cmd.exe): there is no ls, grep, find or rm"
+
     def setUp(self):
-        """Measure a fresh install, because that is the install the table describes.
+        """Measure a fresh install on the published platform, because that is the
+        condition the table describes.
 
         `cost_of` reads the real `~/.tacit` for plugins, MCP servers and memory, so
         measured against this machine it reports whatever this person has installed
         and the README's row is wrong for everybody else. The published figures are
         the built-in profiles on an empty home, so that is the condition measured.
         """
+        import json     # noqa: PLC0415
+        import os     # noqa: PLC0415
+        import subprocess     # noqa: PLC0415
+        import sys     # noqa: PLC0415
         import tempfile   # noqa: PLC0415
         from backend import config, profiles   # noqa: PLC0415
         from backend.ai import prompts   # noqa: PLC0415
@@ -432,9 +448,32 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
             setattr(config, key, target)
             if key.endswith("_DIR"):
                 target.mkdir(parents=True, exist_ok=True)
-        self.measured = {name: profiles.cost_of(cfg)
-                         for name, cfg in profiles.BUILTIN.items()}
-        self.prompt_chars = len(prompts.system_prompt(None, False, chat=False))
+        # The live-platform measurement for the drift guard: this process, this
+        # empty home, no pinned platform.
+        self.live_prompt_chars = len(prompts.system_prompt(None, False, chat=False))
+        self.live_schemas = {name: profiles._tool_set(cfg)
+                             for name, cfg in profiles.BUILTIN.items()}
+        script = (
+            "import json\n"
+            "from backend import profiles\n"
+            "from backend.ai import prompts\n"
+            "print(json.dumps({\n"
+            "  'prompt_chars': len(prompts.system_prompt(None, False, chat=False)),\n"
+            "  'profiles': {n: profiles.cost_of(c) for n, c in profiles.BUILTIN.items()},\n"
+            "  'schemas': {n: profiles._tool_set(c) for n, c in profiles.BUILTIN.items()},\n"
+            "}))\n")
+        env = dict(os.environ)
+        env["TACIT_HOME"] = str(home)
+        env["TACIT_OS"] = self.PUBLISHED_OS
+        env["TACIT_PLATFORM"] = self.PUBLISHED_PLATFORM
+        res = subprocess.run([sys.executable, "-c", script], cwd=ROOT, env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        measured = json.loads(res.stdout.strip().splitlines()[-1])
+        self.measured = measured["profiles"]
+        self.schemas = measured["schemas"]
+        self.prompt_chars = measured["prompt_chars"]
 
     def _readme(self):
         return _read(README)
@@ -477,8 +516,7 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
         for label, (_shown_label, shown_chars, shown_tools, shown_kb, shown_tokens) in rows.items():
             name = want[label]
             cost = self.measured[name]
-            size = sum(len(json.dumps(t)) for t in self.profiles._tool_set(
-                self.profiles.BUILTIN[name]))
+            size = sum(len(json.dumps(t)) for t in self.schemas[name])
             kb = round(size / 1024, 1)
             checks = ((int(shown_chars), chars, "system prompt chars"),
                       (int(shown_tools), cost["tool_count"], "tool count"),
@@ -500,8 +538,7 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
                                 f"expected the measured pair in both prose places, saw {hits}")
 
     def test_the_standing_prompt_length_is_real(self):
-        from backend.ai import prompts   # noqa: PLC0415
-        chars = len(prompts.system_prompt(None, False, chat=False))
+        chars = self.prompt_chars
         self.assertIn(f"{chars} characters of standing", self._readme(),
                       f"README publishes a different standing-prompt length than {chars}")
 
@@ -515,6 +552,37 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
         default = self.measured["default"]["total"]
         self.assertIn(f"{default:,} on Default", text,
                       "site/md/cost-and-profiles.md publishes a different default figure")
+
+    def test_the_live_platform_differs_only_where_the_platform_is_named(self):
+        """The published figures are pinned to Windows; this proves the pin is the
+        whole difference. On any other host the standing prompt may differ only by
+        the platform line, and the tool schemas only in run_shell's description.
+        An unrelated platform-conditional creeping into the prompt or a schema
+        fails here rather than silently changing what a POSIX user pays."""
+        import os     # noqa: PLC0415
+        from backend import config   # noqa: PLC0415
+        if os.environ.get("TACIT_PLATFORM") or os.environ.get("TACIT_OS"):
+            self.skipTest("a custom platform is pinned in the environment")
+        if config.OS == self.PUBLISHED_OS:
+            self.assertEqual(self.prompt_chars, self.live_prompt_chars)
+            return
+        self.assertEqual(self.prompt_chars - self.live_prompt_chars,
+                         len(self.PUBLISHED_PLATFORM) - len(config.PLATFORM),
+                         "the standing prompt differs by more than the platform line")
+        for name, pinned in self.schemas.items():
+            live = self.live_schemas[name]
+            self.assertEqual([t["function"]["name"] for t in pinned],
+                             [t["function"]["name"] for t in live],
+                             f"{name}: the offered tool set differs across platforms")
+            for pt, lt in zip(pinned, live):
+                if pt["function"]["name"] == "run_shell":
+                    self.assertNotEqual(pt["function"]["description"],
+                                        lt["function"]["description"],
+                                        "run_shell must still name the shell it runs in")
+                    continue
+                self.assertEqual(pt, lt,
+                                 f"{name}: {pt['function']['name']} differs across "
+                                 "platforms; only run_shell may")
 
 
 if __name__ == "__main__":

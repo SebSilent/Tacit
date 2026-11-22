@@ -222,6 +222,8 @@ class TheGuardHasTeeth(unittest.TestCase):
         turns it red. `inlineMd` links `https?:` only (`app.js:1629`); generalise the
         target and the scheme becomes a live href; the hole the deleted plan filed under
         *needs a browser*, closed without one."""
+        if not shutil.which("node"):
+            self.skipTest("node not on PATH")
         src = renderer_source()
         line = next(l for l in src.splitlines() if "https?" in l and "replace" in l)
         broken = src.replace(line, line.replace(r"(https?:\/\/[^\s)]+)", r"([^\s)]+)"))

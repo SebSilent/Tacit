@@ -24,6 +24,11 @@ ANY_TAG = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"[ \t]+")
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 JOB_STOP_TIMEOUT = 5.0
+# Retention: a finished job keeps its record and log for a week, and at most
+# JOB_MAX_RECORDS finished records are kept on top of that. Running jobs are
+# never pruned. Reads are bounded by _read_tail; this bounds what accumulates.
+JOB_RETENTION_S = 7 * 24 * 3600.0
+JOB_MAX_RECORDS = 200
 
 
 def _new_id() -> str:
@@ -80,14 +85,13 @@ def _tree_alive(rec: dict, proc=None) -> bool:
         # boundary while its root exists; a dead root is handled as exited.
         return root_alive
     try:
-        os.killpg(int(rec.get("pgid") or rec["pid"]), 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (KeyError, TypeError, ValueError, OSError):
-        return _root_alive(rec, proc)
+        pgid = int(rec.get("pgid") or rec["pid"])
+    except (KeyError, TypeError, ValueError):
+        return root_alive
+    # A killed-but-unreaped member is a zombie, and killpg(pgid, 0) succeeds on
+    # zombies: after a cross-process stop the starter is gone and nobody waits,
+    # so the signal probe alone reported every stopped tree as still running.
+    return proctools.group_alive(pgid)
 
 
 def _job_state(bid: str, rec: dict) -> str:
@@ -161,12 +165,47 @@ def _wait_tree(rec: dict, proc=None) -> bool:
         time.sleep(0.05)
 
 
+def _identity_proven(rec: dict, proc=None) -> bool:
+    """May this record's kill boundary be signalled?
+
+    A local Popen handle is ownership itself. Without one, the persisted pid
+    must still be the process the record registered: a reused pid is a
+    stranger, and killing its tree (or group) would be killing somebody
+    else's work. On POSIX a group whose leader pid is unoccupied needs no
+    proof: no new session leader can hold that number, so killpg reaches only
+    the old group's members. A record with no identity at all (written before
+    identity tracking) is refused while its leader lives.
+    """
+    if proc is not None:
+        return True
+    try:
+        pid = int(rec.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    identity = rec.get("identity")
+    if os.name == "nt":
+        if not proctools._pid_alive(pid):
+            return True  # nothing left to signal; the caller reports exited
+        return identity is not None and proctools.process_identity(pid) == identity
+    try:
+        pgid = int(rec.get("pgid") or pid)
+    except (TypeError, ValueError):
+        return False
+    if proctools._pid_alive(pgid):
+        return identity is not None and proctools.process_identity(pgid) == identity
+    return True
+
+
 def _stop_record(bid: str, rec: dict) -> tuple[str, str]:
     proc = _local_proc(bid, rec)
     if rec.get("state") == "stopped":
         return "already", f"already stopped [{bid}]"
     if not _tree_alive(rec, proc):
         return "already", f"already exited [{bid}]"
+    if not _identity_proven(rec, proc):
+        return "error", (f"ERROR: could not stop [{bid}]: the process identity could "
+                         "not be proven, so nothing was killed (the pid may have "
+                         "been reused, or the record predates identity tracking)")
     ok, detail = _signal_tree(rec)
     if not ok:
         # A concurrent stop or a natural exit can win the race. That is not a
@@ -177,6 +216,13 @@ def _stop_record(bid: str, rec: dict) -> tuple[str, str]:
     if not _wait_tree(rec, proc):
         return "error", (f"ERROR: could not stop [{bid}]: process tree is still running "
                          f"after {JOB_STOP_TIMEOUT:.0f}s")
+    if proc is not None:
+        # Reap the root we own: dropping the Popen without wait() leaves a
+        # zombie on POSIX for as long as this process lives.
+        try:
+            proc.wait(timeout=1)
+        except Exception:  # noqa: BLE001
+            pass
     rec["state"] = "stopped"
     rec["stopped"] = time.time()
     try:
@@ -217,6 +263,7 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
                 **kwargs)
         rec = {"id": bid, "pid": proc.pid,
                "pgid": None if os.name == "nt" else proc.pid,
+               "identity": proctools.process_identity(proc.pid),
                "session": str(session or ""), "command": cmd, "cwd": work,
                "started": time.time(), "output": str(output), "state": "running"}
         config.write_json(_job_path(bid), rec)
@@ -227,7 +274,48 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
             _wait_tree(rec, proc)
         return f"ERROR: {e}"
     BG[bid] = {"proc": proc, **rec}
+    _prune_jobs()
     return f"started [{bid}] in {work}: {cmd}\nread it with bg_output(id='{bid}')"
+
+
+def _prune_jobs() -> None:
+    """Retention for finished jobs: age first, then count. Running jobs stay.
+
+    The record and its log go together, so a pruned job leaves neither a row
+    pointing at a missing log nor a log nobody can name. A job that finished
+    longer than JOB_RETENTION_S ago is dropped; of the rest, only the newest
+    JOB_MAX_RECORDS finished records are kept.
+    """
+    now = time.time()
+    finished: list[tuple[float, dict]] = []
+    for rec in _job_records():
+        bid = str(rec.get("id") or "")
+        if _job_state(bid, rec) == "running":
+            continue
+        try:
+            ts = float(rec.get("stopped") or rec.get("started") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        finished.append((ts, rec))
+    finished.sort(key=lambda pair: pair[0])
+
+    def _drop(rec: dict) -> None:
+        bid = str(rec.get("id") or "")
+        try:
+            _job_path(bid).unlink(missing_ok=True)
+            Path(rec.get("output") or str(_job_path(bid).with_suffix(".log"))).unlink(
+                missing_ok=True)
+        except OSError:
+            pass
+
+    fresh = []
+    for ts, rec in finished:
+        if now - ts > JOB_RETENTION_S:
+            _drop(rec)
+        else:
+            fresh.append((ts, rec))
+    for _ts, rec in fresh[:max(0, len(fresh) - JOB_MAX_RECORDS)]:
+        _drop(rec)
 
 
 def bg_output(bid: str, tail: int = 4000) -> str:

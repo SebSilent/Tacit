@@ -56,15 +56,21 @@ The lifecycle is three steps (`backend/turn_worker.py:9-21`):
    and nothing secret anywhere in the environment it did not already have.
 2. The worker runs the same `agent.run_turn` the in-process path ran, and streams events to the
    parent as JSON lines on stdout. The parent tracks the terminal `done` event: a clean exit without
-   one is an error, not a silently successful turn (`backend/turn_worker.py:188-227`).
+   one is an error, not a silently successful turn (`backend/turn_worker.py:240-280`).
 3. Stop is two-stage. The parent first sends `{"cancel": true}` on stdin, so the worker stops between
    events, closes its model stream, kills its own shell trees and exits with the partial transcript
    preserved. If it has not exited within the grace period the parent kills the process tree outright,
-   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:295-307`).
+   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:321-375`).
+
+The worker also bounds itself when no cancel can reach it: a watchdog exits it after `WORKER_MAX_S`
+(an infrastructure failure, reported before exit), and EOF on the control pipe without a cancel means
+the parent is gone, which starts the cooperative wind-down with a hard exit after a short grace
+(`backend/turn_worker.py:401-446`). On POSIX the worker runs in its own session, so this is what keeps
+a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:23-25`, `backend/config.py:481-496`).
+(`backend/turn_worker.py:29-31`, `backend/config.py:481-496`).
 
 ## What the server does at startup
 
@@ -87,8 +93,14 @@ dead pid wearing this boot's marker (`:91-96`).
 
 The orphan sweep identifies children by a command-line marker and by the `TACIT_ROLE` /
 `TACIT_SESSION_ID` pair in their environment, never by the executable name
-(`backend/proctools.py:8-12`, `:331-369`). A dead pid is dropped from the registry; a live pid whose
-command line still proves it is Tacit's is killed as an orphan from a previous crash.
+(`backend/proctools.py:8-12`, `:744-826`). A dead pid is dropped from the registry; a live pid whose
+command line still proves it is Tacit's is killed as an orphan from a previous crash. Each owning
+process persists its own rows to its own file, so the server and its workers never clobber each
+other's registrations, and a shell row carries the process's birth identity (creation time on
+Windows, `/proc` start time on Linux): a persisted pid is only killed after that identity proves it
+is still the process that was registered, never on a reused pid (`backend/proctools.py:255-280`,
+`:539-581`). When a worker dies, the parent settles the shell groups and containers it registered
+(`backend/turn_worker.py:212-237`, `backend/proctools.py:699-741`).
 
 ## Blocking code does not run on the event loop
 

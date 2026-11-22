@@ -84,6 +84,7 @@ class SteerTest(TurnWorkerTest):
 
         server = HTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         port = server.server_address[1]
         config.save_registry({"default": "p/m", "providers": {

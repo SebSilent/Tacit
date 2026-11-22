@@ -66,6 +66,8 @@ point.
 | `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:85` |
 | `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:579` |
 | `TACIT_TURN_WORKER` | `process` | `backend/config.py:439` |
+| `TACIT_WORKER_MAX_S` | `3600` | `backend/turn_worker.py:60` |
+| `TACIT_DISABLE_JOB_OBJECTS` | off | `backend/proctools.py:129` |
 | `TACIT_TURN_POOL` | `12` | `backend/config.py:180` |
 | `TACIT_TERM_POOL` | `8` | `backend/config.py:181` |
 | `TACIT_ARCHIVE_TOOL` | on, pins the archive reader | `backend/config.py:477` |
@@ -77,6 +79,13 @@ queue the next turn start behind them, and every session's prompt hung with noth
 split keeps the two long-latency kinds apart: a terminal cannot starve a turn start, and a
 compaction cannot starve a terminal. `TACIT_TURN_POOL` sizes the turn pool, `TACIT_TERM_POOL` the
 terminal one.
+
+`TACIT_WORKER_MAX_S` is the worker's own hard ceiling, the backstop for a turn that has lost its
+parent entirely; a watchdog reports and exits the worker when it is reached
+(`backend/turn_worker.py:401-428`). `TACIT_DISABLE_JOB_OBJECTS=1` forces Windows job-object
+assignment to fail, an escape hatch in the same shape as `TACIT_TURN_WORKER`: it exists so the
+conformance suite can measure what the shell supervisor reports when containment is unavailable,
+instead of only testing the happy path (`backend/proctools.py:118-130`).
 
 ### Tool output ceilings
 

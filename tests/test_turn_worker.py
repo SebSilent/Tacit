@@ -181,6 +181,7 @@ class TurnWorkerTest(unittest.TestCase):
 
         server = HTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         port = server.server_address[1]
         reg = {"default": "p/m", "providers": {"p": {"baseUrl": f"http://127.0.0.1:{port}/v1", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}
@@ -340,6 +341,7 @@ class AssistantWorkerTest(unittest.TestCase):
 
         server = HTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         port = server.server_address[1]
         reg = {"default": "p/m", "providers": {"p": {"baseUrl": f"http://127.0.0.1:{port}/v1", "apiKey": "k", "models": [{"id": "m", "contextWindow": 100000}]}}}

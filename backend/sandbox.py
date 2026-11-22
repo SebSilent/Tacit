@@ -697,28 +697,100 @@ def container_argv(command: str, cwd: str, image: str, *, network: bool, readonl
     return argv
 
 
-def _image_present(image: str) -> bool:
+def _runtime_cli(argv: list[str], timeout: float, stop=None) -> tuple[int, str, str, str]:
+    """One runtime CLI call under a deadline and the turn's stop flag.
+
+    Returns (code, stdout, stderr, status) with status ok / timeout /
+    cancelled / spawn_error. Image inspect and pull used to be bare
+    subprocess.run calls with no stop path: a cancel during a twenty-minute
+    pull waited out the pull. The CLI is a client, not the work: killing it is
+    always safe, and any container it already created is settled separately,
+    by name, through the ledger.
+    """
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as exc:  # noqa: BLE001
+        return 1, "", str(exc), "spawn_error"
+    deadline = time.monotonic() + max(0.5, float(timeout))
+    out, err = b"", b""
+    status = "ok"
+    while True:
+        if stop is not None and stop.is_set():
+            status = "cancelled"
+            break
+        try:
+            out, err = proc.communicate(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                status = "timeout"
+                break
+    if status != "ok":
+        try:
+            if os.name == "nt":
+                # A runtime CLI on Windows can be a wrapper (.bat) whose child
+                # does the work; killing the root alone leaves the child
+                # holding the pipes. The tree is the boundary.
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                               stdin=subprocess.DEVNULL, capture_output=True,
+                               timeout=15)
+            else:
+                proc.kill()
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+    def _decode(b: bytes) -> str:
+        return (b or b"").decode(locale.getpreferredencoding(False) or "utf-8", "replace")
+    return int(proc.returncode or 0), _decode(out), _decode(err), status
+
+
+def _image_present(image: str, stop=None) -> tuple[bool, str]:
+    runtime = _container_runtime()
+    if not runtime:
+        return False, "spawn_error"
+    code, _out, _err, status = _runtime_cli([runtime, "image", "inspect", image], 30, stop)
+    if status != "ok":
+        return False, status
+    return code == 0, "ok"
+
+
+def _container_running(name: str) -> bool:
     runtime = _container_runtime()
     if not runtime:
         return False
-    try:
-        r = subprocess.run([runtime, "image", "inspect", image],
-                           capture_output=True, timeout=30)
-        return r.returncode == 0
-    except Exception:  # noqa: BLE001
+    code, out, _err, status = _runtime_cli(
+        [runtime, "inspect", "--format", "{{.State.Running}}", name], 20)
+    if status != "ok" or code != 0:
         return False
+    return out.strip() == "true"
 
 
 def _kill_container(name: str) -> bool:
-    """Stop the daemon-side container and report whether the runtime accepted it."""
+    """Stop the daemon-side container and verify the runtime agrees it is down.
+
+    A kill command's own exit code is not the proof: `docker kill` on a
+    container that already exited answers with an error, and a kill that the
+    daemon accepted but did not carry out answers with success. The inspect
+    afterwards is the fact.
+    """
     runtime = _container_runtime()
     if not runtime:
         return False
-    try:
-        result = subprocess.run([runtime, "kill", name], capture_output=True, timeout=20)
-        return result.returncode == 0
-    except Exception:  # noqa: BLE001
+    _runtime_cli([runtime, "kill", name], 20)
+    code, out, _err, status = _runtime_cli(
+        [runtime, "inspect", "--format", "{{.State.Running}}", name], 20)
+    if status != "ok":
         return False
+    if code != 0:
+        return True  # the runtime no longer knows it (--rm took it)
+    return out.strip() != "true"
 
 
 def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
@@ -731,22 +803,35 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
                        backend="container", cwd=str(root))
     settings = container_settings()
     image = settings["image"]
-    if not _image_present(image):
+
+    def _early_stop(status: str, stage: str) -> dict:
+        cancelled = status == "cancelled"
+        audit.record("sandbox_run", session=session, tool="run_shell", backend="container",
+                     mode="container", image=image,
+                     status="cancelled" if cancelled else "timeout",
+                     stage=stage, timeout=limit, command=cmd)
+        return _result(False, "ERROR: command cancelled" if cancelled else
+                       f"ERROR: {stage} did not finish within its deadline",
+                       backend="container", cwd=str(root),
+                       code=130 if cancelled else 124,
+                       duration_ms=int((time.time() - started) * 1000))
+
+    present, status = _image_present(image, stop)
+    if status in ("cancelled", "timeout"):
+        return _early_stop(status, "image inspect")
+    if not present:
         if not settings["auto_pull"]:
             return _result(False, f"ERROR: the image '{image}' is not present locally, and "
                                   f"Tacit does not download images for you. Run: "
                                   f"{_runtime_label(runtime)} pull {image}  - or set a "
                                   f"different image in Settings.",
                            backend="container", cwd=str(root))
-        try:
-            pull = subprocess.run([runtime, "pull", image], capture_output=True,
-                                  text=True, timeout=1800)
-            if pull.returncode != 0:
-                return _result(False, f"ERROR: could not pull '{image}': "
-                                      f"{(pull.stderr or pull.stdout or '')[:300]}",
-                               backend="container", cwd=str(root))
-        except Exception as exc:  # noqa: BLE001
-            return _result(False, f"ERROR: pull failed: {exc}",
+        code, out, err, pstatus = _runtime_cli([runtime, "pull", image], 1800, stop)
+        if pstatus in ("cancelled", "timeout"):
+            return _early_stop(pstatus, "image pull")
+        if pstatus != "ok" or code != 0:
+            return _result(False, f"ERROR: could not pull '{image}': "
+                                  f"{(err or out or '')[:300]}",
                            backend="container", cwd=str(root))
 
     network = bool(box.get("network"))
@@ -757,22 +842,41 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
     argv = container_argv(cmd, str(root), image, network=network, readonly=readonly,
                           limits=limits, name=name, pids_limit=settings["pids_limit"])
     before = _scan(root)
-    code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit,
-                                              on_output=on_output, session=session, stop=stop)
-    cancelled = stop is not None and stop.is_set()
-    if timed_out or cancelled:
-        # The runtime, not just the client: `docker run` dying leaves the container
-        # alive, so the command would carry on after Tacit reported it stopped.
-        killed = _kill_container(name)
-    else:
-        killed = False
+    # The name goes to the long-lived parent BEFORE the client starts: a hard
+    # worker death leaves the container running on the daemon, and the ledger
+    # row is the only proof of what the dead worker was running.
+    proctools.register_container(name, os.getpid(), session)
+    cleanup_confirmed = False
+    try:
+        code, out, err, timed_out = _run_captured(argv, cwd=str(root), timeout=limit,
+                                                  on_output=on_output, session=session,
+                                                  stop=stop)
+        cancelled = stop is not None and stop.is_set()
+        if timed_out or cancelled:
+            # The runtime, not just the client: `docker run` dying leaves the
+            # container alive, so the command would carry on after Tacit
+            # reported it stopped.
+            cleanup_confirmed = _kill_container(name)
+        else:
+            # --rm should have taken the container with the client's exit;
+            # verify rather than assume, and settle it if it is still up.
+            cleanup_confirmed = not _container_running(name)
+            if not cleanup_confirmed:
+                cleanup_confirmed = _kill_container(name)
+    finally:
+        if cleanup_confirmed:
+            proctools.unregister_container(name)
+        # An unconfirmed cleanup leaves the row in the ledger: the parent's
+        # worker-death cleanup and the next boot's sweep retry it by name.
 
     changed = _diff(before, _scan(root))
     notes = [f"ran in {_runtime_label(runtime)} image '{image}'"]
     if timed_out or cancelled:
         notes.append((f"timed out after {limit}s" if timed_out else "cancelled")
-                     + ("; the container was killed, not just the client" if killed
+                     + ("; the container was killed, not just the client" if cleanup_confirmed
                         else "; ERROR: the runtime did not confirm that the container was killed"))
+    elif not cleanup_confirmed:
+        notes.append("ERROR: the runtime did not confirm that the container was removed")
     if sudo.uses_sudo(cmd):
         # Not a gap to close: `no-new-privileges` is set on the run argv (see
         # container_argv), so the kernel drops the setuid bit that sudo depends on, and
@@ -808,7 +912,8 @@ def _run_container(cmd: str, root: Path, box: dict, limit: int, session: str,
                  status="cancelled" if cancelled else "timeout" if timed_out else
                  ("ok" if code == 0 else f"exit {code}"),
                  code=res["code"], timeout=limit, changed=changed["count"],
-                 enforced=enforced, network=network, command=cmd)
+                 enforced=enforced, network=network, command=cmd,
+                 cleanup="confirmed" if cleanup_confirmed else "unconfirmed")
     return res
 
 

@@ -52,9 +52,6 @@ WAIT_S = 30
 ALLOWED_INHERIT = {
     "backend/proctools.py:taskkill",
     "backend/turn_worker.py:taskkill",
-    "backend/sandbox.py:image",
-    "backend/sandbox.py:kill",
-    "backend/sandbox.py:pull",
 }
 
 

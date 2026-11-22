@@ -19,6 +19,12 @@ Lifecycle:
    preserved. If it has not exited within the grace period, the parent kills
    the process tree outright, ``taskkill /T /F`` on Windows, ``killpg`` on
    POSIX. Stop is prompt in the normal case and guaranteed in the worst one.
+4. The worker also bounds itself: a watchdog exits it after ``WORKER_MAX_S``
+   (an infrastructure failure, reported before exit), and EOF on the control
+   pipe without a cancel means the parent is gone, which starts the same
+   cooperative wind-down with a hard exit after ``PARENT_LOSS_GRACE_S``. On
+   POSIX the worker runs in its own session, so this is what keeps a dead
+   parent from leaving a live worker behind.
 
 The thread path (``TACIT_TURN_WORKER=thread``) is the old in-process
 behaviour, kept as an escape hatch: the tests that fake the model engine
@@ -49,7 +55,16 @@ CANCEL_GRACE_S = 5.0
 # The worker's own hard ceiling, as a backstop for a cancel that never
 # arrives. Generous: the turn's own step budget and shell timeouts are the
 # real bounds; this only stops a worker that has lost its parent entirely.
-WORKER_MAX_S = 3600.0
+# TACIT_WORKER_MAX_S lowers it (the conformance suite measures the watchdog
+# with a short ceiling instead of waiting an hour).
+WORKER_MAX_S = float(os.environ.get("TACIT_WORKER_MAX_S", "3600") or 3600)
+
+# After the control pipe reports the parent gone, the cooperative wind-down
+# gets this long before the worker exits on its own. The shell supervisor
+# polls stop every 0.1s, so a running command is killed well inside it; the
+# timer is for a round blocked in a silent model read, which no stop flag
+# can interrupt from inside.
+PARENT_LOSS_GRACE_S = 5.0
 
 
 def worker_mode() -> str:
@@ -74,6 +89,8 @@ class TurnWorker:
         self._killed = False
         self._lock = threading.Lock()
         self._trace: list = []
+        self._events_started = False
+        self._events_done = False
 
     # ── spawn ─────────────────────────────────────────────────────────────
     def _spawn_proc(self, role: str, argv: list[str], session: str) -> bool:
@@ -180,9 +197,44 @@ class TurnWorker:
             try:
                 for line in (proc.stderr or []):
                     sys.stderr.write("[turn-worker] " + str(line))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
+            finally:
+                # The pump owns stderr until EOF; closing it here is what keeps
+                # a long-lived server from accumulating one open pipe per turn.
+                try:
+                    if proc.stderr is not None:
+                        proc.stderr.close()
+                except Exception:  # noqa: BLE001
+                    pass
         threading.Thread(target=run, daemon=True).start()
+
+    def _settle(self) -> None:
+        """After the worker's death: settle its registrations, close its pipes.
+
+        A hard kill skips the worker's own cleanup, so the shell groups and
+        containers it registered are settled here, by the parent that can
+        prove they belonged to it (the rows carry its pid as owner and each
+        process's birth identity). stdin and stdout are closed because nobody
+        will write or read them again — except stdout while the events reader
+        is still mid-stream, which owns it until exhaustion.
+        """
+        proc = self.proc
+        if proc is None:
+            return
+        try:
+            proctools.cleanup_owner_shells(proc.pid)
+        except Exception:  # noqa: BLE001
+            pass
+        streams = [proc.stdin]
+        if not (self._events_started and not self._events_done):
+            streams.append(proc.stdout)
+        for stream in streams:
+            try:
+                if stream is not None:
+                    stream.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ── events ────────────────────────────────────────────────────────────
     def events(self):
@@ -197,6 +249,7 @@ class TurnWorker:
         proc = self.proc
         if proc is None:
             return
+        self._events_started = True
         saw_done = False
         try:
             for line in proc.stdout:
@@ -240,7 +293,9 @@ class TurnWorker:
             # it here turned every clean exhaustion into a lost handle (the
             # Popen fell to the GC with its pipes unclosed) and broke every
             # lifecycle test that waits on the process after the stream ends.
+            self._events_done = True
             proctools.reap(proc)
+            self._settle()
 
     # ── steering ──────────────────────────────────────────────────────────
     def steer(self, text: str) -> bool:
@@ -273,6 +328,7 @@ class TurnWorker:
         if proc is None or proc.poll() is not None:
             if proc is not None:
                 proctools.reap(proc)
+                self._settle()
             return {"ok": True, "how": "already-exited"}
         with self._lock:
             if not self._cancel_sent:
@@ -285,6 +341,7 @@ class TurnWorker:
         try:
             proc.wait(timeout=grace)
             proctools.reap(proc)
+            self._settle()
             return {"ok": True, "how": "cancelled"}
         except subprocess.TimeoutExpired:
             pass
@@ -310,6 +367,9 @@ class TurnWorker:
                 proc.kill()
             except Exception:  # noqa: BLE001
                 pass
+        # The worker's own finally never ran: whatever it registered (shells,
+        # containers) is settled by the parent, with identity proof per row.
+        self._settle()
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -336,6 +396,54 @@ def _reconfigure_streams() -> None:
 
 def _arg(argv: list[str], name: str, default: str = "") -> str:
     return argv[argv.index(name) + 1] if name in argv else default
+
+
+def _start_watchdog(session: str, out, trace: list, kind: str) -> None:
+    """The hard ceiling: a worker that outlives WORKER_MAX_S stops itself.
+
+    try/finally cannot bound a worker whose parent vanished and whose model
+    read never returns; this thread can, because it does not depend on the
+    loop noticing anything. It reports before it exits, so the parent (if one
+    is still reading) sees a reason rather than a bare EOF, and the exit is
+    nonzero: a ceiling hit is an infrastructure failure, not a completion.
+    """
+    def run():
+        time.sleep(WORKER_MAX_S)
+        try:
+            out.write(json.dumps({"type": "error", "message": (
+                f"{kind} worker exceeded its {WORKER_MAX_S:.0f}s hard ceiling "
+                "and stopped itself")}) + "\n")
+            out.flush()
+            out.write(json.dumps({"type": "trace", "steps": trace}) + "\n")
+            out.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from . import audit
+            audit.record("turn_worker_watchdog", session=session, backend="turn_worker",
+                         status="ceiling", ceiling_s=WORKER_MAX_S)
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(3)
+    threading.Thread(target=run, daemon=True, name="tacit-worker-watchdog").start()
+
+
+def _parent_lost(cancelled: dict, stop) -> None:
+    """The control pipe reached EOF without a cancel: the parent is gone.
+
+    On Windows the job object already takes the worker down with its parent;
+    on POSIX the worker runs in its own session and would otherwise carry on
+    forever with nobody reading its events. Wind down cooperatively (the shell
+    supervisor polls stop), and exit hard after the grace if a silent model
+    read keeps the loop from noticing.
+    """
+    cancelled["flag"] = True
+    stop.set()
+
+    def hard():
+        time.sleep(PARENT_LOSS_GRACE_S)
+        os._exit(0)
+    threading.Thread(target=hard, daemon=True, name="tacit-parent-loss").start()
 
 
 def _run_worker(argv: list[str]) -> int:
@@ -393,19 +501,23 @@ def _run_worker(argv: list[str]) -> int:
                 if msg.get("cancel"):
                     cancelled["flag"] = True
                     stop.set()
-                    break
+                    return
                 if "steer" in msg:
                     text = str(msg.get("steer") or "")
                     if text:
                         steer.append(text)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
+        # EOF (or a broken pipe) without a cancel: the parent closed the
+        # control stream or died. A worker with no parent is an orphan.
+        _parent_lost(cancelled, stop)
     threading.Thread(target=watch_stdin, daemon=True).start()
 
     out = sys.stdout
     started = time.time()
     crashed = {"flag": False}
     trace: list[dict] = []
+    _start_watchdog(session, out, trace, "turn")
     try:
         for ev in agent.run_turn(messages, project=project, ref=ref, chat=chat,
                                  session=session,
@@ -492,15 +604,17 @@ def _run_assistant_worker(argv: list[str]) -> int:
                 if msg.get("cancel"):
                     cancelled["flag"] = True
                     stop.set()
-                    break
-        except Exception:
+                    return
+        except Exception:  # noqa: BLE001
             pass
+        _parent_lost(cancelled, stop)
     threading.Thread(target=watch_stdin, daemon=True).start()
 
     out = sys.stdout
     started = time.time()
     crashed = {"flag": False}
     trace: list[dict] = []
+    _start_watchdog(session, out, trace, "assistant")
     try:
         for ev in assistant.run_turn(rec, text, cfg, stop=stop, trace=trace):
             out.write(json.dumps(ev, ensure_ascii=False) + "\n")

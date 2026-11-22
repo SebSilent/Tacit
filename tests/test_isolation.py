@@ -60,7 +60,8 @@ class Isolated(unittest.TestCase):
 
 
 SANDBOX_PATCHED = ("_container_runtime", "_image_present", "_run_captured",
-                   "_kill_container", "container_settings", "_scan")
+                   "_kill_container", "container_settings", "_scan",
+                   "_runtime_cli", "_container_running")
 
 
 class StubbedSandbox(Isolated):
@@ -154,7 +155,7 @@ class TestContainerRefusals(StubbedSandbox):
 
     def _no_pull(self, *a, **kw):
         self.pulled.append(a[0] if a else kw.get("args"))
-        raise AssertionError("subprocess.run should not be reached")
+        raise AssertionError("the runtime CLI should not be reached")
 
     def test_no_runtime_is_a_clear_error_not_a_crash(self):
         sandbox._container_runtime = lambda: ""
@@ -172,8 +173,8 @@ class TestContainerRefusals(StubbedSandbox):
 
     def test_a_missing_image_is_reported_with_the_exact_command(self):
         sandbox._container_runtime = lambda: "/usr/bin/docker"
-        sandbox._image_present = lambda image: False
-        sandbox.subprocess.run = self._no_pull
+        sandbox._image_present = lambda image, stop=None: (False, "ok")
+        sandbox._runtime_cli = self._no_pull
         res = sandbox.run("echo hi", project=self.proj.name, backend="container")
         self.assertFalse(res["ok"])
         self.assertIn("pull", res["stderr"])
@@ -183,8 +184,8 @@ class TestContainerRefusals(StubbedSandbox):
         # "A container is never required and is never installed for you." An image
         # is a download of exactly the kind that rule covers.
         sandbox._container_runtime = lambda: "/usr/bin/docker"
-        sandbox._image_present = lambda image: False
-        sandbox.subprocess.run = self._no_pull
+        sandbox._image_present = lambda image, stop=None: (False, "ok")
+        sandbox._runtime_cli = self._no_pull
         providers.save = lambda data: None
         sandbox.run("echo hi", project=self.proj.name, backend="container")
         self.assertEqual(self.pulled, [])
@@ -192,19 +193,15 @@ class TestContainerRefusals(StubbedSandbox):
     def test_auto_pull_is_opt_in_and_then_works(self):
         calls = []
 
-        class R:
-            returncode = 0
-            stdout = "pulled"
-            stderr = ""
-
-        def fake_run(argv, **kw):
+        def fake_cli(argv, timeout, stop=None):
             calls.append(list(argv))
-            return R()
+            return 0, "pulled", "", "ok"
 
         sandbox._container_runtime = lambda: "/usr/bin/docker"
-        sandbox._image_present = lambda image: False
-        sandbox.subprocess.run = fake_run
+        sandbox._image_present = lambda image, stop=None: (False, "ok")
+        sandbox._runtime_cli = fake_cli
         sandbox._run_captured = lambda *a, **kw: (0, "hi", "", False)
+        sandbox._container_running = lambda name: False
         sandbox.container_settings = lambda: {"image": "img", "auto_pull": True,
                                               "pids_limit": 256}
         res = sandbox.run("echo hi", project=self.proj.name, backend="container")
@@ -219,7 +216,8 @@ class TestContainerRun(StubbedSandbox):
     def setUp(self):
         super().setUp()
         sandbox._container_runtime = lambda: "/usr/bin/docker"
-        sandbox._image_present = lambda image: True
+        sandbox._image_present = lambda image, stop=None: (True, "ok")
+        sandbox._container_running = lambda name: False
 
     def test_success_reports_what_was_enforced(self):
         sandbox._run_captured = lambda *a, **kw: (0, "hello", "", False)
@@ -237,17 +235,24 @@ class TestContainerRun(StubbedSandbox):
     def test_a_timeout_kills_the_container_not_just_the_client(self):
         killed = []
         sandbox._run_captured = lambda *a, **kw: (124, "", "", True)
-        sandbox._kill_container = lambda name: killed.append(name)
+        sandbox._kill_container = lambda name: (killed.append(name), True)[1]
         res = sandbox.run("sleep 999", project=self.proj.name, backend="container")
         self.assertEqual(res["code"], 124)
         self.assertIn("timed out", res["stderr"])
         self.assertEqual(len(killed), 1)
         self.assertTrue(any("container was killed" in n for n in res["notes"]))
 
+    def test_an_unconfirmed_kill_is_reported_not_assumed(self):
+        sandbox._run_captured = lambda *a, **kw: (124, "", "", True)
+        sandbox._kill_container = lambda name: False
+        res = sandbox.run("sleep 999", project=self.proj.name, backend="container")
+        self.assertEqual(res["code"], 124)
+        self.assertTrue(any("did not confirm" in n for n in res["notes"]),
+                        "a kill the runtime did not confirm must not read as a kill")
+
     def test_the_kill_targets_the_name_it_started(self):
         seen = {}
-        sandbox._run_captured = lambda *a, **kw: (124, "", "", True)
-        sandbox._kill_container = lambda name: seen.setdefault("name", name)
+        sandbox._kill_container = lambda name: seen.setdefault("name", name) or True
 
         def capture(argv, **kw):
             seen["argv"] = list(argv)

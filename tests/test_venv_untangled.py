@@ -35,7 +35,12 @@ def _is_foreign_venv_interpreter(raw: str) -> bool:
     ".venv" in it and waves it through.
 
     A venv's own python sits under Scripts/ (Windows) or bin/ (POSIX) beneath a
-    venv directory; a base install is a bare python.exe in its own tree.
+    venv directory; a base install is a bare python.exe in its own tree. On POSIX
+    the base system interpreter also lives in a bin/ (/usr/bin/python3.12), so the
+    directory shape alone cannot judge it: a real venv carries a pyvenv.cfg beside
+    its bin/, and a base install does not. The marker decides where the path
+    exists; the shape remains the fallback for paths that do not (a recorded
+    provenance from another machine).
     """
     parts = str(raw or "").strip().split()
     if not parts:
@@ -43,6 +48,14 @@ def _is_foreign_venv_interpreter(raw: str) -> bool:
     p = parts[0].replace("\\", "/").lower()
     if "/scripts/python" not in p and "/bin/python" not in p:
         return False
+    if "/bin/python" in p:
+        candidate = Path(parts[0].replace("\\", "/"))
+        try:
+            if candidate.exists():
+                return (candidate.parent.parent / "pyvenv.cfg").exists() \
+                    and not p.startswith(OWN_VENV)
+        except OSError:
+            pass
     return not p.startswith(OWN_VENV)
 
 

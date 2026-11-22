@@ -2346,7 +2346,11 @@ class TestServerRestart(Isolated):
 
     def test_happy_path_writes_handshake_spawns_watcher_and_asks_to_exit(self):
         config.SERVER = types.SimpleNamespace(should_exit=False)
-        config.OS = "Windows"
+        # The real platform, not a faked one: the detachment mechanism is chosen
+        # from the OS the code actually runs on (creationflags on Windows,
+        # start_new_session on POSIX), and the subprocess constants for the
+        # other platform do not exist here.
+        config.OS = "Windows" if os.name == "nt" else "Linux"
         spawned: list = []
         orig_popen = extras.subprocess.Popen
 
@@ -2365,7 +2369,10 @@ class TestServerRestart(Isolated):
         # the watcher is spawned detached, pointed at restart_watch
         self.assertEqual(len(spawned), 1)
         self.assertIn("restart_watch", " ".join(spawned[0]["cmd"]))
-        self.assertTrue(spawned[0]["kwargs"].get("creationflags"))
+        if os.name == "nt":
+            self.assertTrue(spawned[0]["kwargs"].get("creationflags"))
+        else:
+            self.assertTrue(spawned[0]["kwargs"].get("start_new_session"))
         # and the exit is uvicorn's own, not a kill
         self.assertTrue(config.SERVER.should_exit)
 
@@ -2783,12 +2790,33 @@ class TestProcessIdentity(Isolated):
         proctools._ROWS.clear()
         self.addCleanup(proctools._ROWS.clear)
 
+    @staticmethod
+    def _settle(proc):
+        # Kill if alive, then wait: a Popen dropped with returncode unset is a
+        # ResourceWarning, and on POSIX an unreaped zombie this process carries.
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+
     def test_a_spawned_child_is_registered_and_marked(self):
         proc = proctools.spawn(
             proctools.ROLE_WORKER, [sys.executable, "-c", "print('hi')"],
             session="s-1", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True)
-        self.addCleanup(lambda: (proc.poll() is None) and proc.kill())
+
+        def _settle():
+            if proc.poll() is None:
+                proc.kill()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+            if proc.stdout is not None:
+                proc.stdout.close()
+        self.addCleanup(_settle)
         rows = proctools.rows()
         self.assertEqual(len(rows), 1, "one spawn, one registry row")
         row = rows[0]
@@ -2818,6 +2846,7 @@ class TestProcessIdentity(Isolated):
         proc = proctools.spawn(
             proctools.ROLE_WORKER, [sys.executable, "-c", "import time; time.sleep(120)"],
             session="s-2", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(self._settle, proc)
         self.assertTrue(proctools._pid_alive(proc.pid))
         # Simulate the parent dying hard: close the job handle, which is what
         # the kernel does when the owning process exits by any means.
@@ -2836,7 +2865,7 @@ class TestProcessIdentity(Isolated):
         # even though its pid is alive and in the stored registry.
         dummy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: (dummy.poll() is None) and dummy.kill())
+        self.addCleanup(self._settle, dummy)
         # A stale row from a "previous crash": a marked child that is not
         # running, plus the unmarked dummy that is.
         stale_marked = {"pid": 0, "role": "tacit-turn-worker", "session": "old",
@@ -2859,7 +2888,7 @@ class TestProcessIdentity(Isolated):
         marked = proctools.spawn(
             proctools.ROLE_WORKER, [sys.executable, "-c", "import time; time.sleep(120)"],
             session="s-3", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: (marked.poll() is None) and marked.kill())
+        self.addCleanup(self._settle, marked)
         proctools._ROWS.clear()
         config.write_json(config.HOME / proctools.REGISTRY_FILE,
                           {"rows": [dict(stale_marked, pid=marked.pid)]})
