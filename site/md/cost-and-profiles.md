@@ -67,7 +67,7 @@ not decide what Tacit is allowed to remember on its own (`README.md:168-169`).
 Two numbers describe how many tools you pay for and they differ on purpose. `cost_of` publishes 20 for
 a default install, which is the registry minus the two memory schemas
 (`backend/profiles.py:128-136`, `:194-199`). At request time a fresh install with no MCP server is
-offered 16, because the four MCP helpers are also removed (`backend/agent.py:975-983`). The first
+offered 16, because the four MCP helpers are also removed (`backend/agent.py:993-1030`). The first
 figure is what the profile owns; the second is what the model sees.
 
 Memory is priced from the mode, not from a plugin, because one switch decides both what is injected and
@@ -184,7 +184,7 @@ None of this was invented here.
 - **Compaction runs during a turn, not only between them** (`backend/agent.py:1765-1812`). Checking the
   size once before a turn begins is what let one investigation reach 1.9M prompt tokens on a
   108,000-token transcript with nothing reclaimed.
-- **The standing prompt and the task are pinned against elision** (`backend/agent.py:1043-1063`). Pinning
+- **The standing prompt and the task are pinned against elision** (`backend/agent.py:1242-1248`). Pinning
   only the first message once lost a sub-agent its instructions: it kept the persona and dropped the
   question.
 

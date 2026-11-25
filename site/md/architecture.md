@@ -140,6 +140,14 @@ frontend with no build step (`backend/main.py:175`).
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).
+- **One shared work budget** (`backend/budget.py`) is what stops a fan-out from
+  minting money: a turn's `WorkBudget` carries a model-call allowance, a token
+  pool, a children slice, the shared deadline and the cancellation event, and
+  nested workers derive their slices from it - a delegation reserves a child,
+  gets its own bounded call count, and bills the caller's pool by reference;
+  research shares the clock and can only ever shrink it. A turn whose slice is
+  spent refuses the next fan-out with a reason the model can act on
+  (`backend/agent.py:1848-1862`, `:554-574`).
 - **Project context.** `AGENTS.md` and friends are indexed by name and fetched on demand, and
   `backend/project_context.py:50` chooses between `off`, `index` and `inline`, with a 1200-token
   inline budget (`backend/project_context.py:52`).

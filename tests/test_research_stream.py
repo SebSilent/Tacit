@@ -364,7 +364,7 @@ class TestToolContractUnchanged(ResearchCase):
         nothing about them may change what the model reads."""
         seen: dict = {}
 
-        def fake_research(question, project=None, ref=None, call_id="", stop=None):
+        def fake_research(question, project=None, ref=None, call_id="", stop=None, deadline=None):
             seen["question"] = question
             seen["call_id"] = call_id
             seen["stop"] = stop
@@ -392,7 +392,7 @@ class TestToolContractUnchanged(ResearchCase):
         self.assertEqual(events[0]["parent_call_id"], "card7")
 
     def test_an_empty_run_is_still_an_error_the_model_can_read(self):
-        def fake_research(question, project=None, ref=None, call_id="", stop=None):
+        def fake_research(question, project=None, ref=None, call_id="", stop=None, deadline=None):
             return iter(())
 
         from backend import research as R

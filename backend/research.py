@@ -140,7 +140,7 @@ def _ask_live(system: str, user: str, ref: str | None, max_tokens: int,
 
 
 def research(question: str, project: str | None = None, ref: str | None = None,
-             call_id: str = "", stop=None):
+             call_id: str = "", stop=None, deadline: float | None = None):
     """Investigate a question across aspects and synthesise a cited report.
 
     A generator, and now a *live* one: aspect events surface as they happen
@@ -193,7 +193,16 @@ def research(question: str, project: str | None = None, ref: str | None = None,
 
     # One shared wall clock across every aspect. A sub-agent that would run past
     # it is abandoned with what it has; the synthesis still names what was found.
-    deadline = started + cap
+    # A caller's WorkBudget can only ever SHRINK the clock: its deadline is the
+    # turn's, and this call's own cap starts from now.
+    deadline = min(deadline, started + cap) if deadline is not None else started + cap
+    if deadline == started + cap and deadline is not None:
+        pass
+    if deadline < started:
+        # The turn's wall budget is already spent: a new clock would mint work
+        # the budget refused.
+        yield "ERROR: the turn's wall budget is spent"
+        return
     specs = []
     for i, aspect in enumerate(aspects):
         sub_q = str(aspect.get("question") or aspect.get("label") or q)

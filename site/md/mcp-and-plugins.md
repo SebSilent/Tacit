@@ -24,7 +24,7 @@ explicitly activates it for a bounded number of turns (`backend/mcp_registry.py:
 `mcp_list_servers`, `mcp_search_tools`, `mcp_activate_tools` and `mcp_call`
 (`backend/agent.py:797-809`, handlers at `:646`, `:627`, `:640`, `:654`). They appear only when a
 server is configured, because with nothing in `mcp.json` they are four dead ends that cost tokens and
-invite calls that can only fail (`backend/agent.py:975-983`). Presence is the gate rather than
+invite calls that can only fail (`backend/agent.py:993-1030`). Presence is the gate rather than
 connectivity: a configured but stopped server still gets them, because listing and searching are how
 the model learns what it could start.
 
@@ -64,7 +64,7 @@ at most three times (`backend/mcp_registry.py:43-44`).
 The allow and deny lists are checked when a tool is *called*, not only when it is offered, which is why
 `mcp_call` is removed from read-only callers entirely: a model can hand itself `confirm=true`
 (`backend/agent.py:692-732`). Dispatch enforces both the read-only refusal and the set of schemas
-actually offered to the caller (`backend/agent.py:2007-2047`, `:2508-2513`).
+actually offered to the caller (`backend/agent.py:2043-2134`, `:2471-2511`).
 
 ## Plugins
 

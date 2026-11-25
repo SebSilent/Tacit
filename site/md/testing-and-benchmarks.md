@@ -238,12 +238,12 @@ order, and only the sentence says which; a turn that wrote nothing and attempted
 nudge and the closing summary, and the nudge names no file. The salvage phase gets three rounds rather than
 one, because writing the file is step one and the model then needs to run it and fix what the run shows; it
 is bounded, because an unbounded "one more chance" is how a turn becomes two turns
-(`backend/agent.py:873-877`).
+(`backend/agent.py:894-2637`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
 blocked repeats in a row ends the turn early (`backend/agent.py:863-872`, `:3320-3370`). It exists
 because one cell spent 26 of its 29 shell calls on refused repeats and ended with nothing written
-(`backend/agent.py:868-872`, `:863-866`).
+(`backend/agent.py:850-881`, `:863-881`).
 
 **Identity, invalidation, and evidence tighten the same guard.** A call's identity is a full
 canonical argument hash covering every character, so two long calls that differ only in their tail stay

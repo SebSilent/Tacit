@@ -13,7 +13,7 @@ import time
 import threading
 from pathlib import Path
 
-from . import (archive, audit, config, extras, guidance, mcp_registry, memory_modes,
+from . import (archive, audit, budget as budget_mod, config, extras, guidance, mcp_registry, memory_modes,
                memory_store, metrics, model_settings, plugin_manager, sandbox,
                skills, store, sudo, thinking)
 from . import tokens as token_mod
@@ -550,6 +550,10 @@ ARCHIVE_TOOL = "session_archive"
 
 def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     """The research tool, driven like a sub-agent: events stream, result lands.
+    Its wall clock and cancellation come from the caller's WorkBudget when one
+    is in play: the research call reserves one child slot here, and its own cap
+    can only ever shrink the budget's clock, never widen it. The nested aspect
+    workers' spend drains the shared pool through their own runs.
 
     The old version ran the whole investigation and returned one string, which
     meant the interface saw nothing until the report was finished; minutes of
@@ -565,10 +569,18 @@ def run_research(args: dict, ctx: dict, out: dict, parent_call_id: str = ""):
     next second instead of waiting out its wall-clock cap.
     """
     from . import research as R
+    parent_work: budget_mod.WorkBudget | None = ctx.get("work")
+    if parent_work is not None and not parent_work.reserve_children(1):
+        out["result"] = (f"ERROR: the turn's delegation budget is spent; read the "
+                        "sources yourself with fetch, or finish and report")
+        return
+    stop = (parent_work or budget_mod.WorkBudget()).stop or ctx.get("stop")
+    deadline = (parent_work.deadline_in(config.RESEARCH_TIMEOUT_S)
+                if parent_work is not None else None)
     report: list = []
     for ev in R.research(str(args.get("question") or ""), project=ctx.get("project"),
                          ref=ctx.get("ref"), call_id=parent_call_id or "",
-                         stop=ctx.get("stop")):
+                         stop=stop, deadline=deadline):
         if isinstance(ev, dict):
             yield {**ev, "research": True, "parent_call_id": parent_call_id}
         else:
@@ -1837,6 +1849,15 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
     if depth >= config.SUBAGENT_MAX_DEPTH:
         out["result"] = "ERROR: sub-agents cannot delegate further"
         return
+    # The calling turn's shared budget, when one is in play: a delegation
+    # reserves a child slice here, and the nested run charged the shared pool
+    # through its own `work`. The depth gate runs first, so a refusal
+    # reserves nothing; the reservation is what a refusal must never spend.
+    parent_work: budget_mod.WorkBudget | None = ctx.get("work")
+    if parent_work is not None and not parent_work.reserve_children(1):
+        out["result"] = ("ERROR: the turn's delegation budget is spent; run this "
+                        "yourself with the tools you have, or finish and report")
+        return
     if not (task or "").strip():
         out["result"] = "ERROR: prompt required"
         return
@@ -1854,10 +1875,12 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
     ]
     report: list[str] = []
     spent = 0
+    child = (parent_work or budget_mod.WorkBudget()).child(
+        model_calls=config.subagent_steps())
     for ev in run_turn(messages, project=ctx.get("project"), ref=ref,
                        max_steps=config.subagent_steps(), depth=depth + 1,
                        readonly=True, nested=True, session=ctx.get("session") or "",
-                       stop=ctx.get("stop")):
+                       stop=ctx.get("stop"), work=child):
         kind = ev.get("type")
         if kind == "text":
             report.append(ev["delta"])
@@ -1870,6 +1893,9 @@ def run_subagent(task: str, ctx: dict, out: dict, parent_call_id: str = ""):
             # "saved by delegation" row permanently zero.
             u = ev.get("usage") or {}
             spent += int(u.get("input") or 0) + int(u.get("output") or 0)
+            # This loop is the reporter, not the biller: the pool is charged
+            # exactly once, by the nested run's own loop, whose `work` slice
+            # shares this pool by reference.
             yield {**ev, "subagent": True, "delegated": spent, "parent_call_id": parent_call_id}
         elif kind in ("tool_start", "tool_end", "notify"):
             yield {**ev, "subagent": True, "parent_call_id": parent_call_id}
@@ -2509,11 +2535,21 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
              max_steps: int | None = None, ref: str | None = None, temperature=None,
              depth: int = 0, nested: bool = False, chat: bool = False,
              stop=None, steer=None, reasoning=None, trace: list | None = None,
-             session: str = "", has_instructions: bool = False, deadline: float | None = None):
-    steps = max_steps or config.max_steps()
+             session: str = "", has_instructions: bool = False, deadline: float | None = None,
+             work=None):
+    """`work` is the caller's WorkBudget (backend/budget.py): a nested run
+    derives its slice from it, shares its deadline, cancellation and token
+    pool, and everything it spends is charged to the caller. A turn driven
+    from the server, the terminal or headless passes nothing and carries the
+    default allowances - unbounded except by its own step and context caps."""
+    work = work or budget_mod.WorkBudget()
+    # The budget caps the model rounds BEFORE the loop starts: a nested worker
+    # cannot be granted more calls than its slice carries.
+    steps = min(max_steps or config.max_steps(), work.calls_left) \
+        if work.calls_left > 0 else (max_steps or config.max_steps())
     tools = [] if chat else tools_for(readonly, depth)
     ctx = {"project": project, "ref": ref, "depth": depth, "readonly": readonly,
-           "session": session, "stop": stop,
+           "session": session, "stop": stop, "work": work,
            # Schemas advertise intent; this set is the dispatch-time boundary.
            # Chat therefore carries an empty set rather than merely tools=None.
            "allowed_tools": frozenset(t["function"]["name"] for t in tools)}
@@ -2524,6 +2560,11 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         window = int((config.resolve_model(ref) or {}).get("contextWindow") or 0)
     except Exception:  # noqa: BLE001
         window = 0
+    # A shared wall clock wins: a nested worker's own deadline can only be
+    # tighter than its parent's, never wider.
+    if work.deadline is not None:
+        deadline = (deadline if deadline is not None
+                    else work.deadline)
     # Live cost accounting. Tacit's claim is that it shows you what it costs, and
     # a figure you can only read after the turn is over is half that promise: one
     # session billed 1.9M tokens without the interface saying a word until the end.
@@ -2826,6 +2867,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 elif ev["type"] == "usage":
                     u = ev.get("usage") or {}
                     turn_tokens += int(u.get("input") or 0) + int(u.get("output") or 0)
+                    work.spend(int(u.get("input") or 0) + int(u.get("output") or 0))
                     yield {"type": "usage", "usage": u}
         except engine.EngineError as exc:
             # Swallowing this is how a turn came back empty with no explanation.
@@ -2857,6 +2899,21 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     for i in range(steps):
         if stop is not None and stop.is_set():
             yield {"type": "notify", "message": "stopped", "level": "info"}
+            yield {"type": "done"}
+            return
+        # The shared budget's verdict, checked before this round starts: a
+        # reservation (this round's model call) is made here, so a turn whose
+        # slice is spent stops rather than starting one call it cannot pay for.
+        if work.calls_left > 0:
+            work.consume_call(1)
+        broke = work.exhausted()
+        if broke and i > 0:
+            yield {"type": "notify", "level": "warn",
+                   "message": f"the turn's {broke}; stopping and reporting"}
+            if trace is not None:
+                trace.append({"text": narration if narration else "",
+                              "reason": thinking, "tools": step_tools})
+            yield from _report()
             yield {"type": "done"}
             return
         if steer:
