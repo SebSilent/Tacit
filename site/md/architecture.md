@@ -2,7 +2,7 @@
 
 One Python process serves the app, and a second short-lived process runs each turn. There is no build
 step and no database to install: the backend is FastAPI over plain modules, and the frontend is files
-in `static/` mounted as-is (`backend/config.py:27`, `backend/main.py:175`).
+in `static/` mounted as-is (`backend/config.py:48`, `backend/main.py:175`).
 
 ## The layers
 
@@ -74,7 +74,7 @@ a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:29-31`, `backend/config.py:495-510`).
+(`backend/turn_worker.py:29-31`, `backend/config.py:516-531`).
 
 ## What the server does at startup
 
@@ -126,14 +126,14 @@ frontend with no build step (`backend/main.py:175`).
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
 - **Compaction.** `should_compact` decides whether the transcript is over budget, answering
-  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1178-1211`,
-  `stored_tokens` at `backend/agent.py:1169-1175`): a mid-turn compaction shrinks the prompt on
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1233-1266`,
+  `stored_tokens` at `backend/agent.py:1224-1230`): a mid-turn compaction shrinks the prompt on
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
-  between turns (`backend/agent.py:1569-1624`) and `compact_messages` does it inside a growing turn
-  (`backend/agent.py:1704-1751`), which is what `TACIT_COMPACT_MID_TURN` controls
-  (`backend/config.py:180-183`). A turn runs in its own process while its parent writes the
+  between turns (`backend/agent.py:1630-1685`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1765-1812`), which is what `TACIT_COMPACT_MID_TURN` controls
+  (`backend/config.py:201-204`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
-  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1627-1676`),
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1682-1731`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
   (`backend/session_runtime.py:567-609`), because a hand compaction that moves neither the meter
@@ -147,10 +147,10 @@ frontend with no build step (`backend/main.py:175`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:1040-1043`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:1061-1064`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:1038-1039`).
+(`backend/config.py:1059-1060`).
 
 Next: [cost and profiles](cost-and-profiles.md).

@@ -446,7 +446,17 @@ def _run_captured(argv, *, cwd: str, env=None, timeout: int, shell: bool = False
     if stdin_data is not None:
         kwargs["stdin"] = subprocess.PIPE
     if shell:
-        kwargs["shell"] = True
+        if IS_POSIX and isinstance(argv, str):
+            # shell=True would let /bin/sh interpret the string, a second shell
+            # with different rules from the one the sandbox resolved. One
+            # shell everywhere: the explicit list form goes through
+            # config.SHELL (backend/config.py). Windows keeps the raw string:
+            # passing a list through shell=True on Windows re-quotes it and
+            # misparses commands that contain their own quotes (see
+            # proctools.spawn).
+            argv = [config.SHELL, "-c", argv]
+        else:
+            kwargs["shell"] = True
     if preexec_fn is not None:
         kwargs["preexec_fn"] = preexec_fn
     if IS_POSIX:

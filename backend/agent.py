@@ -2,6 +2,7 @@ import collections
 from concurrent.futures import ThreadPoolExecutor
 import contextvars
 import fnmatch
+import hashlib
 import inspect
 import json
 import os
@@ -311,17 +312,32 @@ def _audit_overlap(cmd: str, hit: dict, mode: str, chars: int, session: str) -> 
 
 
 def t_run_shell(command: str, project: str | None = None, timeout: int | None = None,
-                session: str = "", on_output=None, stop=None) -> str:
+                session: str = "", on_output=None, stop=None,
+                meta: dict | None = None) -> str:
     """Run one shell command. `on_output` is injected by `call_tool`, never by the
     model; it is not in the tool schema, so no argument list can bring one in. It
     exists only so a person watching the card sees the run while it is happening;
     the string returned below, which is the model's entire view, is identical with
     or without it.
+
+    `meta` is the structured side-channel (also injected, never model-fed): the
+    run's status, exit code, backend and change count land there, so the loop
+    does not have to guess success from the text's first characters. The string
+    the model reads is unchanged; the caller's view of what happened is no
+    longer inferred from it.
     """
+    def _set_meta(status: str, is_error: bool, **extra) -> None:
+        if meta is not None:
+            entry = {"status": status, "is_error": is_error}
+            entry.update(extra)
+            meta.update(entry)
+
     cmd = str(command or "").strip()
     if not cmd:
+        _set_meta("refused", True, exit_code=None, backend="none")
         return "ERROR: empty command"
     if not config.allow_vcs() and _blocked_shell(cmd):
+        _set_meta("refused", True, exit_code=None, backend="none")
         return ("version control is turned off for the agent in this workspace. Use the Git panel "
                 "for status, commits, branches, push and pull, or turn the agent's access on in "
                 "Settings > Tools.")
@@ -332,12 +348,25 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
     hit = guidance.overlap(cmd) if mode != "off" else None
     if hit and mode == "block" and hit["pure"]:
         refusal = guidance.overlap_refusal(hit)
+        _set_meta("refused", True, exit_code=None, backend="none")
         _audit_overlap(cmd, hit, "blocked", len(refusal), session)
         return refusal
     # Everything runs through the sandbox layer, so which backend ran it, and what
     # it changed, is recorded whether or not isolation was in force.
     res = sandbox.run(cmd, project=project, timeout=timeout, session=session,
                       on_output=on_output, stop=stop)
+    # The structured view, at the only place the sandbox result is still a
+    # dict. Everything downstream renders text; the caller's is_error, exit
+    # code and backend used to be inferred from that text and was wrong for
+    # every exit-1 run whose output did not open with an error marker.
+    _set_meta("cancelled" if res.get("code") == 130 else
+              "timeout" if res.get("code") == 124 else
+              "completed" if res.get("ok") else "failed",
+              is_error=bool(res.get("code") in (130, 124)) or not res.get("ok"),
+              exit_code=res.get("code"),
+              backend=res.get("backend") or "none",
+              changed=int((res.get("changed") or {}).get("count") or 0),
+              duration_ms=res.get("duration_ms"))
     if not res.get("ok"):
         err = (res.get("stderr") or "ERROR: the command did not run").strip()
         if "timed out" in err:
@@ -564,7 +593,13 @@ def run_terminal(command: str, project: str | None = None, timeout: int | None =
         # Tacit was started from: a command that reads input sits there until the
         # timeout kills it, and the person watching the terminal sees a hang with
         # no explanation.
-        r = subprocess.run(cmd, shell=True, cwd=str(cwd), stdin=subprocess.DEVNULL,
+        # POSIX: the explicit list form goes through config.SHELL, the same shell
+        # the sandbox uses; shell=True here would have picked /bin/sh, a third
+        # shell with subtly different rules from the one every other tool runs.
+        windows = os.name == "nt"
+        argv = cmd if windows else [config.SHELL, "-c", cmd]
+        r = subprocess.run(argv, shell=windows, cwd=str(cwd),
+                           stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=limit)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timed out after {limit}s", "cwd": str(cwd), "shell": config.SHELL}
@@ -835,11 +870,22 @@ REPEAT_ECHO = 1500
 # times that a call is cached, the remaining steps cannot buy new information, so the turn ends
 # early and spends its last round on the deliverable instead of counting down to the cap.
 REPEAT_STOP_AFTER = 4
+# Recovery bounds. Consecutive FAILED calls (any arguments): a warn once the
+# model has burned several calls without one success, a hard stop past that.
+# A test run that fails then an edit that succeeds resets the counter, so a
+# genuine fix loop never trips it; a wall of failing variants does.
+FAIL_WARN_AFTER = 6
+FAIL_STOP_AFTER = 12
 # The deliverable phase gets a few rounds, not one: writing the file is step one, and on a task like
 # the Scheme evaluator the model then needs to run it and fix what the run shows. Bounded, because
 # an unbounded "one more chance" is how a turn becomes two turns.
 SALVAGE_ROUNDS = 3
 SALVAGE_TOOLS = ("write_file", "edit_file", "run_shell")
+# The uncapped retry rescues a round our own output ceiling severed. It is a
+# bound, not a licence: at most MAX_UNCAPPED_RETRIES extra rounds per turn, and
+# never on a turn's final step or inside the deadline's last minute, so a model
+# that hits the cap every step pays a bounded surcharge, not a doubling.
+MAX_UNCAPPED_RETRIES = 4
 _REPEAT_REPLY = (
     "BLOCKED: {tool} has already run with exactly these arguments {n} times this turn, and it "
     "will not run again. Its result was:\n\n{prev}\n\nThat answer has not changed. Do something "
@@ -1124,10 +1170,25 @@ def _drain(stream, got: list, why: list, state: dict):
             state["finish"] = ev.get("finish") or state.get("finish") or ""
 
 
-def _code_block(text: str) -> str:
-    """The first fenced block in a reply, or "" when there is none."""
-    m = re.search(r"```[ \t]*[\w+#.-]*\n(.*?)```", text or "", re.S)
-    return (m.group(1).strip() if m else "")
+def _code_blocks(text: str) -> list[str]:
+    """Every fenced block in a reply, in order. The salvage extraction refuses
+    to guess when block and file counts disagree, and this is the census."""
+    return [m.group(1).strip()
+            for m in re.finditer(r"```[ \t]*[\w+#.-]*\n(.*?)```", text or "", re.S)]
+
+
+def _call_identity(args: dict) -> str:
+    """The call's identity: a full canonical hash, never a truncation.
+
+    Two argument sets that agree in their first 400 characters and differ in
+    the tail are different calls - a fixture that takes long paths, a prompt
+    that ends with a counter - and the old truncated key merged them, so a
+    genuine new call was refused as a repeat. Hashing the canonical form keeps
+    distinct calls distinct whatever their length.
+    """
+    return hashlib.sha256(
+        json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8", "replace")
+    ).hexdigest()[:24]
 
 
 def _severed(calls: list) -> set:
@@ -2012,6 +2073,12 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         args = {**args, "session": ctx.get("session") or ""}
     if "stop" in params:
         args = {**args, "stop": ctx.get("stop")}
+    if "meta" in params:
+        # The structured side-channel IS the caller's own out dict: the tool
+        # writes how it really went there, and the loop reads is_error from it
+        # instead of parsing the text. It is injected here and nowhere else;
+        # the schema never offers it, so no argument list can forge one.
+        args = {**args, "meta": out}
     try:
         if "on_output" in params and parent_call_id:
             # A tool that can report while it runs, and a card to report to. With
@@ -2476,21 +2543,50 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     # The feal cell that issued 59 shell calls with 10 distinct arguments was not exploring, it
     # was re-running one probe and paying full price for the same bytes each time.
     seen_calls: dict = {}
+    # Repeat-guard cache: key -> {"result": str, "meta": structured or {}}. A
+    # BLOCKED reply never overwrites the recorded result, and a mutation clears
+    # the cache rather than letting an identical re-read answer stale evidence.
     call_cache: dict = {}
     repeats: list = []
     # Consecutive identical calls refused this turn. Reset by any call that actually runs, because
     # "stuck" means nothing changed, not that the same tool was used twice.
     blocked_run = 0
+    # Consecutive failed calls: the distinct-failure breaker. Reset by any
+    # success, so a fix loop (test fails, edit lands, test passes) never trips.
+    consecutive_failures = 0
+    failures_warned = False
     # Only what this turn actually did: the basenames that landed, and the paths whose own write
     # attempt did not. Neither is inferred from the wording of the task, which is the whole point.
     guarantee = config.deliver_guarantee()
     written: set = set()
     pending: list = []
-    phase_ran = [False]
-    ran_after_write = [False]
+    # Verification evidence, not a boolean: every successful shell run records
+    # its identity, exit outcome and time, and "verified" means a recorded run
+    # happened AFTER the most recent successful write. Two facts follow from the
+    # structure: a run that exits non-zero is not verification, whatever its
+    # text says, and a run from before the last edit verifies nothing about the
+    # current state of the file.
+    evidence: dict = {"checks": [], "verified": False, "last_write": 0.0,
+                      "last_write_seq": 0}
+    # Logical event order for verification, not wall time: a fast turn's write
+    # and the run that follows it can land on the same clock tick (this
+    # platform's time.time() is coarser than the model loop), and a strict ts
+    # comparison then reads a run that FOLLOWED its write as if it preceded it.
+    # A sequence cannot tie.
+    seq = [0]
+
+    def _reverify() -> None:
+        """Verified means: a successful shell run happened after this turn's
+        most recent successful write - and there was a write at all. ``ts >
+        last_write`` alone made any early probe prove a write it preceded,
+        which is how a turn that never wrote could read as verified."""
+        evidence["verified"] = bool(evidence["last_write"]) and any(
+            chk["seq"] > evidence["last_write_seq"] and not chk["is_error"]
+            for chk in evidence["checks"])
     demanded = [0]
     forced = 0
     snapped = False
+    uncapped_retries = 0
     # Turn-scoped anti-narration state: the scaffolding counter clean_reason
     # elides against, and the one-time over-narration directive (a step that
     # called a tool but narrated past the cap sets the flag; the next step reads
@@ -2551,25 +2647,59 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # the model chose is delivery, inventing a path from the prompt wording and writing
             # something into it is authorship, and the harness does not do that any more.
             prose = "".join(got)
-            block = _code_block(prose)
-            if block and names:
-                target = str(names[0])
-                out: dict = {}
-                try:
-                    for _p in call_tool("write_file", {"path": target,
-                                                      "content": block}, ctx, out, None):
-                        pass
-                except Exception:
+            blocks = [b for b in _code_blocks(prose) if b]
+            if blocks and names:
+                if len(blocks) > 1 and len(blocks) != len(names):
+                    # Extraction is not authorship, and neither is pairing: with
+                    # three fenced blocks and two intended files the match is a
+                    # guess, and a guess writes somebody's code into somebody
+                    # else's file. Refuse, loudly, and let the round be asked
+                    # again by the phase that led here.
+                    yield {"type": "notify", "level": "warn",
+                           "message": (f"that reply holds {len(blocks)} fenced blocks against "
+                                       f"{len(names)} intended file(s); nothing was written "
+                                       "because the pairing is ambiguous")}
                     return
-                result = str(out.get("result") or "")
-                if not result or result.startswith("ERROR:"):
+                pairs = ([(names[0], blocks[0])] if len(blocks) == 1
+                         else [(names[i], blocks[i]) for i in range(len(blocks))])
+                recorded: list[dict] = []
+                for name, block in pairs:
+                    out: dict = {}
+                    try:
+                        for _p in call_tool("write_file", {"path": name,
+                                                          "content": block}, ctx, out, None):
+                            pass
+                    except Exception:
+                        return
+                    result = str(out.get("result") or "")
+                    if not result or result.startswith("ERROR:"):
+                        # A failed extraction write is intent, not delivery,
+                        # the same rule the main loop applies: the target stays
+                        # unfinished and the phase keeps its licence.
+                        continue
+                    written.add(str(name).replace("\\", "/").rsplit("/", 1)[-1])
+                    recorded.append({
+                        "id": f"salvage-extract-{len(recorded)}",
+                        "args": json.dumps({"path": name, "content": block}),
+                        "result": result,
+                        "path": name,
+                    })
+                if not recorded:
                     return
-                written.add(target.rsplit("/", 1)[-1])
-                messages.append({"role": "assistant", "content": prose})
-                messages.append({"role": "tool", "tool_call_id": "salvage-extract",
-                                 "content": result})
+                # Protocol-valid history: the assistant row carries the calls it
+                # made and the tool rows answer exactly those ids. A bare tool
+                # message after a plain assistant used to make the next request
+                # fail the provider's own shape check.
+                messages.append({"role": "assistant", "content": prose, "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": "write_file", "arguments": c["args"]}}
+                    for c in recorded]})
+                for c in recorded:
+                    messages.append({"role": "tool", "tool_call_id": c["id"],
+                                     "content": c["result"]})
                 yield {"type": "notify", "level": "info",
-                       "message": f"no tool call in that reply: wrote {target} from the code in it"}
+                       "message": f"no tool call in that reply: wrote "
+                                  f"{', '.join(c['path'] for c in recorded)} from the code in it"}
             return
         messages.append({"role": "assistant", "content": "".join(got), "tool_calls": [
             {"id": c["id"], "type": "function",
@@ -2592,13 +2722,26 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 for p in call_tool(c["name"], args, ctx, out, c):
                     yield p
             result = out.get("result", "ERROR: the tool produced no result")
+            meta = out.get("meta")
+            if meta is None:
+                meta = {"is_error": str(result).startswith("ERROR:")}
+                out["meta"] = meta
+            failed = bool(meta.get("is_error"))
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-            failed = str(result).startswith("ERROR:")
-            if not failed and c["name"] == "run_shell":
-                # Only a real execution counts, and only the shell can be one. A successful
-                # write_file must not satisfy this, and neither may a read_file - or "the
-                # deliverable was run" collapses back into "something happened after it".
-                phase_ran[0] = True
+            # The same evidence rule the main loop applies: a real execution of
+            # the shell with a non-failed outcome is verification, and only one
+            # recorded after the most recent successful write counts.
+            if c["name"] == "run_shell" and meta.get("status") not in ("blocked_repeat",
+                                                                       "severed"):
+                seq[0] += 1
+                evidence["checks"].append({
+                    "ts": time.time(),
+                    "seq": seq[0],
+                    "identity": _call_identity(args),
+                    "exit": meta.get("exit_code"),
+                    "is_error": bool(meta.get("is_error")),
+                })
+                _reverify()
             _audit_tool(c["name"], args, result, failed, ctx)
             path = str(args.get("path") or args.get("file") or "")
             if path and c["name"] in WRITE_TOOLS:
@@ -2610,6 +2753,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 else:
                     written.add(base)
                     pending[:] = [p for p in pending if p.rsplit("/", 1)[-1] != base]
+                    seq[0] += 1
+                    evidence["last_write_seq"] = seq[0]
+                    evidence["last_write"] = time.time()
+                    _reverify()
             _ms = int(round((time.monotonic() - _t0) * 1000))
             # `backend`/`changed` ride the same path as `elapsed_ms`: onto the stored
             # record (so a reload keeps them) and onto the live event.
@@ -2646,7 +2793,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         if verify and not unfinished:
             for _ in range(SALVAGE_ROUNDS):
                 yield from _salvage(list(verify), run_check=True)
-                if ran_after_write[0] or phase_ran[0]:
+                if evidence["verified"]:
                     break
             if not closing:
                 return
@@ -2659,7 +2806,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield from _salvage(names if names else list(unfinished),
                                     run_check=not names)
                 names = [n for n in unfinished if n.rsplit("/", 1)[-1] not in written]
-                if not names and phase_ran[0]:
+                if not names and evidence["verified"]:
                     break
             if not closing:
                 return
@@ -2843,7 +2990,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # same round once more with no ceiling at all and let the provider finish it. Only on a
         # real length cut with a broken call, and only once per step - 0 omits max_tokens, None
         # would fall back to the model card and still be a ceiling.
-        if finish == "length" and _severed(calls) and not cancelled and not chat and not nested:
+        if (finish == "length" and _severed(calls) and not cancelled and not chat
+                and not nested and uncapped_retries < MAX_UNCAPPED_RETRIES
+                and not (deadline and time.time() > deadline - 60)):
+            uncapped_retries += 1
             yield {"type": "notify", "level": "info",
                    "message": "output ceiling severed that call; retrying the round uncapped"}
             step_text, step_reason, calls = [], [], []
@@ -2903,7 +3053,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if unfinished and not stopped and not chat and guarantee:
                 yield from _report(unfinished=unfinished, closing=bool(narration))
             elif (guarantee and written and not stopped and not chat and not nested
-                    and not ran_after_write[0]
+                    and not evidence["verified"]
                     and (not deadline or time.time() < deadline - 60)):
                 # The files this turn wrote are on disk and nothing was ever executed. Ship it to
                 # the checker anyway and the cell dies on a syntax error the model could have seen
@@ -2953,7 +3103,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield {"type": "notify", "message": "stopped", "level": "info"}
                 yield {"type": "done"}
                 return
-            key = (c["name"], json.dumps(args, sort_keys=True)[:400])
+            key = (c["name"], _call_identity(args))
             seen = seen_calls.get(key, 0) + 1
             seen_calls[key] = seen
             if seen > 1 and c["name"] not in repeats:
@@ -2972,7 +3122,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if c["id"] in broken:
                 # Never execute a call that arrived in pieces.
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
-                out = {"result": SEVERED}
+                out = {"result": SEVERED,
+                       "meta": {"status": "severed", "is_error": True}}
                 yield {"type": "notify", "level": "info",
                        "message": f"discarded a {c['name']} call cut off mid-arguments"}
             elif c["id"] in parallel:
@@ -2982,18 +3133,21 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 _ms = int(out.get("elapsed_ms") or 0)
             elif (seen >= REPEAT_BLOCK_AFTER and c["name"] not in REPEAT_EXEMPT
                     and key in call_cache
-                    and not str(call_cache[key]).startswith("ERROR:")):
+                    and not str(call_cache[key]["result"]).startswith("ERROR:")
+                    and not call_cache[key].get("meta", {}).get("is_error")):
                 # Third identical successful call. Running it again is not new information, and
                 # the model gets its own previous result back so it cannot claim it was withheld.
                 yield {"type": "tool_start", "name": c["name"], "args": args, "id": c["id"]}
-                prev = (str(call_cache[key])[:REPEAT_ECHO] if seen == REPEAT_BLOCK_AFTER
+                prev = (str(call_cache[key]["result"])[:REPEAT_ECHO]
+                        if seen == REPEAT_BLOCK_AFTER
                         else "(its result is already in the transcript above)")
                 # The reminder rides here because the guidance block fires once and is then
                 # suppressed as a duplicate. It reports only that nothing has landed: which file,
                 # if any, is the agent's call, not this loop's.
                 advice = "" if written else _NOTHING_WRITTEN_REPLY
                 out = {"result": _REPEAT_REPLY.format(n=seen, tool=c["name"], prev=prev,
-                                                     advice=advice)}
+                                                      advice=advice),
+                       "meta": {"status": "blocked_repeat", "is_error": False}}
                 yield {"type": "notify", "level": "info",
                        "message": f"blocked repeat call #{seen} of {c['name']}"}
                 blocked_run += 1
@@ -3006,8 +3160,24 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 blocked_run = 0
                 _ms = int(round((time.monotonic() - _t0) * 1000))
             result = out.get("result", "ERROR: the tool produced no result")
-            call_cache[key] = result
-            failed = str(result).startswith("ERROR:")
+            meta = out.get("meta")
+            if meta is None:
+                # Tools without a structured side-channel keep the text rule
+                # until their migration (P2.4 is incremental by design).
+                meta = {"is_error": str(result).startswith("ERROR:")}
+                out["meta"] = meta
+            failed = bool(meta.get("is_error"))
+            call_cache[key] = {"result": result, "meta": meta}
+            # A mutation invalidates the cache: no cached answer may outlive the
+            # state that produced it. The cache exists to stop reruns of calls
+            # whose result cannot have changed; a successful write or a shell
+            # run is precisely a change, so every entry is dropped and the next
+            # identical read executes instead of quoting stale bytes.
+            if not failed and (c["name"] in WRITE_TOOLS or c["name"] == "run_shell"):
+                call_cache.clear()
+                # The current call's own entry survives the sweep: the repeat
+                # guard needs it to recognise the next identical call.
+                call_cache[key] = {"result": result, "meta": meta}
             here = str(args.get("path") or args.get("file") or "").replace("\\", "/")
             # Two kinds of evidence, both taken from the agent's own call rather than from the
             # wording of the task: a write that landed proves a file exists, a write that did not
@@ -3023,13 +3193,34 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 else:
                     written.add(base)
                     pending[:] = [p for p in pending if p.rsplit("/", 1)[-1] != base]
+                    seq[0] += 1
+                    evidence["last_write_seq"] = seq[0]
+                    evidence["last_write"] = time.time()
+                    # The write re-dates the state: no check from before it
+                    # verifies anything about it, which is why verified is
+                    # recomputed here and not only when a check lands.
+                    _reverify()
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-            # Did anything land, and did anything ever RUN after that.
-            if not failed and written and c["name"] == "run_shell":
-                # The only tool that proves the deliverable was executed. Reading a file, or
-                # listing the directory, is not running eval.scm - a 200-char fragment passed
-                # this test before and the cell died on `Unexpected closing parenthesis`.
-                ran_after_write[0] = True
+            # Verification evidence: only a real execution counts, and only the
+            # shell can be one. Reading a file, or listing the directory, is not
+            # running eval.scm - a 200-char fragment passed this test before and
+            # the cell died on `Unexpected closing parenthesis`. A blocked repeat
+            # or a severed call ran nothing and records nothing; the check's exit
+            # outcome comes from the structured result, so a test that exits 1 is
+            # recorded as failed however clean its text looked.
+            if c["name"] == "run_shell" and meta.get("status") not in ("blocked_repeat",
+                                                                       "severed"):
+                seq[0] += 1
+                evidence["checks"].append({
+                    "ts": time.time(),
+                    "seq": seq[0],
+                    "identity": _call_identity(args),
+                    "exit": meta.get("exit_code"),
+                    "is_error": bool(meta.get("is_error")),
+                })
+                # A run verifies only the state it follows: one recorded after
+                # the most recent successful write, and one that did not fail.
+                _reverify()
             _audit_tool(c["name"], args, result, failed, ctx)
             if c["name"] == SUBTASK and out.get("saved_tokens"):
                 # Delegation is only a saving if it is counted. The sub-agent's
@@ -3053,8 +3244,29 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                    "id": c["id"], "is_error": failed, "elapsed_ms": _ms, **_card}
             if failed:
                 step_errors.append((c["name"], str(result)[:200]))
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
 
         last_errors = step_errors
+        # The distinct-failure breaker. A genuine fix loop resets it on every
+        # success; a wall of failing variants keeps it climbing, and past the
+        # stop bound the remaining steps cannot buy new information.
+        if consecutive_failures >= FAIL_STOP_AFTER:
+            yield {"type": "notify", "level": "warn",
+                   "message": (f"turn stopped early: {consecutive_failures} calls failed in "
+                               "a row and none of them changed the outcome. Change the "
+                               "approach before the next turn.")}
+            if trace is not None:
+                trace.append({"text": narration, "reason": thinking, "tools": step_tools})
+            yield {"type": "done"}
+            return
+        if consecutive_failures >= FAIL_WARN_AFTER and not failures_warned:
+            failures_warned = True
+            yield {"type": "notify", "level": "warn",
+                   "message": (f"{consecutive_failures} calls failed in a row. State a new "
+                               "hypothesis before the next attempt; the failures and their "
+                               "text are in the transcript above.")}
 
         # Nudge toward delivery in the middle of the turn, not after it.
         # feal trial 2: 16 turns, 38,500 tokens, no write attempted. schemelike trial 3: 34 turns,

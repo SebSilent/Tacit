@@ -254,11 +254,17 @@ def bg_start(command: str, project: str | None = None, cwd: str | None = None,
         # close a kill-on-close job and take the background command with it.
         # Closing the parent's log handle after spawn is safe; the child keeps
         # its own duplicated handle and never inherits the worker control pipe.
+        # POSIX runs the list form through config.SHELL: shell=True with a
+        # string would have let sh -c interpret the command, a third shell
+        # with subtly different rules from the one the sandbox runs (and fish
+        # would have sourced its config on every job, see config.SHELL).
         with output.open("wb") as log:
-            kwargs = {} if os.name == "nt" else {"start_new_session": True}
+            windows = os.name == "nt"
+            kwargs = {"start_new_session": True} if not windows else {}
+            spawn_argv = cmd if windows else [config.SHELL, "-c", cmd]
             proc = proctools.spawn(
-                "tacit-bg", cmd, session=str(session or ""), cwd=work,
-                contain=False, mark=False, shell=True,
+                "tacit-bg", spawn_argv, session=str(session or ""), cwd=work,
+                contain=False, mark=False, shell=windows,
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                 **kwargs)
         rec = {"id": bid, "pid": proc.pid,

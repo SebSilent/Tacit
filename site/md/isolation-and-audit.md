@@ -52,7 +52,7 @@ project not mountable read-only (`backend/sandbox.py:590-594`), or CPU and memor
 (`:602-605`).
 
 `changed` comes from scanning the project root before and after and diffing the two
-(`backend/sandbox.py:568`, `:579`). That report is produced whatever the backend, which is why a
+(`backend/sandbox.py:604`, `:580-587`). That report is produced whatever the backend, which is why a
 command that rewrote the tree on Windows still tells you what it rewrote.
 
 ## Timeout and cancellation are enforced, not reported
@@ -100,9 +100,9 @@ because that probe is the only portable way to cut the network off (`backend/san
 
 The image, the pull policy and the PID ceiling are read from the capability registry rather than the
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
-false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:649-664`). A missing image is
+false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:662-674`). A missing image is
 not fetched unless you allowed it, and the refusal names the runtime and the command to run by hand
-(`backend/sandbox.py:823-828`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:830-841`). `--pids-limit` is passed on the command line
 (`backend/sandbox.py:677-685`). Docker is tried before Podman and both are accepted, because which one
 a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:630-637`).
 
@@ -170,7 +170,7 @@ capability is not told the password exists at all.
 
 ## The audit ledger
 
-One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:64`,
+One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:85`,
 `backend/audit.py:62-64`). The point is not debugging: a claim about what a system did should be
 checkable afterwards, so each row records which backend ran something, under which mode, how much it
 cost, and whether it was blocked (`backend/audit.py:3-10`).
@@ -198,17 +198,17 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:809-813`, `:895-922`, `:2961-2966`), one
+the server checkpoints the workspace (`backend/agent.py:838-842`, `:935-962`, `:3105-3110`), one
 capture per turn rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:403-428`,
-`backend/config.py:50`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:411-422`, defined at `backend/config.py:268-269`) and files larger than
+`backend/config.py:71`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
+(`backend/extras.py:411-422`, defined at `backend/config.py:289-290`) and files larger than
 `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:423-424`). The skip test looks only at parts inside the
 project, because testing absolute parts would skip everything whenever the project itself sat in a
 folder named `build/` or `checkpoints/` (`backend/extras.py:411-422`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:638-661`).
+person (`backend/agent.py:667-690`).
 
 Next: [data and privacy](data-and-privacy.md).

@@ -10,17 +10,38 @@ from pathlib import Path
 
 OS = os.environ.get("TACIT_OS") or _platform.system()
 
-# The interpreter that shell=True will actually pick. The agent is told this, because a model
-# that assumes bash on Windows emits commands that run, return 0, and do nothing.
-SHELL_KIND = {"Windows": "cmd.exe", "Darwin": "zsh", "Linux": "bash"}.get(OS, OS)
+
+def resolve_shell() -> str:
+    """The interpreter agent commands actually run under, resolved once at
+    import. On POSIX this is deliberate and measured: the login shell is the
+    person's interactive preference, not a command-execution contract; `fish -c`
+    sources the whole of config.fish on EVERY spawn (config is read even for
+    non-interactive -c), so a plugin crash there took down every shell command
+    the agent ran; and the prompt has always promised one shell while four
+    executors picked four rule sets (the sandbox inherited the login SHELL,
+    the terminal panel, background jobs and shell=True used /bin/sh). One
+    shell, resolved once: bash, matching what the prompt quotes.
+    TACIT_SHELL overrides for a person who wants zsh or fish or pwsh and
+    accepts the syntax that goes with it; the override wins on every OS.
+    """
+    override = os.environ.get("TACIT_SHELL", "").strip()
+    if override:
+        return override
+    if os.name == "nt":
+        return os.environ.get("COMSPEC") or "cmd.exe"
+    return shutil.which("bash") or "/bin/sh"
+
+
+SHELL = resolve_shell()
+# The same shell, named for a person: the prompt and the tool card say this, so
+# the name comes from the binary the environment actually resolved.
+SHELL_KIND = Path(SHELL).name or OS
 
 PLATFORM = os.environ.get("TACIT_PLATFORM") or {
     "Windows": "Windows (cmd.exe): there is no ls, grep, find or rm",
     "Darwin": "macOS (a POSIX shell)",
     "Linux": "Linux (a POSIX shell)",
 }.get(_platform.system(), _platform.system())
-
-SHELL = os.environ.get("COMSPEC") or os.environ.get("SHELL") or "/bin/sh"
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = ROOT / "backend"
