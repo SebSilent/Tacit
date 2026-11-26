@@ -279,6 +279,26 @@ def run(command: str, project: str | None = None, backend: str | None = None,
     # container backend out would have been an arbitrary gap, not a safety one.
     # What does NOT stream is an image pull, which happens before the command runs
     # and can legitimately take twenty minutes with a silent card.)
+    if chosen == "tacit-micro" and sudo.armed():
+        pre = sudo.prepare(cmd)
+        if pre.get("fed"):
+            # Elevation and the wrapper do not coexist: bwrap strips setuid
+            # and mounts the system read-only, so a sudo inside it can never
+            # become root. The sudo switch is the person's standing decision
+            # that this machine's root work runs with host power, so a
+            # command carrying a feedable sudo runs on the host path and
+            # says so in its notes. Everything without sudo stays behind
+            # the wall, this turn and every turn.
+            res = _run_none(cmd, root, limit, session, on_output, stop)
+            try:
+                res["notes"] = list(res.get("notes") or []) + [
+                    "sudo: elevation cannot pass through the sandbox wrapper "
+                    "(setuid is stripped inside it), so this command ran on "
+                    "the host, outside the sandbox. The sudo switch decided "
+                    "that; non-sudo commands still run contained."]
+            except Exception:  # noqa: BLE001
+                pass
+            return res
     if chosen == "tacit-micro":
         return _run_micro(cmd, root, box, limit, session, on_output, stop=stop)
     if chosen == "container":
