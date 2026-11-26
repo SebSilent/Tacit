@@ -151,6 +151,22 @@ def _assign_job(proc) -> None:
         pass
 
 
+def _dbg_signal(site, pid, how, ok, error=""):
+    try:
+        from . import debuglog
+        debuglog.signal_sent(site, pid, how, ok, error)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _dbg_refused(site, pid, reason):
+    try:
+        from . import debuglog
+        debuglog.signal_refused(site, pid, reason)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def terminate_tree(proc) -> bool:
     """Terminate a contained process tree, even after its root has exited.
 
@@ -176,8 +192,10 @@ def terminate_tree(proc) -> bool:
             # start_new_session makes the root pid the durable pgid. Looking it
             # up through the root would fail precisely when only children remain.
             os.killpg(proc.pid, signal.SIGKILL)
+            _dbg_signal("proctools.terminate_tree", proc.pid, "killpg SIGKILL", True)
         elif proc.poll() is None:
             os.kill(proc.pid, signal.SIGKILL)
+            _dbg_signal("proctools.terminate_tree", proc.pid, "kill SIGKILL", True)
         return True
     except ProcessLookupError:
         return True
@@ -531,8 +549,10 @@ def kill_tree(pid: int) -> bool:
         else:
             import signal
             os.kill(int(pid), signal.SIGKILL)
+        _dbg_signal("proctools.kill_tree", pid, "tree kill", True)
         return True
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        _dbg_signal("proctools.kill_tree", pid, "tree kill", False, str(e))
         return False
 
 
@@ -571,13 +591,18 @@ def kill_shell_group(row: dict) -> bool:
     pgid = int(row.get("pgid") or pid)
     if _pid_alive(pgid):
         if identity is None or process_identity(pgid) != identity:
+            _dbg_refused("proctools.kill_shell_group", pgid,
+                         "identity of the group leader is not the registered one")
             return False
     try:
         os.killpg(pgid, signal.SIGKILL)
+        _dbg_signal("proctools.kill_shell_group", pgid, "killpg SIGKILL", True)
         return True
     except ProcessLookupError:
         return True
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        _dbg_signal("proctools.kill_shell_group", pgid, "killpg SIGKILL",
+                    False, str(e))
         return False
 
 
@@ -915,6 +940,11 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
 
 
 def _log(text: str) -> None:
+    try:
+        from . import debuglog
+        debuglog.line(text)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         sys.stderr.write(f"[proctools] {text}\n")
         sys.stderr.flush()

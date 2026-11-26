@@ -126,6 +126,14 @@ def _read_tail(path: Path, tail: int) -> tuple[str, bool]:
     return text[-limit:], truncated
 
 
+def _dbg(site, pid, how, ok, error=""):
+    try:
+        from . import debuglog
+        debuglog.signal_sent(site, pid, how, ok, error)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _signal_tree(rec: dict) -> tuple[bool, str]:
     try:
         if os.name == "nt":
@@ -136,15 +144,22 @@ def _signal_tree(rec: dict) -> tuple[bool, str]:
             if result.returncode:
                 detail = (result.stderr or result.stdout or
                           f"taskkill exited {result.returncode}").strip()
+                _dbg("extras._signal_tree", rec.get("pid"), "taskkill /T /F",
+                     False, detail)
                 return False, detail
+            _dbg("extras._signal_tree", rec.get("pid"), "taskkill /T /F", True)
             return True, ""
         pgid = int(rec.get("pgid") or 0)
         if pgid:
             os.killpg(pgid, signal.SIGKILL)
+            _dbg("extras._signal_tree", pgid, "killpg SIGKILL", True)
         else:
             os.kill(int(rec["pid"]), signal.SIGKILL)
+            _dbg("extras._signal_tree", rec["pid"], "kill SIGKILL", True)
         return True, ""
     except Exception as e:  # noqa: BLE001
+        _dbg("extras._signal_tree", rec.get("pgid") or rec.get("pid"),
+             "signal", False, str(e))
         return False, str(e)
 
 
@@ -203,6 +218,13 @@ def _stop_record(bid: str, rec: dict) -> tuple[str, str]:
     if not _tree_alive(rec, proc):
         return "already", f"already exited [{bid}]"
     if not _identity_proven(rec, proc):
+        try:
+            from . import debuglog
+            debuglog.signal_refused(
+                "extras._stop_record", rec.get("pgid") or rec.get("pid"),
+                "identity not proven; nothing was killed")
+        except Exception:  # noqa: BLE001
+            pass
         return "error", (f"ERROR: could not stop [{bid}]: the process identity could "
                          "not be proven, so nothing was killed (the pid may have "
                          "been reused, or the record predates identity tracking)")

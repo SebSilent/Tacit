@@ -363,6 +363,12 @@ class TurnWorker:
             else:
                 import signal
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                try:
+                    from . import debuglog
+                    debuglog.signal_sent("turn_worker.kill", proc.pid,
+                                         "killpg(getpgid) SIGKILL", True)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception:  # noqa: BLE001
             try:
                 proc.kill()

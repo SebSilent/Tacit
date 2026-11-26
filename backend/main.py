@@ -22,6 +22,10 @@ async def lifespan(app: FastAPI):
     # sandbox and the terminal panel exec exactly this binary with `-c`.
     print(f"[tacit] execution shell: {config.SHELL}")
     config.load_env()
+    from . import debuglog
+    dstat = debuglog.start()
+    if dstat.get("ok"):
+        print(f"[tacit] debug process log: {dstat.get('path')}")
     try:
         config.PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
     except Exception:

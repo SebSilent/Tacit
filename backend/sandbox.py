@@ -785,6 +785,12 @@ def _runtime_cli(argv: list[str], timeout: float, stop=None) -> tuple[int, str, 
                                timeout=15)
             else:
                 proc.kill()
+                try:
+                    from . import debuglog
+                    debuglog.signal_sent("sandbox.runtime-kill", proc.pid,
+                                         "proc.kill", True)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception:  # noqa: BLE001
             try:
                 proc.kill()

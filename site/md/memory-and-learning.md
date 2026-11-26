@@ -99,12 +99,12 @@ back door around context discipline, so it borrows the front doors.
 ## The analyzer
 
 The analyzer reads finished transcripts on a timer and leaves proposals behind. It is never on the
-request path and it cannot change an answer by itself (`backend/main.py:43-50`,
+request path and it cannot change an answer by itself (`backend/main.py:47-54`,
 `backend/analyzer.py:17-18`).
 
 It runs on a daemon thread named `tacit-analyzer` (`backend/analyzer.py:716`, `:723`), and `sync_worker`
 starts or stops it according to the learning mode, so a learning-off install does not even have the
-worker (`backend/analyzer.py:683-694`, `backend/main.py:45-50`).
+worker (`backend/analyzer.py:683-694`, `backend/main.py:49-54`).
 
 Heuristics first, always. A regex pass over the user's own turns costs nothing and is the only thing
 that runs by default. The model pass is a separate module, `backend/proposal_pass.py`, off until a person

@@ -2,7 +2,7 @@
 
 One Python process serves the app, and a second short-lived process runs each turn. There is no build
 step and no database to install: the backend is FastAPI over plain modules, and the frontend is files
-in `static/` mounted as-is (`backend/config.py:79`, `backend/main.py:179`).
+in `static/` mounted as-is (`backend/config.py:79`, `backend/main.py:183`).
 
 ## The layers
 
@@ -64,12 +64,12 @@ The lifecycle is three steps (`backend/turn_worker.py:9-21`):
 3. Stop is two-stage. The parent first sends `{"cancel": true}` on stdin, so the worker stops between
    events, closes its model stream, kills its own shell trees and exits with the partial transcript
    preserved. If it has not exited within the grace period the parent kills the process tree outright,
-   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:322-376`).
+   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:322-382`).
 
 The worker also bounds itself when no cancel can reach it: a watchdog exits it after `WORKER_MAX_S`
 (an infrastructure failure, reported before exit), and EOF on the control pipe without a cancel means
 the parent is gone, which starts the cooperative wind-down with a hard exit after a short grace
-(`backend/turn_worker.py:402-447`). On POSIX the worker runs in its own session, so this is what keeps
+(`backend/turn_worker.py:408-453`). On POSIX the worker runs in its own session, so this is what keeps
 a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
@@ -78,33 +78,33 @@ engine by patching it into this process, which a worker subprocess cannot see
 
 ## What the server does at startup
 
-The lifespan block runs in order (`backend/main.py:17-100`):
+The lifespan block runs in order (`backend/main.py:17-104`):
 
 1. create the state directory and load `~/.tacit/.env` (`backend/main.py:19-24`)
-2. write the pid file (`backend/main.py:26`)
+2. write the pid file (`backend/main.py:30`)
 3. sweep orphans before anything else starts, then register this process so `/api/processes` shows the
-   server too (`backend/main.py:29-42`)
-4. sync the learning worker, which is never on the request path (`backend/main.py:43-50`)
-5. start the autoupdater background task (`backend/main.py:51-56`)
+   server too (`backend/main.py:33-46`)
+4. sync the learning worker, which is never on the request path (`backend/main.py:47-54`)
+5. start the autoupdater background task (`backend/main.py:55-60`)
 
 On shutdown every worker this server spawned gets the two-stage stop, and each driver's epilogue is
 given a moment to land, so a restart saves the partial transcript instead of orphaning the children
-(`backend/main.py:58-65`). Then the in-process plan threads are flagged aborted so a snapshot cannot
-claim a plan is still exploring (`:66-74`), the autoupdater task is cancelled (`:75-81`), the analyzer
+(`backend/main.py:62-69`). Then the in-process plan threads are flagged aborted so a snapshot cannot
+claim a plan is still exploring (`:70-78`), the autoupdater task is cancelled (`:79-85`), the analyzer
 thread and every MCP server are stopped (`:78-85`), the pid file is removed only if it still holds this
 pid (`:86-90`), and this process drops its own registry row so the next boot's sweep does not meet a
 dead pid wearing this boot's marker (`:91-96`).
 
 The orphan sweep identifies children by a command-line marker and by the `TACIT_ROLE` /
 `TACIT_SESSION_ID` pair in their environment, never by the executable name
-(`backend/proctools.py:8-12`, `:744-826`). A dead pid is dropped from the registry; a live pid whose
+(`backend/proctools.py:8-12`, `:769-851`). A dead pid is dropped from the registry; a live pid whose
 command line still proves it is Tacit's is killed as an orphan from a previous crash. Each owning
 process persists its own rows to its own file, so the server and its workers never clobber each
 other's registrations, and a shell row carries the process's birth identity (creation time on
 Windows, `/proc` start time on Linux): a persisted pid is only killed after that identity proves it
-is still the process that was registered, never on a reused pid (`backend/proctools.py:255-280`,
-`:539-581`). When a worker dies, the parent settles the shell groups and containers it registered
-(`backend/turn_worker.py:212-237`, `backend/proctools.py:699-741`).
+is still the process that was registered, never on a reused pid (`backend/proctools.py:273-298`,
+`:559-606`). When a worker dies, the parent settles the shell groups and containers it registered
+(`backend/turn_worker.py:212-237`, `backend/proctools.py:724-766`).
 
 ## Blocking code does not run on the event loop
 
@@ -117,8 +117,8 @@ The same rule is written into the session runtime for the work a start performs,
 summariser call and the spawn, which run in the caller's executor thread and never on the loop
 (`backend/session_runtime.py:28-31`).
 
-Responses above 1024 bytes are gzipped (`backend/main.py:151`), and the static mount serves the
-frontend with no build step (`backend/main.py:179`).
+Responses above 1024 bytes are gzipped (`backend/main.py:155`), and the static mount serves the
+frontend with no build step (`backend/main.py:183`).
 
 ## The agent loop
 

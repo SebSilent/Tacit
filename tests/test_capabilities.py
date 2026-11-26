@@ -339,7 +339,9 @@ class TestSandbox(Isolated):
     def test_a_command_cannot_escape_its_timeout(self):
         from backend import sandbox
         providers.save({"sandbox": {"backend": "tacit-micro"}})
-        res = sandbox.run("ping -n 6 127.0.0.1", project=str(self.proj), timeout=1)
+        hang = ("ping -n 6 127.0.0.1" if os.name == "nt"
+                else "sleep 30")  # both outlast the 1s timeout on their side
+        res = sandbox.run(hang, project=str(self.proj), timeout=1)
         self.assertEqual(res["code"], 124, "a timeout must be reported as such")
 
 

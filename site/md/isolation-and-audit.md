@@ -70,7 +70,7 @@ Killing only the direct child is not enough. On Windows a `.bat` or `cmd /c` wra
 grandchildren running with the captured pipe open. Root exit therefore does not skip cleanup: the
 supervisor keeps waiting while descendants hold a pipe, and timeout or cancellation terminates the
 durable Job Object or POSIX group even after the root is gone (`backend/sandbox.py:302-309`,
-`backend/sandbox.py:376-410`, `backend/proctools.py:154-185`). Windows uses `TerminateJobObject` first and falls back to
+`backend/sandbox.py:376-410`, `backend/proctools.py:170-203`). Windows uses `TerminateJobObject` first and falls back to
 `taskkill /T /F` only for a live root without a usable job.
 
 Output is drained in 8192-byte binary chunks by a reader thread per stream, then incrementally decoded
@@ -79,15 +79,15 @@ chatty stderr from deadlocking a quiet stdout, and a viewer callback cannot stop
 backends use this supervisor (`backend/sandbox.py:273-282`). A container image inspect or pull happens
 before the command and does not stream, but both run under a deadline and the turn's stop flag, so a
 cancel during a pull returns promptly instead of waiting it out (`backend/sandbox.py:726-777`,
-`:845-861`).
+`:851-867`).
 
 A container timeout or cancellation also kills the daemon-side container. The kill is verified by an
 inspect afterwards, not by the kill command's own exit code, and the result says it was killed only
 when the runtime confirms the container is down; otherwise the note reports that the runtime did not
-confirm it (`backend/sandbox.py:799-819`, `:900-905`). The container's name is registered with the
+confirm it (`backend/sandbox.py:805-825`, `:906-911`). The container's name is registered with the
 long-lived parent before the client starts, so a hard worker death leaves a row the parent (or the
 next boot's sweep) can settle by name; an unconfirmed cleanup keeps the row for a retry
-(`backend/sandbox.py:871-896`, `backend/proctools.py:626-696`).
+(`backend/sandbox.py:877-902`, `backend/proctools.py:651-721`).
 
 ## Limits, where they exist
 
@@ -102,7 +102,7 @@ The image, the pull policy and the PID ceiling are read from the capability regi
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
 false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:688-700`). A missing image is
 not fetched unless you allowed it, and the refusal names the runtime and the command to run by hand
-(`backend/sandbox.py:856-867`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:862-873`). `--pids-limit` is passed on the command line
 (`backend/sandbox.py:703-711`). Docker is tried before Podman and both are accepted, because which one
 a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:655-663`).
 
@@ -133,7 +133,7 @@ is honoured where the binary exists (`backend/sudo.py:329`), which means Linux a
 |---|---|---|
 | `none` | yes (`backend/sandbox.py:483-521`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:562-565`) |
 | `tacit-micro` | no (`backend/sandbox.py:584-593`) | fails at once, with a note saying this backend does not supply it |
-| `container` | no (`backend/sandbox.py:906-912`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
+| `container` | no (`backend/sandbox.py:912-918`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
 
 Both sandboxed backends leave stdin at `DEVNULL`, so an unanswered `sudo` fails immediately instead of
 hanging until the turn timeout. Failing fast is not the same as being explained, which is why the note
@@ -201,12 +201,12 @@ The undo half of the same promise. Before the first `write_file`, `edit_file` or
 the server checkpoints the workspace (`backend/agent.py:840-844`, `:937-963`, `:3128-3133`), one
 capture per turn rather than per step, and the result says a snapshot was taken.
 
-A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:403-428`,
+A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:425-450`,
 `backend/config.py:102`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:411-422`, defined at `backend/config.py:320-321`) and files larger than
-`TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:423-424`). The skip test looks only at parts inside the
+(`backend/extras.py:433-444`, defined at `backend/config.py:320-321`) and files larger than
+`TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:445-446`). The skip test looks only at parts inside the
 project, because testing absolute parts would skip everything whenever the project itself sat in a
-folder named `build/` or `checkpoints/` (`backend/extras.py:411-422`).
+folder named `build/` or `checkpoints/` (`backend/extras.py:433-444`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
 person (`backend/agent.py:669-692`).

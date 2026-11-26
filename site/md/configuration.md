@@ -83,7 +83,7 @@ terminal one.
 
 `TACIT_WORKER_MAX_S` is the worker's own hard ceiling, the backstop for a turn that has lost its
 parent entirely; a watchdog reports and exits the worker when it is reached
-(`backend/turn_worker.py:402-429`). `TACIT_DISABLE_JOB_OBJECTS=1` forces Windows job-object
+(`backend/turn_worker.py:408-435`). `TACIT_DISABLE_JOB_OBJECTS=1` forces Windows job-object
 assignment to fail, an escape hatch in the same shape as `TACIT_TURN_WORKER`: it exists so the
 conformance suite can measure what the shell supervisor reports when containment is unavailable,
 instead of only testing the happy path (`backend/proctools.py:118-130`).
@@ -101,6 +101,7 @@ instead of only testing the happy path (`backend/proctools.py:118-130`).
 | `TACIT_SHELL_TIMEOUT` | `180` | `backend/config.py:155` |
 | `TACIT_SHELL_OVERLAP` | `block` | `backend/config.py:622` |
 | `TACIT_SHELL` | bash, or `COMSPEC` | `backend/config.py:58` |
+| `TACIT_DEBUG` | off | `backend/debuglog.py:36-49` |
 | `TACIT_PLAYWRIGHT_PATH` | auto-detected | `backend/config.py:250` |
 | `TACIT_SKILL_INDEX_LIMIT` | `24` | `backend/config.py:296` |
 
@@ -117,6 +118,12 @@ named. Set it to choose a different POSIX syntax such as zsh or dash. On Linux a
 override that names fish is refused with a warning and bash takes the command: the override
 picks a syntax contract, and fish's `-c` reads the whole interactive config on every spawn -
 the crash class this setting must not re-open.
+
+`TACIT_DEBUG=on` starts the process-activity log: every signal the harness sends or refuses to
+send (with the code path that asked for it), every spawn and reap it records, and the exact
+moment the shell that launched the server dies, with the surrounding events. It writes
+`~/.tacit/debug.log`, capped at the newest 20,000 lines; the startup banner repeats the path.
+Use it when a terminal reports a shell crash and the question is whose signal it was.
 
 ### Research
 

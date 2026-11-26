@@ -102,24 +102,24 @@ rather than a fallback to somewhere else.
 ## Background jobs outlive their turn
 
 `bg_start` deliberately releases the command from the per-turn worker's process containment
-(`backend/extras.py:237-278`). Its stdin is disconnected and its combined stdout/stderr goes to
+(`backend/extras.py:259-300`). Its stdin is disconnected and its combined stdout/stderr goes to
 `~/.tacit/jobs/<id>.log`; the adjacent JSON row records the owning session, root pid, process-group
 id on POSIX, the process's birth identity, command, working directory and start time
 (`:264-269`). An ordinary turn or worker exit therefore leaves the job running. `bg_output` reads
 that log from the end rather than loading it all, so a later worker using the same `TACIT_HOME` can
-read a job without owning its original process handle (`backend/extras.py:108-126`, `:321-340`).
+read a job without owning its original process handle (`backend/extras.py:108-126`, `:343-362`).
 
 `bg_stop` kills the whole tree (`taskkill /T /F` on Windows, the process group on POSIX), waits for it
 to die, and returns an error rather than claiming success if it is still running
-(`backend/extras.py:129-234`, `:349-354`). A stop from a process that does not own the original
+(`backend/extras.py:137-256`, `:371-376`). A stop from a process that does not own the original
 handle first proves the persisted pid is still the process the record registered, by its birth
 identity; a reused pid or a record with no identity is refused, not killed
-(`backend/extras.py:168-196`). The Stop control stops every persisted job belonging to
+(`backend/extras.py:183-211`). The Stop control stops every persisted job belonging to
 that session, without touching another session's jobs (`backend/session_runtime.py:1357-1407`). A
-normal server exit stops all remaining jobs (`backend/extras.py:351-375`). Stopped and exited rows
+normal server exit stops all remaining jobs (`backend/extras.py:373-397`). Stopped and exited rows
 and logs remain available for later `bg_output` calls; stopping a job which has already exited does
 not claim to have killed it. Finished records and logs are kept for a week and capped at 200, pruned
-on the next start; running jobs are never pruned (`backend/extras.py:281-318`).
+on the next start; running jobs are never pruned (`backend/extras.py:303-340`).
 
 ## Which tools can change your files
 
