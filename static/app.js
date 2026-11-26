@@ -1345,6 +1345,10 @@ function handle(m) {
       if (m.saved) renderPlanApproved(m);
       else { hidePlanStrip(); toast(m.message || 'Plan not saved', true); }
       break;
+    case 'steer_state':
+      if (m.state === 'applied') toast('Steer applied');
+      else if (m.state === 'dropped') toast('Steer dropped', true);
+      break;
     case 'agent_settled':
       // steer / follow_up queued in the agent
       if (m.message || m.promptId) toast('Steer queued');

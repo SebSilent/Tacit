@@ -298,7 +298,7 @@ class TurnWorker:
             self._settle()
 
     # ── steering ──────────────────────────────────────────────────────────
-    def steer(self, text: str) -> bool:
+    def steer(self, text: str, steer_id: str | None = None) -> bool:
         """Carry a mid-turn steer to the worker over its stdin.
 
         The thread path hands `run_turn` the socket's steer list directly;
@@ -311,7 +311,8 @@ class TurnWorker:
         if proc is None or proc.poll() is not None:
             return False
         try:
-            proc.stdin.write(json.dumps({"steer": str(text or "")}) + "\n")
+            proc.stdin.write(json.dumps(
+                {"steer": str(text or ""), "steer_id": steer_id or ""}) + "\n")
             proc.stdin.flush()
             return True
         except Exception:  # noqa: BLE001
@@ -505,7 +506,8 @@ def _run_worker(argv: list[str]) -> int:
                 if "steer" in msg:
                     text = str(msg.get("steer") or "")
                     if text:
-                        steer.append(text)
+                        steer.append({"text": text,
+                                      "id": msg.get("steer_id") or None})
         except Exception:  # noqa: BLE001
             pass
         # EOF (or a broken pipe) without a cancel: the parent closed the

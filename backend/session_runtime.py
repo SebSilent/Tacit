@@ -701,8 +701,16 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     seq = [0]
 
     def pub(ev: dict) -> None:
-        seq[0] += 1
-        bus.publish({**ev, "sid": sid, "turn_id": turn_id, "seq": seq[0]})
+        with pub_lock:
+            seq[0] += 1
+            stamped = {**ev, "sid": sid, "turn_id": turn_id, "seq": seq[0]}
+        bus.publish(stamped)
+
+    pub_lock = threading.Lock()
+    # The socket thread needs to publish steer_state the moment an
+    # instruction is accepted, mid-stream; handing it this closure keeps
+    # every event of the turn on one sequence, one turn_id.
+    run["pub"] = pub
 
     def set_state(name: str) -> None:
         if run.get("state") != name:
@@ -723,6 +731,20 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     # still be seen by the next turn.
     pending: dict | None = None
     try:
+        # A steer accepted between the spawn and this moment sits in the
+        # socket-side list; across the process boundary the control stream
+        # carries it, under the same id, before the first event is read.
+        if worker is not None and run.get("steer"):
+            for item in list(run["steer"]):
+                if not isinstance(item, dict):
+                    item = {"text": str(item), "id": None}
+                if worker.steer(item.get("text") or "", item.get("id")):
+                    run["steer"].remove(item)
+                    entry = run.get("steers", {}).get(str(item.get("id")))
+                    if entry is not None and entry.get("state") == "queued":
+                        entry["state"] = "delivered"
+                        pub({"type": "steer_state", "state": "delivered",
+                             "steer_id": entry["id"]})
         stream = (worker.events() if worker is not None else
                   agent.run_turn(messages, project=project, ref=ref, chat=chat,
                                  session=sid, has_instructions=has_instructions,
@@ -734,6 +756,18 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                 man.event(ev)
             if kind == "error":
                 last_error = str(ev.get("message") or "unknown error")
+            # P2.2: the engine reached an accepted instruction. It is
+            # persisted exactly once here - the applied state is the write
+            # - so a replay or a reload can never duplicate the user row.
+            if (kind == "notify" and ev.get("steer_id")
+                    and ev.get("message") == "steering applied"):
+                entry = run.get("steers", {}).get(str(ev["steer_id"]))
+                if entry is not None and entry.get("state") != "applied":
+                    entry["state"] = "applied"
+                    store.append(rec, "user", entry.get("text") or "",
+                                 {"steer": entry["id"]})
+                    pub({"type": "steer_state", "state": "applied",
+                         "steer_id": entry["id"]})
             # Delegated work is invisible in the main transcript by design,
             # the sub-agent's calls never enter it, so the only way the
             # person can see what it is doing is a dedicated event.
@@ -869,8 +903,43 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
             terminal = {"type": "done", "sid": sid, "status": status,
                         "synthetic": True}
             set_state(status)
-        seq[0] += 1
-        bus.publish({**terminal, "turn_id": turn_id, "seq": seq[0]})
+        pub(terminal)
+        # P2.2: steering the turn never reached. A stop drops it visibly;
+        # any other ending carries every unapplied instruction into a new
+        # turn, so an accepted steer is never silently lost. The promotion
+        # counter bounds the loop: a turn that cannot get anywhere is not
+        # allowed to breed turns forever.
+        pend = [run["steers"][i] for i in run.get("steer_order", [])
+                if run["steers"].get(i)
+                and run["steers"][i].get("state") in ("queued", "delivered")
+                and (run["steers"][i].get("text") or "").strip()]
+        if pend:
+            if stop.is_set():
+                for entry in pend:
+                    entry["state"] = "dropped"
+                pub({"type": "notify", "level": "warn",
+                     "message": f"the stop dropped {len(pend)} steering "
+                                "message(s)"})
+            else:
+                n = int(rec.get("_steer_promotions") or 0) + 1
+                rec["_steer_promotions"] = n
+                if n > 3:
+                    for entry in pend:
+                        entry["state"] = "dropped"
+                    pub({"type": "notify", "level": "warn",
+                         "message": "steering kept arriving faster than any "
+                                    "turn could apply it; the rest was dropped"})
+                else:
+                    for entry in pend:
+                        entry["state"] = "promoted"
+                    carry = "\n".join(e["text"] for e in pend)
+                    pub({"type": "notify", "level": "info",
+                         "message": "steering the turn did not reach carries "
+                                    "into a new turn"})
+                    store.save(rec)
+                    threading.Thread(target=_promote_steering,
+                                     args=(sid, carry, run.get("loop")),
+                                     daemon=True).start()
         # The registry is the turn's own responsibility, not the socket's: a
         # browser that disconnects mid-turn must not mark the session idle
         # while its turn is still running in here.
@@ -1022,7 +1091,11 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
                # P2.1: one id for the whole turn, and the state the machine is
                # in. queued is implicit (the busy mark refuses a second turn);
                # starting begins here, the driver advances the rest.
-               "turn_id": uuid.uuid4().hex[:8], "state": "starting"}
+               "turn_id": uuid.uuid4().hex[:8], "state": "starting",
+               # P2.2: durable steering. Every accepted instruction gets an
+               # id and a state (queued, delivered, applied, dropped,
+               # promoted); the order list keeps them in arrival order.
+               "steers": {}, "steer_order": []}
         _turns[sid] = run
     # The bus opens before the session is marked busy, so any viewer that can
     # observe busy can also subscribe to the turn behind it.
@@ -1297,6 +1370,12 @@ def cancel(sid: str) -> dict:
     if run is not None:
         run["stop"].set()
         run["steer"].clear()
+        # Durable steering (P2.2): the stop drops the unapplied queue
+        # explicitly; the epilogue publishes the count, never loses it.
+        for i in run.get("steer_order", []):
+            e = run.get("steers", {}).get(i)
+            if e is not None and e.get("state") in ("queued", "delivered"):
+                e["state"] = "dropped"
         man = run.get("manifest")
         if man is not None:
             man.note_cancel()
@@ -1329,24 +1408,76 @@ def cancel(sid: str) -> dict:
     return out
 
 
-def steer(sid: str, text: str) -> bool:
-    """Carry a mid-turn steer to the session's running turn.
+def _promote_steering(sid: str, carry: str, loop) -> None:
+    """Start the carrying turn once the promoted one has fully retired.
 
-    In process mode it rides the worker's stdin; in thread mode it lands on
-    the run's steer list, which ``run_turn`` reads between events. False when
-    the session has no running turn.
+    The epilogue launches this in a thread while it finishes popping the
+    registry row; a start that raced that pop would find the session busy
+    and lose the instruction, so the thread waits for the row to go. The
+    wait is bounded: a turn stuck in its own epilogue must not hold the
+    steering hostage forever, and a busy session that genuinely refuses is
+    the person's own doing at that point.
+    """
+    deadline = time.time() + 10
+    while sid in _turns and time.time() < deadline:
+        time.sleep(0.05)
+    rec = store.get(sid)
+    if rec is None:
+        return
+    start_turn(sid, rec, carry, loop=loop)
+
+
+def _steer_state(sid: str, run: dict, state: str, steer_id: str) -> None:
+    """Publish one steering state transition. The driver's own publisher
+    keeps it on the turn's sequence; before a driver exists it rides the
+    turn bus directly."""
+    pub = run.get("pub")
+    ev = {"type": "steer_state", "state": state, "steer_id": steer_id,
+          "sid": sid}
+    if callable(pub):
+        try:
+            pub(ev)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    turn_bus.publish(sid, ev)
+
+
+def steer(sid: str, text: str) -> bool:
+    """Accept a mid-turn steer: one id, one persistence, visible states.
+
+    accepted is the socket's; this marks it queued, hands it to the running
+    turn (worker stdin across the process boundary, the run's list in thread
+    mode) and marks it delivered. The driver marks it applied - the one and
+    only place the user row is written - drops it visibly with a stop, or
+    promotes it to a new turn when the old one ended without reaching it.
+    False only when no turn is running to take it.
     """
     with _lock:
         run = _turns.get(sid)
     if run is None:
         return False
+    text = str(text or "")
+    steer_id = uuid.uuid4().hex[:8]
+    entry = {"id": steer_id, "text": text, "state": "queued"}
+    run.setdefault("steers", {})[steer_id] = entry
+    run.setdefault("steer_order", []).append(steer_id)
+    _steer_state(sid, run, "queued", steer_id)
     man = run.get("manifest")
     if man is not None:
         man.note_steering(text)
     w = run.get("worker")
-    if w is not None and w.steer(text):
-        return True
-    run["steer"].append(str(text or ""))
+    carried = False
+    if w is not None:
+        try:
+            carried = bool(w.steer(text, steer_id))
+        except TypeError:
+            carried = bool(w.steer(text))
+    if not carried:
+        run["steer"].append({"text": text, "id": steer_id})
+        carried = True
+    entry["state"] = "delivered"
+    _steer_state(sid, run, "delivered", steer_id)
     return True
 
 

@@ -146,7 +146,7 @@ manifest and a benchmark row cannot disagree about what a token is (`backend/met
 
 Interactive recording is opt-in with `TACIT_MANIFEST=on` (`backend/config.py:505-513`); the turn
 driver feeds the same event stream it already consumes, in both worker modes
-(`backend/session_runtime.py:714-720`). A headless benchmark run always records, whatever the
+(`backend/session_runtime.py:722-728`). A headless benchmark run always records, whatever the
 interactive setting says, because a comparison without manifests is exactly the unverifiable claim
 the manifest exists to prevent (`backend/headless.py:169-178`).
 
@@ -241,7 +241,7 @@ is bounded, because an unbounded "one more chance" is how a turn becomes two tur
 (`backend/agent.py:896-2639`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
-blocked repeats in a row ends the turn early (`backend/agent.py:865-874`, `:3323-3373`). It exists
+blocked repeats in a row ends the turn early (`backend/agent.py:865-874`, `:3343-3393`). It exists
 because one cell spent 26 of its 29 shell calls on refused repeats and ended with nothing written
 (`backend/agent.py:852-883`, `:865-883`).
 
@@ -249,7 +249,7 @@ because one cell spent 26 of its 29 shell calls on refused repeats and ended wit
 canonical argument hash covering every character, so two long calls that differ only in their tail stay
 distinct (`backend/agent.py:1176-1185`). A mutation clears the repeat cache while keeping the
 mutating call's own entry, so an identical read after a write executes again instead of quoting the
-bytes it replaced (`backend/agent.py:3170-3199`). What counts as verification is structural: a run
+bytes it replaced (`backend/agent.py:3190-3219`). What counts as verification is structural: a run
 verifies only when it followed this turn's most recent successful write,
 its exit comes from the structured result rather than the text, and it did not fail
 (`backend/agent.py:2561-2584`), and the run and write are ordered by a logical sequence because a

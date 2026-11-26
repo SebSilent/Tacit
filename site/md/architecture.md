@@ -64,12 +64,12 @@ The lifecycle is three steps (`backend/turn_worker.py:9-21`):
 3. Stop is two-stage. The parent first sends `{"cancel": true}` on stdin, so the worker stops between
    events, closes its model stream, kills its own shell trees and exits with the partial transcript
    preserved. If it has not exited within the grace period the parent kills the process tree outright,
-   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:321-375`).
+   `taskkill /T /F` on Windows, `killpg` on POSIX (`backend/turn_worker.py:322-376`).
 
 The worker also bounds itself when no cancel can reach it: a watchdog exits it after `WORKER_MAX_S`
 (an infrastructure failure, reported before exit), and EOF on the control pipe without a cancel means
 the parent is gone, which starts the cooperative wind-down with a hard exit after a short grace
-(`backend/turn_worker.py:401-446`). On POSIX the worker runs in its own session, so this is what keeps
+(`backend/turn_worker.py:402-447`). On POSIX the worker runs in its own session, so this is what keeps
 a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model

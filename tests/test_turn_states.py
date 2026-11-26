@@ -44,9 +44,12 @@ class TurnStateDrive(unittest.TestCase):
         for k, v in self._orig.items():
             setattr(config, k, v)
 
-    def _drive(self, sid: str, events: list, stop_pre_set: bool = False):
+    def _drive(self, sid: str, events: list, stop_pre_set: bool = False,
+               stream_fn=None, rec_setup=None):
         rec = store.create(title="states", model="p/m", mode="agent", sid=sid)
         self.assertIsNotNone(rec)
+        if rec_setup is not None:
+            rec_setup(rec)
         bus = turn_bus.start(sid, self.loop)
         published: list = []
         orig_publish = bus.publish
@@ -54,13 +57,17 @@ class TurnStateDrive(unittest.TestCase):
             _l.append(dict(ev)), _o(ev))[1]
         run = {"stop": threading.Event(), "steer": [], "worker": None,
                "thread": None, "loop": self.loop,
-               "turn_id": "t-abc123", "state": "starting", "states": []}
+               "turn_id": "t-abc123", "state": "starting", "states": [],
+               "steers": {}, "steer_order": []}
         if stop_pre_set:
             run["stop"].set()
         trace: list = []
         orig_run_turn = agent.run_turn
 
         def scripted(messages, **kw):
+            if stream_fn is not None:
+                yield from stream_fn(kw)
+                return
             yield from events
 
         agent.run_turn = scripted

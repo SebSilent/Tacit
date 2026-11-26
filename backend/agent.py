@@ -2922,10 +2922,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             return
         if steer:
             while steer:
-                extra = steer.pop(0)
-                if (extra or "").strip():
-                    messages.append({"role": "user", "content": extra})
-                    yield {"type": "notify", "message": "steering applied", "level": "info"}
+                item = steer.pop(0)
+                text = item.get("text") if isinstance(item, dict) else item
+                steer_id = item.get("id") if isinstance(item, dict) else None
+                if (text or "").strip():
+                    messages.append({"role": "user", "content": text})
+                    yield {"type": "notify", "message": "steering applied",
+                           "level": "info", "steer_id": steer_id}
         calls = []
         model_used = None
         cancelled = False
@@ -3100,6 +3103,23 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     trace.append({"text": narration, "reason": thinking, "tools": []})
                 yield {"type": "notify", "level": "info",
                        "message": "planning detected: guided back to action"}
+                continue
+            if steer and i + 1 < steps and not (stop is not None and stop.is_set()):
+                # Drain before final (P2.2). A steer that arrived while this
+                # answer was streaming supersedes it: the turn is not over
+                # while there is direction left to apply. What was said stays
+                # in the transcript; the steer rides on top of it.
+                messages.append({"role": "assistant", "content": narration})
+                if trace is not None:
+                    trace.append({"text": narration, "reason": thinking, "tools": []})
+                while steer:
+                    item = steer.pop(0)
+                    text = item.get("text") if isinstance(item, dict) else item
+                    steer_id = item.get("id") if isinstance(item, dict) else None
+                    if (text or "").strip():
+                        messages.append({"role": "user", "content": text})
+                        yield {"type": "notify", "message": "steering applied",
+                               "level": "info", "steer_id": steer_id}
                 continue
             stopped = stop is not None and stop.is_set()
             # Ending the turn on its own with a write still unfinished is the most

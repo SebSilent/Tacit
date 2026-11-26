@@ -397,12 +397,23 @@ async def ws_session(ws: WebSocket, sid: str):
 
             elif kind == "steer":
                 text = msg.get("message") or ""
+                imgs = msg.get("images") or []
+                if imgs:
+                    # Never silently dropped (P2.2): the text is taken, the
+                    # images are named as not riding into the running turn.
+                    await ws.send_text(_json({
+                        "type": "notify", "level": "warn", "sid": rec["id"],
+                        "message": f"this steer carried {len(imgs)} image(s); "
+                                   "images do not reach a running turn - the "
+                                   "text will, or send them with a new message"}))
                 if text.strip():
                     # The runtime finds the turn's worker by sid, so a steer
                     # arriving on any socket of this session reaches the turn.
+                    # The ack says queued, not applied: applied is a separate
+                    # event, and the two states must not be conflated.
                     carried = session_runtime.steer(rec["id"], text)
                     await ws.send_text(_json({"type": "notify", "level": "info",
-                                              "message": "steering applied" if carried
+                                              "message": "steering queued" if carried
                                               else "nothing is running to steer",
                                               "sid": rec["id"]}))
 

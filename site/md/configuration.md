@@ -83,7 +83,7 @@ terminal one.
 
 `TACIT_WORKER_MAX_S` is the worker's own hard ceiling, the backstop for a turn that has lost its
 parent entirely; a watchdog reports and exits the worker when it is reached
-(`backend/turn_worker.py:401-428`). `TACIT_DISABLE_JOB_OBJECTS=1` forces Windows job-object
+(`backend/turn_worker.py:402-429`). `TACIT_DISABLE_JOB_OBJECTS=1` forces Windows job-object
 assignment to fail, an escape hatch in the same shape as `TACIT_TURN_WORKER`: it exists so the
 conformance suite can measure what the shell supervisor reports when containment is unavailable,
 instead of only testing the happy path (`backend/proctools.py:118-130`).
