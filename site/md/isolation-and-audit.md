@@ -170,7 +170,7 @@ capability is not told the password exists at all.
 
 ## The audit ledger
 
-One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:85`,
+One line per important action, in `~/.tacit/audit.jsonl` (`backend/config.py:116`,
 `backend/audit.py:62-64`). The point is not debugging: a claim about what a system did should be
 checkable afterwards, so each row records which backend ran something, under which mode, how much it
 cost, and whether it was blocked (`backend/audit.py:3-10`).
@@ -202,8 +202,8 @@ the server checkpoints the workspace (`backend/agent.py:840-844`, `:937-963`, `:
 capture per turn rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:403-428`,
-`backend/config.py:71`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
-(`backend/extras.py:411-422`, defined at `backend/config.py:289-290`) and files larger than
+`backend/config.py:102`), skipping paths whose project-relative parts are in `SNAPSHOT_SKIP`
+(`backend/extras.py:411-422`, defined at `backend/config.py:320-321`) and files larger than
 `TACIT_SNAPSHOT_MAX_FILE` (`backend/extras.py:423-424`). The skip test looks only at parts inside the
 project, because testing absolute parts would skip everything whenever the project itself sat in a
 folder named `build/` or `checkpoints/` (`backend/extras.py:411-422`).

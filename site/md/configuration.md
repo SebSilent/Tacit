@@ -10,19 +10,19 @@ Four settings are consulted in that order rather than stored as a plain constant
 
 | Setting | Environment | Preference | Decided at |
 |---|---|---|---|
-| Delegation model | `TACIT_DELEGATE_MODEL` | `delegateModel` | `backend/config.py:419-430` |
-| Fallback model | `TACIT_FALLBACK_MODEL` | `fallbackModel` | `backend/config.py:433-446` |
-| Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:449-463` |
-| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:603-618` |
-| Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:634-651` |
+| Delegation model | `TACIT_DELEGATE_MODEL` | `delegateModel` | `backend/config.py:450-461` |
+| Fallback model | `TACIT_FALLBACK_MODEL` | `fallbackModel` | `backend/config.py:464-477` |
+| Turn worker shape | `TACIT_TURN_WORKER` | none | `backend/config.py:480-494` |
+| Delivery guarantee | `TACIT_DELIVER_GUARANTEE` | `deliverGuarantee` | `backend/config.py:634-649` |
+| Shell overlap | `TACIT_SHELL_OVERLAP` | `shellOverlap` | `backend/config.py:665-682` |
 
 The shell overlap case is the one the interface has to show, because a pinned environment variable
-makes the switch in **Skills & Tools** do nothing. `backend/config.py:491-498` exists to answer that
-question so the switch can say so instead of lying (`backend/config.py:568-575`).
+makes the switch in **Skills & Tools** do nothing. `backend/config.py:522-529` exists to answer that
+question so the switch can say so instead of lying (`backend/config.py:599-606`).
 
 `TACIT_TEMPERATURE` is the exception to "environment always wins": it is a person typing a number,
 so a per-model `temperature` in the catalog beats it for that model
-(`backend/config.py:801-804`, `backend/ai/engine.py:21`).
+(`backend/config.py:832-835`, `backend/ai/engine.py:21`).
 
 ## Environment variables
 
@@ -33,9 +33,9 @@ the README.
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_HOME` | `~/.tacit` | `backend/config.py:51` |
-| `TACIT_USER_HOME` | your home directory | `backend/config.py:51` |
-| `TACIT_PROJECTS_ROOTS` | none | `backend/config.py:826` |
+| `TACIT_HOME` | `~/.tacit` | `backend/config.py:82` |
+| `TACIT_USER_HOME` | your home directory | `backend/config.py:82` |
+| `TACIT_PROJECTS_ROOTS` | none | `backend/config.py:857` |
 
 `TACIT_USER_HOME` moves where `~/.tacit` is looked for without moving the state directory itself,
 which is what the tests use to keep a run off your real data.
@@ -44,8 +44,8 @@ which is what the tests use to keep a run off your real data.
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_HOST` | `0.0.0.0` | `backend/config.py:95` |
-| `TACIT_PORT` | `8550` | `backend/config.py:96` |
+| `TACIT_HOST` | `0.0.0.0` | `backend/config.py:126` |
+| `TACIT_PORT` | `8550` | `backend/config.py:127` |
 
 The default bind is reachable from your network. `127.0.0.1` is a choice you make, not the starting
 point.
@@ -54,24 +54,24 @@ point.
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_MAX_STEPS` | `24` | `backend/config.py:102` |
-| `TACIT_SUBAGENT_STEPS` | `12` | `backend/config.py:126` |
-| `TACIT_ASSISTANT_STEPS` | `16` | `backend/config.py:131` |
-| `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | `backend/config.py:132` |
-| `TACIT_SUBAGENT_DEPTH` | `1` | `backend/config.py:133` |
-| `TACIT_DELEGATE_MODEL` | session model | `backend/config.py:262`, `:430` |
-| `TACIT_FALLBACK_MODEL` | none | `backend/config.py:446` |
-| `TACIT_TURN_TOKEN_BUDGET` | `0`, no ceiling | `backend/config.py:214` |
-| `TACIT_COST_WARN` | `0.25,0.5,0.75` | `backend/config.py:209` |
-| `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:109` |
-| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:614` |
-| `TACIT_TURN_WORKER` | `process` | `backend/config.py:463` |
+| `TACIT_MAX_STEPS` | `24` | `backend/config.py:133` |
+| `TACIT_SUBAGENT_STEPS` | `12` | `backend/config.py:157` |
+| `TACIT_ASSISTANT_STEPS` | `16` | `backend/config.py:162` |
+| `TACIT_SUBAGENT_RESULT_LIMIT` | `4000` | `backend/config.py:163` |
+| `TACIT_SUBAGENT_DEPTH` | `1` | `backend/config.py:164` |
+| `TACIT_DELEGATE_MODEL` | session model | `backend/config.py:293`, `:461` |
+| `TACIT_FALLBACK_MODEL` | none | `backend/config.py:477` |
+| `TACIT_TURN_TOKEN_BUDGET` | `0`, no ceiling | `backend/config.py:245` |
+| `TACIT_COST_WARN` | `0.25,0.5,0.75` | `backend/config.py:240` |
+| `TACIT_TEMPERATURE` | `0.2` | `backend/config.py:140` |
+| `TACIT_DELIVER_GUARANTEE` | on | `backend/config.py:645` |
+| `TACIT_TURN_WORKER` | `process` | `backend/config.py:494` |
 | `TACIT_WORKER_MAX_S` | `3600` | `backend/turn_worker.py:60` |
 | `TACIT_DISABLE_JOB_OBJECTS` | off | `backend/proctools.py:129` |
-| `TACIT_MANIFEST` | off | `backend/config.py:512` |
-| `TACIT_TURN_POOL` | `12` | `backend/config.py:204` |
-| `TACIT_TERM_POOL` | `8` | `backend/config.py:205` |
-| `TACIT_ARCHIVE_TOOL` | on, pins the archive reader | `backend/config.py:501` |
+| `TACIT_MANIFEST` | off | `backend/config.py:543` |
+| `TACIT_TURN_POOL` | `12` | `backend/config.py:235` |
+| `TACIT_TERM_POOL` | `8` | `backend/config.py:236` |
+| `TACIT_ARCHIVE_TOOL` | on, pins the archive reader | `backend/config.py:532` |
 
 A turn's start, a compaction's summariser call, and terminal commands run on two dedicated pools
 rather than the default executor, which `asyncio.to_thread` shares with git operations and the
@@ -92,36 +92,39 @@ instead of only testing the happy path (`backend/proctools.py:118-130`).
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | `backend/config.py:114` |
-| `TACIT_READ_OUTPUT_LIMIT` | `48000` | `backend/config.py:123` |
-| `TACIT_FETCH_LIMIT` | `6000` | `backend/config.py:267` |
-| `TACIT_BROWSER_TEXT_LIMIT` | `6000` | `backend/config.py:243` |
-| `TACIT_BROWSER_TIMEOUT` | `90` | `backend/config.py:242` |
-| `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | `backend/config.py:244` |
-| `TACIT_SHELL_TIMEOUT` | `180` | `backend/config.py:124` |
-| `TACIT_SHELL_OVERLAP` | `block` | `backend/config.py:591` |
-| `TACIT_SHELL` | bash, or `COMSPEC` | `backend/config.py:27` |
-| `TACIT_PLAYWRIGHT_PATH` | auto-detected | `backend/config.py:219` |
-| `TACIT_SKILL_INDEX_LIMIT` | `24` | `backend/config.py:265` |
+| `TACIT_TOOL_OUTPUT_LIMIT` | `6000` | `backend/config.py:145` |
+| `TACIT_READ_OUTPUT_LIMIT` | `48000` | `backend/config.py:154` |
+| `TACIT_FETCH_LIMIT` | `6000` | `backend/config.py:298` |
+| `TACIT_BROWSER_TEXT_LIMIT` | `6000` | `backend/config.py:274` |
+| `TACIT_BROWSER_TIMEOUT` | `90` | `backend/config.py:273` |
+| `TACIT_BROWSER_SEARCH_TIMEOUT` | `120` | `backend/config.py:275` |
+| `TACIT_SHELL_TIMEOUT` | `180` | `backend/config.py:155` |
+| `TACIT_SHELL_OVERLAP` | `block` | `backend/config.py:622` |
+| `TACIT_SHELL` | bash, or `COMSPEC` | `backend/config.py:58` |
+| `TACIT_PLAYWRIGHT_PATH` | auto-detected | `backend/config.py:250` |
+| `TACIT_SKILL_INDEX_LIMIT` | `24` | `backend/config.py:296` |
 
 `read_file` has its own, much larger ceiling because a file is the one result the agent may have to
-reproduce whole (`backend/config.py:114`, `:123`).
+reproduce whole (`backend/config.py:145`, `:154`).
 
 `TACIT_SHELL` overrides the shell every tool runs through: the sandbox, the terminal panel,
 background jobs and `sudo` commands all run through this one binary with `-c`, so its
 syntax is what commands get. It is resolved once at startup, deliberately set apart from the login shell:
-`fish -c` reads a person's whole `config.fish` on every spawn (`backend/config.py:11-23`), so an
+`fish -c` reads a person's whole `config.fish` on every spawn (`backend/config.py:11-54`), so an
 interactive plugin crash took down agent commands along with it. Left alone, it resolves to bash where
 bash exists and `/bin/sh` where it does not, which is the shell the standing prompt has always
-named. Set it if you want zsh or fish and accept the syntax that goes with them.
+named. Set it to choose a different POSIX syntax such as zsh or dash. On Linux and macOS an
+override that names fish is refused with a warning and bash takes the command: the override
+picks a syntax contract, and fish's `-c` reads the whole interactive config on every spawn -
+the crash class this setting must not re-open.
 
 ### Research
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_RESEARCH_ASPECTS` | `3` | `backend/config.py:245` |
-| `TACIT_RESEARCH_STEPS` | `6` | `backend/config.py:255` |
-| `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:259` |
+| `TACIT_RESEARCH_ASPECTS` | `3` | `backend/config.py:276` |
+| `TACIT_RESEARCH_STEPS` | `6` | `backend/config.py:286` |
+| `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:290` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
 than written out, so the sentence cannot drift away from the caps (`backend/agent.py:786-791`).
@@ -130,28 +133,28 @@ than written out, so the sentence cannot drift away from the caps (`backend/agen
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_COMPACT_AT` | `0` | `backend/config.py:135` |
-| `TACIT_CONTEXT_RESERVE` | `33000` | `backend/config.py:143` |
-| `TACIT_CONTEXT_FILL_FLOOR` | `0.5` | `backend/config.py:149` |
-| `TACIT_COMPACT_TAIL_TOKENS` | `200000`, a backstop | `backend/config.py:159` |
-| `TACIT_COMPACT_TAIL_MIN` | `4` | `backend/config.py:160` |
-| `TACIT_COMPACT_TAIL_MAX` | `40` | `backend/config.py:161` |
-| `TACIT_COMPACT_TAIL_SHARE` | `0.4` | `backend/config.py:166` |
-| `TACIT_COMPACT_PRUNE_KEEP` | `400` | `backend/config.py:169` |
-| `TACIT_COMPACT_PRUNE_MIN` | `1200` | `backend/config.py:170` |
-| `TACIT_SUMMARY_INPUT_MAX` | `160000` | `backend/config.py:178` |
-| `TACIT_COMPACT_KEEP` | `6` | `backend/config.py:179` |
-| `TACIT_COMPACT_MID_TURN` | `1` | `backend/config.py:183` |
-| `TACIT_STORE_COMPACT_FACTOR` | `2.0` | `backend/config.py:195` |
-| `TACIT_CONTEXT_BUDGET` | `120000` | `backend/config.py:103` |
-| `TACIT_CONTEXT_BUDGET_MIN` | `24000` | `backend/config.py:107` |
-| `TACIT_CONTEXT_BUDGET_MAX` | `2000000` | `backend/config.py:108` |
+| `TACIT_COMPACT_AT` | `0` | `backend/config.py:166` |
+| `TACIT_CONTEXT_RESERVE` | `33000` | `backend/config.py:174` |
+| `TACIT_CONTEXT_FILL_FLOOR` | `0.5` | `backend/config.py:180` |
+| `TACIT_COMPACT_TAIL_TOKENS` | `200000`, a backstop | `backend/config.py:190` |
+| `TACIT_COMPACT_TAIL_MIN` | `4` | `backend/config.py:191` |
+| `TACIT_COMPACT_TAIL_MAX` | `40` | `backend/config.py:192` |
+| `TACIT_COMPACT_TAIL_SHARE` | `0.4` | `backend/config.py:197` |
+| `TACIT_COMPACT_PRUNE_KEEP` | `400` | `backend/config.py:200` |
+| `TACIT_COMPACT_PRUNE_MIN` | `1200` | `backend/config.py:201` |
+| `TACIT_SUMMARY_INPUT_MAX` | `160000` | `backend/config.py:209` |
+| `TACIT_COMPACT_KEEP` | `6` | `backend/config.py:210` |
+| `TACIT_COMPACT_MID_TURN` | `1` | `backend/config.py:214` |
+| `TACIT_STORE_COMPACT_FACTOR` | `2.0` | `backend/config.py:226` |
+| `TACIT_CONTEXT_BUDGET` | `120000` | `backend/config.py:134` |
+| `TACIT_CONTEXT_BUDGET_MIN` | `24000` | `backend/config.py:138` |
+| `TACIT_CONTEXT_BUDGET_MAX` | `2000000` | `backend/config.py:139` |
 
 `TACIT_COMPACT_AT` stays at `0` because `0` means "use the reserve model", which is the behavior the
-code argues for at `backend/config.py:142` and `:275-297`. Setting it to a fraction opts out of that
+code argues for at `backend/config.py:173` and `:306-328`. Setting it to a fraction opts out of that
 model deliberately.
 
-The stored transcript's own trigger gets headroom over the wire's (`backend/config.py:185-195`): the
+The stored transcript's own trigger gets headroom over the wire's (`backend/config.py:216-226`): the
 *billed* measure fires at the plain fill target, the *stored* measure at the target times
 `TACIT_STORE_COMPACT_FACTOR`, because a store somewhat over the target makes elision stub rows rather
 than make the request over budget; folding the store at the plain target summarised records whose
@@ -160,7 +163,7 @@ old behaviour.
 
 The tail is sized by `TACIT_COMPACT_TAIL_SHARE` of the fill target, not by the token ceiling: an
 absolute 8,000-token tail bound on every window over 20k tokens and collapsed a 967,000-token
-transcript to a summary plus 8k rows (`backend/config.py:151-158`), which is the loss compaction
+transcript to a summary plus 8k rows (`backend/config.py:182-189`), which is the loss compaction
 exists to prevent. The token ceiling is now only a backstop for a window so small the share would
 swallow it.
 
@@ -168,52 +171,52 @@ swallow it.
 
 | Variable | Default | Read at |
 |---|---|---|
-| `TACIT_SNAPSHOT_MAX_FILE` | 2 MB | `backend/config.py:270` |
-| `TACIT_SNAPSHOT_MAX_FILES` | `3000` | `backend/config.py:271` |
-| `TACIT_PLAN_TASKS` | `4` | `backend/config.py:216` |
-| `TACIT_PLAN_QUESTIONS` | `4` | `backend/config.py:217` |
+| `TACIT_SNAPSHOT_MAX_FILE` | 2 MB | `backend/config.py:301` |
+| `TACIT_SNAPSHOT_MAX_FILES` | `3000` | `backend/config.py:302` |
+| `TACIT_PLAN_TASKS` | `4` | `backend/config.py:247` |
+| `TACIT_PLAN_QUESTIONS` | `4` | `backend/config.py:248` |
 | `TACIT_VCS_TIMEOUT` | `120` | `backend/vcs.py:26` |
 | `TACIT_VCS_NAME` | none | `backend/vcs.py:177` |
 | `TACIT_VCS_EMAIL` | none | `backend/vcs.py:178` |
-| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:1072` |
-| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:1074` |
-| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:1075` |
-| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:1076` |
+| `TACIT_PROMPT_CACHE` | `auto` | `backend/config.py:1103` |
+| `TACIT_ANTHROPIC_MAX_TOKENS` | `8192` | `backend/config.py:1105` |
+| `TACIT_ANTHROPIC_VERSION` | `2023-06-01` | `backend/config.py:1106` |
+| `TACIT_ANTHROPIC_THINKING` | `4096` | `backend/config.py:1107` |
 
 The two git identity variables work only as a pair (`backend/vcs.py:176-180`), and they are read
 before the values stored in **Settings**, not after.
 
 `TACIT_PROMPT_CACHE=auto` marks cache breakpoints only on endpoints known to understand them,
 because an OpenAI-compatible server that has never seen `cache_control` may reject the request
-outright (`backend/config.py:1010-1015`).
+outright (`backend/config.py:1041-1046`).
 
 ### Test and portability hooks
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
-(`backend/config.py:11`, `:40`). They exist because the shell tool's description states the platform
+(`backend/config.py:11`, `:71`). They exist because the shell tool's description states the platform
 it runs on (`backend/agent.py:783-784`), and that sentence has to be testable.
 
 ## prefs.json
 
-Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:55`), written through
-`backend/config.py:598`. These are the keys the backend reads:
+Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:86`), written through
+`backend/config.py:629`. These are the keys the backend reads:
 
 | Key | Read at | Notes |
 |---|---|---|
 | `model` | `backend/routers/api.py:752` | the session default when no ref is given |
 | `thinking` | `backend/routers/api.py:72`, `:778` | reasoning level, written at `:794` |
-| `delegateModel` | `backend/config.py:430` | overridden by `TACIT_DELEGATE_MODEL` |
-| `fallbackModel` | `backend/config.py:446` | the model a session runs on when its own is gone; without it the turn fails and says so |
-| `deliverGuarantee` | `backend/config.py:617` | overridden by `TACIT_DELIVER_GUARANTEE` |
-| `shellOverlap` | `backend/config.py:634-651` | overridden by `TACIT_SHELL_OVERLAP` |
-| `turnSound` | `backend/config.py:467` | on by default |
-| `alertSound` | `backend/config.py:520` | off by default |
-| `reportMode` | `backend/config.py:546` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
-| `allowVersionControl` | `backend/config.py:604` | absent means the agent may not run git |
+| `delegateModel` | `backend/config.py:461` | overridden by `TACIT_DELEGATE_MODEL` |
+| `fallbackModel` | `backend/config.py:477` | the model a session runs on when its own is gone; without it the turn fails and says so |
+| `deliverGuarantee` | `backend/config.py:648` | overridden by `TACIT_DELIVER_GUARANTEE` |
+| `shellOverlap` | `backend/config.py:665-682` | overridden by `TACIT_SHELL_OVERLAP` |
+| `turnSound` | `backend/config.py:498` | on by default |
+| `alertSound` | `backend/config.py:551` | off by default |
+| `reportMode` | `backend/config.py:577` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
+| `allowVersionControl` | `backend/config.py:635` | absent means the agent may not run git |
 | `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
 | `disabledTools` | `backend/agent.py:967-977`, `backend/profiles.py:236` | tool names removed from the registry |
-| `archiveTool` | `backend/config.py:498` | the archive reader's switch; absent means on |
-| `projectRoots` | `backend/config.py:818` | folders the workspace picker offers |
+| `archiveTool` | `backend/config.py:529` | the archive reader's switch; absent means on |
+| `projectRoots` | `backend/config.py:849` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |
 | `memoryBudget` | `backend/memory_store.py:142` | startup memory ceiling in tokens |
 | `memoryBudgetOverride` | `backend/memory_store.py:147` | lifts the 500 ceiling to 100,000 |
@@ -226,8 +229,8 @@ silent.
 
 | File | Written by | Holds |
 |---|---|---|
-| `~/.tacit/models.json` | `backend/config.py:704`, seeded at `:340-341` | providers, models, the default ref |
-| `~/.tacit/.env` | `backend/config.py:54` | API keys, masked in the interface |
+| `~/.tacit/models.json` | `backend/config.py:735`, seeded at `:371-372` | providers, models, the default ref |
+| `~/.tacit/.env` | `backend/config.py:85` | API keys, masked in the interface |
 | `~/.tacit/secrets.json` | `backend/secrets.py:175`, read at `:192` | encrypted values, one per name; the sudo password is the only one today |
 | `~/.tacit/secret.key` | `backend/secrets.py:63` | the key the store is encrypted under, hex, written `0600` |
 | `~/.tacit/capabilities.json` | `backend/providers.py:195`, `:214` | the sandbox, memory and learning selections |

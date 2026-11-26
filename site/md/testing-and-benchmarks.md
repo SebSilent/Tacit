@@ -21,7 +21,7 @@ from it, so tests that believed they were isolated wrote fixture sessions into t
 deliberately excluded, because tests must be able to read those (`:14-15`).
 
 Redirecting a path works because the store re-reads it on every call rather than caching it at import
-(`backend/store.py:9-17`, `backend/config.py:818-823`). A test that redirected `WORKSPACES_DIR` had to
+(`backend/store.py:9-17`, `backend/config.py:849-854`). A test that redirected `WORKSPACES_DIR` had to
 actually redirect it.
 
 ## What the suite holds down
@@ -144,7 +144,7 @@ hashes, never content (`backend/manifest.py:106-131`, `:278-308`). Usage goes th
 `metrics.normalize_usage`, the one parser the live meter and the headless runner already share, so a
 manifest and a benchmark row cannot disagree about what a token is (`backend/metrics.py:42-69`).
 
-Interactive recording is opt-in with `TACIT_MANIFEST=on` (`backend/config.py:505-513`); the turn
+Interactive recording is opt-in with `TACIT_MANIFEST=on` (`backend/config.py:536-544`); the turn
 driver feeds the same event stream it already consumes, in both worker modes
 (`backend/session_runtime.py:722-728`). A headless benchmark run always records, whatever the
 interactive setting says, because a comparison without manifests is exactly the unverifiable claim
@@ -231,7 +231,7 @@ which results were helped by them.
 **The delivery guarantee** finishes a write the turn started and missed, makes it run, and spends the last
 minutes of wall budget landing the artifact, so a failed cell is still a graded artifact
 (`README.md:233-237`). It is on by default and `TACIT_DELIVER_GUARANTEE=0` turns it off
-(`backend/config.py:491-499`). What opens the phase is evidence rather than the prompt: a `write_file` or
+(`backend/config.py:522-530`). What opens the phase is evidence rather than the prompt: a `write_file` or
 `edit_file` call the turn made and did not land. It used to open on a filename appearing in the task text,
 and that guess is not sound, because a name in a prompt can be a session title, an input, a question or an
 order, and only the sentence says which; a turn that wrote nothing and attempted nothing now gets the
@@ -266,6 +266,6 @@ message after a plain assistant used to be rejected by the provider's own shape 
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is
 never paid for and then thrown away, and that mechanic is not part of the delivery switch
-(`README.md:238-239`, `backend/config.py:470-474`).
+(`README.md:238-239`, `backend/config.py:501-505`).
 
 Next: [contributing](CONTRIBUTING.md).

@@ -11,6 +11,37 @@ from pathlib import Path
 OS = os.environ.get("TACIT_OS") or _platform.system()
 
 
+def _fish_refused(override: str) -> bool:
+    """True when the override names fish on POSIX, and fish is refused.
+
+    The CachyOS report that made this function: `fish -c` sources the whole
+    of config.fish on EVERY spawn, so one crashing plugin in a person's
+    interactive setup took down every command the agent ran. The override
+    exists to choose a different COMMAND syntax (zsh, dash, pwsh); naming
+    fish through it re-opens exactly that door - the login shell is a
+    preference, the command interpreter is a contract. Warn once, fall back.
+    """
+    if os.name == "nt":
+        return False
+    if not Path(override).name.lower().startswith("fish"):
+        return False
+    _fish_warned()
+    return True
+
+
+_FISH_WARNED = {"done": False}
+
+
+def _fish_warned() -> None:
+    if not _FISH_WARNED["done"]:
+        _FISH_WARNED["done"] = True
+        sys.stderr.write(
+            "[tacit] TACIT_SHELL points at fish: refused. fish -c reads the "
+            "whole interactive config on every spawn, so a crash there "
+            "would take down every agent command; falling back to bash/sh. "
+            "Use zsh or another POSIX shell to choose a different syntax.\n")
+
+
 def resolve_shell() -> str:
     """The interpreter agent commands actually run under, resolved once at
     import. On POSIX this is deliberate and measured: the login shell is the
@@ -25,7 +56,7 @@ def resolve_shell() -> str:
     accepts the syntax that goes with it; the override wins on every OS.
     """
     override = os.environ.get("TACIT_SHELL", "").strip()
-    if override:
+    if override and not _fish_refused(override):
         return override
     if os.name == "nt":
         return os.environ.get("COMSPEC") or "cmd.exe"

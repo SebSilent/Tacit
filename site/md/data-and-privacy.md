@@ -8,37 +8,37 @@ configured.
 ## Where it lives
 
 `TACIT_USER_HOME` decides where the state directory is looked for, and `TACIT_HOME` moves the state
-directory itself (`backend/config.py:50-51`). The defaults are your home and `~/.tacit`.
+directory itself (`backend/config.py:81-82`). The defaults are your home and `~/.tacit`.
 
 | Path | Declared at | What is in it |
 |---|---|---|
-| `sessions/index.json` | `backend/config.py:57` | one row per session: id, title, model, mode, thinking, project, created, updated |
+| `sessions/index.json` | `backend/config.py:88` | one row per session: id, title, model, mode, thinking, project, created, updated |
 | `sessions/<id>.json` | `backend/store.py:20` | the full transcript of that session |
 | `sessions/deleted.json` | `backend/store.py:342` | the ids you have deleted, newest last, capped at 400 (`backend/store.py:335`). A delete has to outlive the copies of the list that are still holding it: a browser's `localStorage`, and any process that reopens the store. `create()` refuses an id on this list (`backend/store.py:53`) and the registry hands it to the page (`backend/store.py:317-322`) so a stale copy is dropped rather than created back |
-| `prefs.json` | `backend/config.py:55` | interface and behaviour preferences, listed in [configuration](configuration.md) |
-| `models.json` | `backend/config.py:53` | providers, base URLs, model list, the default ref |
-| `.env` | `backend/config.py:54` | API keys |
+| `prefs.json` | `backend/config.py:86` | interface and behaviour preferences, listed in [configuration](configuration.md) |
+| `models.json` | `backend/config.py:84` | providers, base URLs, model list, the default ref |
+| `.env` | `backend/config.py:85` | API keys |
 | `secrets.json` | `backend/secrets.py:175`, read at `:192` | encrypted values, one per name |
 | `secret.key` | `backend/secrets.py:63` | the 32-byte key those values are encrypted under, `0600` |
-| `capabilities.json` | `backend/config.py:84` | the sandbox, memory and learning selections |
-| `profiles.json` | `backend/config.py:82` | your saved profiles and which is active |
-| `mcp.json` | `backend/config.py:81` | MCP servers, allow and deny lists |
+| `capabilities.json` | `backend/config.py:115` | the sandbox, memory and learning selections |
+| `profiles.json` | `backend/config.py:113` | your saved profiles and which is active |
+| `mcp.json` | `backend/config.py:112` | MCP servers, allow and deny lists |
 | `mcp_audit.jsonl` | written at `backend/mcp_registry.py:119`, read at `:133-135` | every external tool call; arguments are summarized to 160 characters (`:125-130`) and an `env` field is redacted (`:115-116`) |
-| `plugins.json` | `backend/config.py:73` | which plugins are enabled |
-| `plugins/` | `backend/config.py:74` | user-installed plugins |
-| `learning.json` | `backend/config.py:86` | proposals as artifacts, bounded at 200 rows (`backend/learning.py:38`) |
-| `memory.db` | `backend/config.py:87` | durable memory, one SQLite file |
-| `skills/` and `knowledge/` | `backend/config.py:62-63` | markdown you or Tacit wrote, read on demand |
-| `evidence.jsonl` | `backend/config.py:64` | citable facts recorded during turns |
-| `workspaces/` | `backend/config.py:61` | one scratch folder per session with no project |
-| `checkpoints/` | `backend/config.py:71` | workspace snapshots, one folder per turn that wrote |
-| `jobs/` | `backend/config.py:91` | one JSON registry row and combined output log per background job, including stopped and exited jobs |
-| `plans/` | `backend/config.py:70` | plan artifacts |
-| `folders.json` | `backend/config.py:83` | the folder list the workspace picker shows |
-| `benchmarks.json` | `backend/config.py:69` | per-model settings; the name predates its current use (`:65-68`) |
-| `github.json` | `backend/config.py:56` | the connected GitHub account |
-| `audit.jsonl` | `backend/config.py:85` | the ledger |
-| `tacit.pid` | `backend/config.py:72` | the server's process id |
+| `plugins.json` | `backend/config.py:104` | which plugins are enabled |
+| `plugins/` | `backend/config.py:105` | user-installed plugins |
+| `learning.json` | `backend/config.py:117` | proposals as artifacts, bounded at 200 rows (`backend/learning.py:38`) |
+| `memory.db` | `backend/config.py:118` | durable memory, one SQLite file |
+| `skills/` and `knowledge/` | `backend/config.py:93-94` | markdown you or Tacit wrote, read on demand |
+| `evidence.jsonl` | `backend/config.py:95` | citable facts recorded during turns |
+| `workspaces/` | `backend/config.py:92` | one scratch folder per session with no project |
+| `checkpoints/` | `backend/config.py:102` | workspace snapshots, one folder per turn that wrote |
+| `jobs/` | `backend/config.py:122` | one JSON registry row and combined output log per background job, including stopped and exited jobs |
+| `plans/` | `backend/config.py:101` | plan artifacts |
+| `folders.json` | `backend/config.py:114` | the folder list the workspace picker shows |
+| `benchmarks.json` | `backend/config.py:100` | per-model settings; the name predates its current use (`:96-99`) |
+| `github.json` | `backend/config.py:87` | the connected GitHub account |
+| `audit.jsonl` | `backend/config.py:116` | the ledger |
+| `tacit.pid` | `backend/config.py:103` | the server's process id |
 
 ## What a session is made of
 
@@ -54,31 +54,31 @@ now ignored: a session is created by the user, not by a mention of an id (`backe
 
 ## Where a session's tools operate
 
-One rule, shared by every caller (`backend/config.py:955-973`):
+One rule, shared by every caller (`backend/config.py:986-1004`):
 
 - a project that exists always wins, because a session with a workdir must never be re-rooted into a
   scratch folder;
 - a project that is named but missing counts as no project, because silently working in the home
   folder is worse than working in a scratch folder and stale paths arrive from stored sessions;
 - only then does the session get `~/.tacit/workspaces/<sanitized id>`, created on demand
-  (`backend/config.py:905-919`).
+  (`backend/config.py:936-950`).
 
 The home directory is not a fallback any more. It used to be, which meant a session with no project,
 or with a project that had since been deleted, read and wrote in your home folder with only a short
-blocklist in the way (`backend/config.py:960-963`). The scratch folder is why
-`WORKSPACES_DIR` exists at all (`backend/config.py:58-60`).
+blocklist in the way (`backend/config.py:991-994`). The scratch folder is why
+`WORKSPACES_DIR` exists at all (`backend/config.py:89-91`).
 
 Session ids are sanitised to alphanumerics, dot, underscore and hyphen, with anything else replaced by
-an underscore and the result capped at 48 characters (`backend/config.py:901-902`).
+an underscore and the result capped at 48 characters (`backend/config.py:932-933`).
 
 ## Deleting
 
 `remove_workspace` deletes one session's scratch folder when the session is removed, because a deleted
 session's files would otherwise sit in `workspaces/` forever: nothing else collects them, and they are
-the thing the model wrote while nobody had chosen a project for it (`backend/config.py:922-945`). It
+the thing the model wrote while nobody had chosen a project for it (`backend/config.py:953-976`). It
 refuses anything that is not a real per-session folder, since an empty id maps to the shared `default`
 and a path outside `WORKSPACES_DIR` is not Tacit's to delete, and it returns false rather than raising,
-because a failed cleanup must not make the delete look like it failed (`backend/config.py:929-945`).
+because a failed cleanup must not make the delete look like it failed (`backend/config.py:960-976`).
 
 The audit ledger is the exception. It is append-only and nothing in it is edited or removed, so the
 interface action that looks like clearing it is a rotation: the file is renamed, kept, and the rotation
@@ -101,7 +101,7 @@ runtime is three packages (`requirements.txt:3-5`). What that buys: the password
 What it does not buy: anything reading both files as this user can decrypt it, and the agent runs as
 this user. Its own file tools are stopped by the name list above, and `run_shell` cannot reach
 `~/.tacit` at all, because a shell without a project is rooted in a scratch folder rather than in your
-home (`backend/config.py:905-919`), so `cat ~/.tacit/secret.key` comes back `outside the project`. A
+home (`backend/config.py:936-950`), so `cat ~/.tacit/secret.key` comes back `outside the project`. A
 process running as your user with no such rule in the way is not stopped by this.
 
 The ledger masks on the way in rather than on the way out, at any depth, and the MCP layer redacts

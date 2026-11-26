@@ -16,7 +16,7 @@ explicitly activates it for a bounded number of turns (`backend/mcp_registry.py:
 
 | File | What it holds |
 |---|---|
-| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:81`, read at `backend/mcp_registry.py:51`, written at `:62`) |
+| `~/.tacit/mcp.json` | servers, allow and deny lists, settings (`backend/config.py:112`, read at `backend/mcp_registry.py:51`, written at `:62`) |
 | `~/.tacit/mcp_audit.jsonl` | every external call, arguments redacted, capped at 500 rows (`backend/mcp_registry.py:14`, `:34`) |
 
 ## The four helpers
@@ -80,8 +80,8 @@ Three rules shape the manager (`backend/plugin_manager.py:4-13`):
 A plugin contributes by defining `tools()` for schemas, `call(name, args, ctx)` to dispatch them, and
 optionally `mcp_servers()` to register external servers (`backend/plugin_manager.py:15-17`). The
 required manifest fields are `id`, `name` and `description` (`:39`). State is `~/.tacit/plugins.json`
-(`backend/config.py:73`, read at `backend/plugin_manager.py:52`, written at `:65`), and user plugins live
-under `~/.tacit/plugins/` (`backend/config.py:74`). Each plugin keeps a log capped at 200 entries
+(`backend/config.py:104`, read at `backend/plugin_manager.py:52`, written at `:65`), and user plugins live
+under `~/.tacit/plugins/` (`backend/config.py:105`). Each plugin keeps a log capped at 200 entries
 (`backend/plugin_manager.py:37`).
 
 Plugin tools are appended to the registry at request time, never baked into the base list, and a failure

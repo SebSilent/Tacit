@@ -31,7 +31,7 @@ switch in **Settings > Memory** decides both.
 
 ## The store
 
-One SQLite file at `~/.tacit/memory.db` (`backend/config.py:87`, opened at
+One SQLite file at `~/.tacit/memory.db` (`backend/config.py:118`, opened at
 `backend/memory_store.py:92`). Four design rules, in the module's own order
 (`backend/memory_store.py:5-14`):
 
@@ -120,11 +120,11 @@ finding, never in deciding (`backend/analyzer.py:22-24`).
 ## Skills and knowledge
 
 Skills are markdown files with optional front matter, read from `~/.tacit/skills` and
-`~/.tacit/knowledge` (`backend/config.py:62-63`, loaded at `backend/skills.py:21-36`). The front matter
+`~/.tacit/knowledge` (`backend/config.py:93-94`, loaded at `backend/skills.py:21-36`). The front matter
 supplies a name and a description; without it the file's stem and its first non-empty line are used
 (`backend/skills.py:6-18`, `:33-34`).
 
-Only the index goes into the prompt, capped at 24 entries (`backend/config.py:238`), and the body is
+Only the index goes into the prompt, capped at 24 entries (`backend/config.py:269`), and the body is
 fetched by the `skill` tool when the model actually wants it (`backend/agent.py:795-801`, `:581-582`). That
 is the lazy-loading rule the cost figures depend on.
 

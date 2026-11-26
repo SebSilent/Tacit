@@ -53,6 +53,26 @@ class TestShellResolution(unittest.TestCase):
             else:
                 os.environ["TACIT_SHELL"] = old
 
+    def test_the_override_refuses_fish_on_posix(self):
+        """The CachyOS door, closed by name: TACIT_SHELL exists to pick a
+        command syntax, and fish's `-c` reads the whole interactive config on
+        every spawn - the exact crash class. On POSIX the override pointing at
+        fish is refused with a warning; bash/sh takes the command."""
+        if os.name == "nt":
+            self.skipTest("fish refusal is the POSIX contract")
+        old = os.environ.get("TACIT_SHELL")
+        os.environ["TACIT_SHELL"] = "/usr/bin/fish"
+        try:
+            resolved = config.resolve_shell()
+        finally:
+            if old is None:
+                os.environ.pop("TACIT_SHELL", None)
+            else:
+                os.environ["TACIT_SHELL"] = old
+        self.assertNotEqual(Path(resolved).name, "fish",
+                            "the override must not re-open the login-shell crash")
+        self.assertIn(Path(resolved).name, ("bash", "sh"), resolved)
+
     def test_shell_kind_names_the_resolved_binary(self):
         self.assertEqual(config.SHELL_KIND, Path(config.SHELL).name or config.OS)
 

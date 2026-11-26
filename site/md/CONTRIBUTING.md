@@ -22,7 +22,7 @@ runner, and Tacit installs neither (`README.md:309-310`).
 | `backend/routers/` | thin HTTP and WebSocket surfaces, one per domain (`backend/main.py:14`) |
 | `backend/ai/` | provider transports and the prompt segments (`backend/ai/prompts.py:9-62`) |
 | `backend/plugins/` | bundled plugins, one file each |
-| `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:48`, `backend/main.py:192`) |
+| `static/` | the frontend, served as-is from `config.STATIC_DIR` (`backend/config.py:79`, `backend/main.py:192`) |
 | `tests/` | the suite, plus `tests/helpers.py` and `tests/fake_mcp_server.py` |
 | `site/` | the hosted website; canonical documentation markdown lives in `site/md/` |
 | `scripts/` | `check_prose.py`, `bump_version.py`, `build_site.py`, `demo_shell.py` (the mock's shell, patched out of `static/index.html`), `make_demo_gif.js` (the README's GIF), the two measurement scripts, and the two doc checkers |
@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:818-823` both exist because a cached path made a redirected test write into the real
+`backend/config.py:849-854` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not
