@@ -17,6 +17,10 @@ from .routers import api, capabilities, chat, hosting, mcp, memory, plugins, pro
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.ensure_home()
+    # Named once at startup, so a machine whose terminal reports some shell
+    # crashing can be checked against the shell commands actually ran: the
+    # sandbox and the terminal panel exec exactly this binary with `-c`.
+    print(f"[tacit] execution shell: {config.SHELL}")
     config.load_env()
     try:
         config.PID_FILE.write_text(str(os.getpid()), encoding="utf-8")

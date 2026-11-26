@@ -384,7 +384,10 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
     out = res.get("stdout") or ""
     if res.get("stderr"):
         out += ("\n[stderr]\n" if out else "") + res["stderr"]
-    body = f"exit code {res.get('code', 0)}\n{out.strip()}"
+    _sig = (sandbox._signal_name(res.get("code"))
+            if res.get("code") not in (0, None) else "")
+    body = (f"exit code {res.get('code', 0)}\n{out.strip()}"
+            + (f"\n(the command died by {_sig})" if _sig else ""))
     if res.get("backend") not in ("", "none"):
         changed = res.get("changed") or {}
         if changed.get("count"):

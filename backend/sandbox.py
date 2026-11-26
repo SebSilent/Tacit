@@ -485,6 +485,34 @@ def _write_stdin(proc, data: str) -> None:
         pass
 
 
+def _signal_name(code) -> str:
+    """The signal a crashed command died by, as a name a person can read.
+
+    subprocess reports a signal death as a NEGATIVE return code (-11), which a
+    tool result renders as "exit code -11" - a number a model and a person both
+    have to decode. A terminal showing `Program '/bin/fish' crashed` beside a
+    command that died by SIGSEGV is the same fact from two sides; naming the
+    signal makes the pairing legible, and `exit code -11` reads as nonsense."""
+    try:
+        n = int(code)
+    except (TypeError, ValueError):
+        return ""
+    import signal
+    if n < 0:
+        # We watched the process die: subprocess reports -signum.
+        signum = -n
+    elif not IS_POSIX or not 128 < n < 165:
+        return ""
+    else:
+        # Through a POSIX shell a signal death arrives as the shell's own
+        # exit code: 128 + signum (bash's convention, inherited by sh).
+        signum = n - 128
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
+
+
 def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None, stop=None) -> dict:
     started = time.time()
     # Elevation is supplied here and nowhere else. This is the one backend that runs the
@@ -546,6 +574,16 @@ def _run_none(cmd: str, root: Path, limit: int, session: str, on_output=None, st
     res["enforced"] = {"timeout": True, "cpu_limit": False, "memory_limit": False,
                        "network": False, "readonly_project": False}
     res["notes"] = ["no isolation: this backend runs commands directly"]
+    sig = _signal_name(code)
+    if sig:
+        # A signal death, not an exit; naming it is the difference between
+        # decoding "-11"/"139" and reading "SIGSEGV". Through a shell the
+        # number is the 128+signum convention, so the wording is honest about
+        # the inference.
+        res["notes"].append(f"the command was killed by {sig}" if code < 0
+                            else f"the command exited {code} - a POSIX shell "
+                                 f"reports signal deaths as 128+signum, so it "
+                                 f"was likely killed by {sig}")
     if sudo_note:
         res["notes"].append(sudo_note)
     audit.record("sandbox_run", session=session, tool="run_shell", backend="none",

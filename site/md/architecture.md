@@ -2,7 +2,7 @@
 
 One Python process serves the app, and a second short-lived process runs each turn. There is no build
 step and no database to install: the backend is FastAPI over plain modules, and the frontend is files
-in `static/` mounted as-is (`backend/config.py:48`, `backend/main.py:175`).
+in `static/` mounted as-is (`backend/config.py:48`, `backend/main.py:179`).
 
 ## The layers
 
@@ -78,19 +78,19 @@ engine by patching it into this process, which a worker subprocess cannot see
 
 ## What the server does at startup
 
-The lifespan block runs in order (`backend/main.py:17-96`):
+The lifespan block runs in order (`backend/main.py:17-100`):
 
-1. create the state directory and load `~/.tacit/.env` (`backend/main.py:19-20`)
-2. write the pid file (`backend/main.py:22`)
+1. create the state directory and load `~/.tacit/.env` (`backend/main.py:19-24`)
+2. write the pid file (`backend/main.py:26`)
 3. sweep orphans before anything else starts, then register this process so `/api/processes` shows the
-   server too (`backend/main.py:25-38`)
-4. sync the learning worker, which is never on the request path (`backend/main.py:39-46`)
-5. start the autoupdater background task (`backend/main.py:47-52`)
+   server too (`backend/main.py:29-42`)
+4. sync the learning worker, which is never on the request path (`backend/main.py:43-50`)
+5. start the autoupdater background task (`backend/main.py:51-56`)
 
 On shutdown every worker this server spawned gets the two-stage stop, and each driver's epilogue is
 given a moment to land, so a restart saves the partial transcript instead of orphaning the children
-(`backend/main.py:54-61`). Then the in-process plan threads are flagged aborted so a snapshot cannot
-claim a plan is still exploring (`:62-70`), the autoupdater task is cancelled (`:71-77`), the analyzer
+(`backend/main.py:58-65`). Then the in-process plan threads are flagged aborted so a snapshot cannot
+claim a plan is still exploring (`:66-74`), the autoupdater task is cancelled (`:75-81`), the analyzer
 thread and every MCP server are stopped (`:78-85`), the pid file is removed only if it still holds this
 pid (`:86-90`), and this process drops its own registry row so the next boot's sweep does not meet a
 dead pid wearing this boot's marker (`:91-96`).
@@ -117,8 +117,8 @@ The same rule is written into the session runtime for the work a start performs,
 summariser call and the spawn, which run in the caller's executor thread and never on the loop
 (`backend/session_runtime.py:28-31`).
 
-Responses above 1024 bytes are gzipped (`backend/main.py:147`), and the static mount serves the
-frontend with no build step (`backend/main.py:175`).
+Responses above 1024 bytes are gzipped (`backend/main.py:151`), and the static mount serves the
+frontend with no build step (`backend/main.py:179`).
 
 ## The agent loop
 
@@ -126,14 +126,14 @@ frontend with no build step (`backend/main.py:175`).
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
 - **Compaction.** `should_compact` decides whether the transcript is over budget, answering
-  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1233-1266`,
-  `stored_tokens` at `backend/agent.py:1224-1230`): a mid-turn compaction shrinks the prompt on
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1235-1268`,
+  `stored_tokens` at `backend/agent.py:1245`): a mid-turn compaction shrinks the prompt on
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
-  between turns (`backend/agent.py:1630-1685`) and `compact_messages` does it inside a growing turn
-  (`backend/agent.py:1765-1812`), which is what `TACIT_COMPACT_MID_TURN` controls
+  between turns (`backend/agent.py:1632-1687`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1767-1814`), which is what `TACIT_COMPACT_MID_TURN` controls
   (`backend/config.py:201-204`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
-  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1682-1731`),
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1684-1733`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
   (`backend/session_runtime.py:567-609`), because a hand compaction that moves neither the meter
@@ -147,7 +147,7 @@ frontend with no build step (`backend/main.py:175`).
   gets its own bounded call count, and bills the caller's pool by reference;
   research shares the clock and can only ever shrink it. A turn whose slice is
   spent refuses the next fan-out with a reason the model can act on
-  (`backend/agent.py:1848-1862`, `:554-574`).
+  (`backend/agent.py:1850-1864`, `:556-576`).
 - **Project context.** `AGENTS.md` and friends are indexed by name and fetched on demand, and
   `backend/project_context.py:50` chooses between `off`, `index` and `inline`, with a 1200-token
   inline budget (`backend/project_context.py:52`).

@@ -36,7 +36,7 @@ including Windows, which is the reason it is offered at all (`backend/sandbox.py
 Nothing is faked to fill that gap. The isolation ladder is stated plainly in the module header
 (`backend/sandbox.py:21-27`), and a run on Windows carries a note saying that this system offers no
 isolation primitive Tacit can use, that the timeout and the change report still apply, and that
-nothing here is pretending otherwise (`backend/sandbox.py:598-601`).
+nothing here is pretending otherwise (`backend/sandbox.py:624-627`).
 
 ## What a run reports back
 
@@ -45,14 +45,14 @@ Every result has the same shape (`backend/sandbox.py:285-296`): `ok`, `backend`,
 `requested`, and `duration_ms`.
 
 `enforced` is computed per run, not per platform: a limit counts as enforced only when the platform
-can apply it and the box asked for it (`backend/sandbox.py:580-589`). `requested` records what the
-settings asked for (`backend/sandbox.py:614-620`), so a reader can compare the two. Where they disagree,
+can apply it and the box asked for it (`backend/sandbox.py:605-615`). `requested` records what the
+settings asked for (`backend/sandbox.py:640-646`), so a reader can compare the two. Where they disagree,
 a note says which guarantee is missing: network not cut off and proxy variables advisory only, the
-project not mountable read-only (`backend/sandbox.py:590-594`), or CPU and memory limits not enforced
-(`:602-605`).
+project not mountable read-only (`backend/sandbox.py:616-620`), or CPU and memory limits not enforced
+(`:628-631`).
 
 `changed` comes from scanning the project root before and after and diffing the two
-(`backend/sandbox.py:604`, `:580-587`). That report is produced whatever the backend, which is why a
+(`backend/sandbox.py:630`, `:608-613`). That report is produced whatever the backend, which is why a
 command that rewrote the tree on Windows still tells you what it rewrote.
 
 ## Timeout and cancellation are enforced, not reported
@@ -78,16 +78,16 @@ with replacement for invalid input, not split into lines (`backend/sandbox.py:31
 chatty stderr from deadlocking a quiet stdout, and a viewer callback cannot stop drainage. All three
 backends use this supervisor (`backend/sandbox.py:273-282`). A container image inspect or pull happens
 before the command and does not stream, but both run under a deadline and the turn's stop flag, so a
-cancel during a pull returns promptly instead of waiting it out (`backend/sandbox.py:700-751`,
-`:819-835`).
+cancel during a pull returns promptly instead of waiting it out (`backend/sandbox.py:726-777`,
+`:845-861`).
 
 A container timeout or cancellation also kills the daemon-side container. The kill is verified by an
 inspect afterwards, not by the kill command's own exit code, and the result says it was killed only
 when the runtime confirms the container is down; otherwise the note reports that the runtime did not
-confirm it (`backend/sandbox.py:775-793`, `:874-879`). The container's name is registered with the
+confirm it (`backend/sandbox.py:799-819`, `:900-905`). The container's name is registered with the
 long-lived parent before the client starts, so a hard worker death leaves a row the parent (or the
 next boot's sweep) can settle by name; an unconfirmed cleanup keeps the row for a retry
-(`backend/sandbox.py:845-870`, `backend/proctools.py:626-696`).
+(`backend/sandbox.py:871-896`, `backend/proctools.py:626-696`).
 
 ## Limits, where they exist
 
@@ -100,11 +100,11 @@ because that probe is the only portable way to cut the network off (`backend/san
 
 The image, the pull policy and the PID ceiling are read from the capability registry rather than the
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
-false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:662-674`). A missing image is
+false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:688-700`). A missing image is
 not fetched unless you allowed it, and the refusal names the runtime and the command to run by hand
-(`backend/sandbox.py:830-841`). `--pids-limit` is passed on the command line
-(`backend/sandbox.py:677-685`). Docker is tried before Podman and both are accepted, because which one
-a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:630-637`).
+(`backend/sandbox.py:856-867`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:703-711`). Docker is tried before Podman and both are accepted, because which one
+a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:655-663`).
 
 ## The container backend, checked against a real daemon
 
@@ -131,9 +131,9 @@ is honoured where the binary exists (`backend/sudo.py:329`), which means Linux a
 
 | Backend | Supplies the saved password | What happens to a `sudo` command there |
 |---|---|---|
-| `none` | yes (`backend/sandbox.py:483-500`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:541-544`) |
-| `tacit-micro` | no (`backend/sandbox.py:606-607`) | fails at once, with a note saying this backend does not supply it |
-| `container` | no (`backend/sandbox.py:880-886`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
+| `none` | yes (`backend/sandbox.py:483-521`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:562-565`) |
+| `tacit-micro` | no (`backend/sandbox.py:584-593`) | fails at once, with a note saying this backend does not supply it |
+| `container` | no (`backend/sandbox.py:906-912`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
 
 Both sandboxed backends leave stdin at `DEVNULL`, so an unanswered `sudo` fails immediately instead of
 hanging until the turn timeout. Failing fast is not the same as being explained, which is why the note
@@ -198,7 +198,7 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:838-842`, `:935-962`, `:3105-3110`), one
+the server checkpoints the workspace (`backend/agent.py:840-844`, `:937-963`, `:3107-3112`), one
 capture per turn rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:403-428`,
@@ -209,6 +209,6 @@ project, because testing absolute parts would skip everything whenever the proje
 folder named `build/` or `checkpoints/` (`backend/extras.py:411-422`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:667-690`).
+person (`backend/agent.py:669-692`).
 
 Next: [data and privacy](data-and-privacy.md).

@@ -124,7 +124,7 @@ named. Set it if you want zsh or fish and accept the syntax that goes with them.
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:259` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
-than written out, so the sentence cannot drift away from the caps (`backend/agent.py:784-789`).
+than written out, so the sentence cannot drift away from the caps (`backend/agent.py:786-791`).
 
 ### Context and compaction
 
@@ -191,7 +191,7 @@ outright (`backend/config.py:1010-1015`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:40`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:762-764`), and that sentence has to be testable.
+it runs on (`backend/agent.py:783-784`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -211,7 +211,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:55`), written through
 | `reportMode` | `backend/config.py:546` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
 | `allowVersionControl` | `backend/config.py:604` | absent means the agent may not run git |
 | `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
-| `disabledTools` | `backend/agent.py:965-975`, `backend/profiles.py:236` | tool names removed from the registry |
+| `disabledTools` | `backend/agent.py:967-977`, `backend/profiles.py:236` | tool names removed from the registry |
 | `archiveTool` | `backend/config.py:498` | the archive reader's switch; absent means on |
 | `projectRoots` | `backend/config.py:818` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |
@@ -240,7 +240,7 @@ silent.
 
 Container settings live in `capabilities.json` rather than in the environment because they are a
 capability choice: `container_image`, `container_auto_pull` and `container_pids_limit` are read at
-`backend/sandbox.py:662-674`.
+`backend/sandbox.py:688-700`.
 
 ## Installer variables
 

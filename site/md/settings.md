@@ -92,7 +92,7 @@ The analyzer runs on a daemon thread named `tacit-analyzer` (`backend/analyzer.p
 
 One switch, four modes: `off` (default), `explicit`, `jit`, `full` (`backend/memory_modes.py:7-13`). The budget is a hard cap on the rendered block, default 120 tokens, and an entry that does not fit is deferred rather than silently dropped. Every entry carries its provenance and is editable, and a pinned entry survives a prune.
 
-`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:475-499`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:490-495`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:496-498`).
+`memory_recall` goes through `memory_modes.recall_for` rather than around it, which is what makes a hit count as used and push its expiry out (`backend/agent.py:475-501`). Under `explicit` and `off` it answers with the rule that applied instead of an empty result the model would read as "no memory" (`backend/agent.py:492-497`), and each retrieval is audited as `memory_retrieval` (`backend/agent.py:498-500`).
 
 ## MCP
 
