@@ -97,14 +97,14 @@ dead pid wearing this boot's marker (`:91-96`).
 
 The orphan sweep identifies children by a command-line marker and by the `TACIT_ROLE` /
 `TACIT_SESSION_ID` pair in their environment, never by the executable name
-(`backend/proctools.py:8-12`, `:769-851`). A dead pid is dropped from the registry; a live pid whose
+(`backend/proctools.py:8-12`, `:791-873`). A dead pid is dropped from the registry; a live pid whose
 command line still proves it is Tacit's is killed as an orphan from a previous crash. Each owning
 process persists its own rows to its own file, so the server and its workers never clobber each
 other's registrations, and a shell row carries the process's birth identity (creation time on
 Windows, `/proc` start time on Linux): a persisted pid is only killed after that identity proves it
-is still the process that was registered, never on a reused pid (`backend/proctools.py:273-298`,
-`:559-606`). When a worker dies, the parent settles the shell groups and containers it registered
-(`backend/turn_worker.py:212-237`, `backend/proctools.py:724-766`).
+is still the process that was registered, never on a reused pid (`backend/proctools.py:295-320`,
+`:581-628`). When a worker dies, the parent settles the shell groups and containers it registered
+(`backend/turn_worker.py:212-237`, `backend/proctools.py:746-788`).
 
 ## Blocking code does not run on the event loop
 

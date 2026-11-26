@@ -231,4 +231,12 @@ def _path_or_none():
         return None
 
 
+def _note_exit() -> None:
+    try:
+        log("server-exit", pid=os.getpid())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 atexit.register(reset)
+atexit.register(_note_exit)  # runs BEFORE reset (LIFO): the note lands

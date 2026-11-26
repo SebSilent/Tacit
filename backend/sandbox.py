@@ -187,8 +187,12 @@ def _wrap(argv: list[str], cwd: str, network: bool, readonly: bool) -> list[str]
     mech = mechanism()
     if mech == "bubblewrap":
         bwrap = _linux_iso()
-        out = [bwrap, "--die-with-parent", "--proc", "/proc", "--dev", "/dev",
-               "--tmpfs", "/tmp"]
+        # --unshare-pid is not a nicety: without it the command sees every
+        # host pid and can signal (kill) the launching shell, the server,
+        # anything the person owns. The pid namespace is what makes
+        # containment mean containment; --proc then shows the private one.
+        out = [bwrap, "--die-with-parent", "--unshare-pid",
+               "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
         for sysdir in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"):
             if os.path.isdir(sysdir):
                 out += ["--ro-bind", sysdir, sysdir]

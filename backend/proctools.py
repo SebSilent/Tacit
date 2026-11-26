@@ -151,6 +151,28 @@ def _assign_job(proc) -> None:
         pass
 
 
+def _dbg_spawn(role, pid, cmd) -> None:
+    try:
+        from . import debuglog
+        text = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
+        try:
+            from .audit import _clean
+            text = _clean(text)
+        except Exception:  # noqa: BLE001
+            pass
+        text = str(text)
+        if len(text) > 180:
+            # Wrappers bury the real command after a "--" separator (bwrap,
+            # sudo); that segment is the part worth naming in the log, so a
+            # crash can be attributed even through the wrapper.
+            idx = text.find(" -- ")
+            text = (text[:70] + " ... " + text[idx:idx + 160]
+                    if idx != -1 else text[:180])
+        debuglog.log("proc-spawn", role=role, pid=int(pid), cmd=text[:260])
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _dbg_signal(site, pid, how, ok, error=""):
     try:
         from . import debuglog
@@ -921,6 +943,7 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
                  pgid=proc.pid if leads_group else None,
                  job=bool(getattr(proc, "_tacit_job", None)) if os.name == "nt" else None)
         _log(f"spawned {role} pid={proc.pid} session={session or '-'}")
+        _dbg_spawn(role, proc.pid, argv if isinstance(argv, str) else argv)
         return proc
     argv = list(argv)
     if not argv:
@@ -936,6 +959,7 @@ def spawn(role: str, argv: list[str], *, session: str = "", cwd: str | None = No
              pgid=proc.pid if leads_group else None,
              job=bool(getattr(proc, "_tacit_job", None)) if os.name == "nt" else None)
     _log(f"spawned {role} pid={proc.pid} session={session or '-'}")
+    _dbg_spawn(role, proc.pid, " ".join(marked))
     return proc
 
 

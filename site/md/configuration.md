@@ -250,7 +250,7 @@ silent.
 
 Container settings live in `capabilities.json` rather than in the environment because they are a
 capability choice: `container_image`, `container_auto_pull` and `container_pids_limit` are read at
-`backend/sandbox.py:688-700`.
+`backend/sandbox.py:692-704`.
 
 ## Installer variables
 

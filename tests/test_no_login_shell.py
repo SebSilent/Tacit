@@ -72,7 +72,7 @@ class TestNoLoginShellSpawn(unittest.TestCase):
                     sites.append(f"{rel}:{i}: {s[:110]}")
         self.assertEqual(
             sites,
-            ["backend/sandbox.py:523: shell=True, on_output=on_output,"],
+            ["backend/sandbox.py:527: shell=True, on_output=on_output,"],
             "a new shell=True call site appeared; route it through the "
             "resolved shell")
 
