@@ -136,7 +136,7 @@ frontend with no build step (`backend/main.py:179`).
   `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1684-1733`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
-  (`backend/session_runtime.py:567-609`), because a hand compaction that moves neither the meter
+  (`backend/session_runtime.py:568-610`), because a hand compaction that moves neither the meter
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).

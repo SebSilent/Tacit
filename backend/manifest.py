@@ -276,10 +276,17 @@ class RunManifest:
 
     # ── completion ──────────────────────────────────────────────────────────
     def finish(self, *, ok: bool | None = None, error: str | None = None,
-               wall_s: float | None = None) -> dict:
-        """Assemble, mask, write. Returns a small summary for the caller's row."""
+               wall_s: float | None = None, status: str | None = None) -> dict:
+        """Assemble, mask, write. Returns a small summary for the caller's row.
+
+        `status` is the P2.1 terminal outcome (completed / cancelled /
+        blocked / budget_exceeded / infrastructure_failed); when the caller
+        passes none, the old ok/error derivation applies."""
         error = error if error is not None else self._last_error
-        if self._cancelled:
+        if status in ("completed", "completed_unverified", "cancelled",
+                      "blocked", "budget_exceeded", "infrastructure_failed"):
+            pass
+        elif self._cancelled:
             status = "cancelled"
         elif ok is False or error:
             status = "error"

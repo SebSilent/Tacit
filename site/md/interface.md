@@ -22,7 +22,7 @@ The folder you opened a session in is fixed for the life of that session. Switch
 
 **Assistant** (right). A second agent that reads the session and is invisible to the first one. Whatever it produces is material you act on: a critique, a plan, a summary, a draft. It has its own goal field, and that goal is the Assistant's alone. It never becomes the main agent's task, and it is not part of the agent's context.
 
-Autonomous mode runs the agent through that pane. After every turn the harness asks the Assistant to read what happened, and the reply's **last fenced block** is the only thing the next agent turn is built from: the next prompt, the single word `CONTINUE` to carry on, or `DONE` to stop the run. A reply with no block ends the run where it stands and the counter says why, because the harness will not send a direction the Assistant did not write. A reply that failed, was stopped, ran out of rounds or left a block unterminated also authorises nothing, even if its partial text contains a complete earlier block (`backend/assistant.py:directive`, `backend/session_runtime.py:293-351`).
+Autonomous mode runs the agent through that pane. After every turn the harness asks the Assistant to read what happened, and the reply's **last fenced block** is the only thing the next agent turn is built from: the next prompt, the single word `CONTINUE` to carry on, or `DONE` to stop the run. A reply with no block ends the run where it stands and the counter says why, because the harness will not send a direction the Assistant did not write. A reply that failed, was stopped, ran out of rounds or left a block unterminated also authorises nothing, even if its partial text contains a complete earlier block (`backend/assistant.py:directive`, `backend/session_runtime.py:294-352`).
 
 ## Snapshots
 
@@ -53,7 +53,7 @@ Cost and context live in Settings, not in a bar above the composer. The meter is
 Compaction is visible while it happens. The meter reads `compacting…` and the composer is disabled for
 the session doing it, so a prompt typed during a fold cannot land in the transcript the fold is
 rewriting (`static/app.js:1224-1231`, refused at `:1128`). The state arrives on the same socket as
-everything else, from `compacting_notice` in `backend/session_runtime.py:532`, and it is cleared when
+everything else, from `compacting_notice` in `backend/session_runtime.py:533`, and it is cleared when
 the fold is written, not when the model answers: a fold that reclaimed nothing clears too. The figure
 the meter shows afterwards is the surviving record, floored at what is actually stored, because the
 number that matters is what the next request will pay.

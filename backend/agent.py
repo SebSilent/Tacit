@@ -2902,7 +2902,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     for i in range(steps):
         if stop is not None and stop.is_set():
             yield {"type": "notify", "message": "stopped", "level": "info"}
-            yield {"type": "done"}
+            yield {"type": "done", "status": "cancelled"}
             return
         # The shared budget's verdict, checked before this round starts: a
         # reservation (this round's model call) is made here, so a turn whose
@@ -2917,7 +2917,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 trace.append({"text": narration if narration else "",
                               "reason": thinking, "tools": step_tools})
             yield from _report()
-            yield {"type": "done"}
+            yield {"type": "done",
+                   "status": "cancelled" if broke == "cancelled" else "budget_exceeded"}
             return
         if steer:
             while steer:
@@ -3028,17 +3029,17 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                         yield ev
         except engine.EngineError as e:
             yield {"type": "error", "message": str(e)}
-            yield {"type": "done"}
+            yield {"type": "done", "status": "infrastructure_failed"}
             return
         except Exception as e:
             # Catch any other exception from the engine stream (e.g., UnicodeError)
             yield {"type": "error", "message": f"engine stream error: {e}"}
-            yield {"type": "done"}
+            yield {"type": "done", "status": "infrastructure_failed"}
             return
 
         if cancelled:
             yield {"type": "notify", "message": "stopped", "level": "info"}
-            yield {"type": "done"}
+            yield {"type": "done", "status": "cancelled"}
             return
 
         if model_used and not nested:
@@ -3125,7 +3126,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 yield from _report()
             elif trace is not None:
                 trace.append({"text": narration, "reason": thinking, "tools": []})
-            yield {"type": "done"}
+            yield {"type": "done", "status": "completed"}
             return
 
         assistant = {"role": "assistant", "content": narration, "tool_calls": [
@@ -3161,7 +3162,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     trace.append({"text": narration, "reason": thinking,
                                   "tools": step_tools})
                 yield {"type": "notify", "message": "stopped", "level": "info"}
-                yield {"type": "done"}
+                yield {"type": "done", "status": "cancelled"}
                 return
             key = (c["name"], _call_identity(args))
             seen = seen_calls.get(key, 0) + 1
@@ -3319,7 +3320,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                                "approach before the next turn.")}
             if trace is not None:
                 trace.append({"text": narration, "reason": thinking, "tools": step_tools})
-            yield {"type": "done"}
+            yield {"type": "done", "status": "blocked"}
             return
         if consecutive_failures >= FAIL_WARN_AFTER and not failures_warned:
             failures_warned = True
@@ -3380,7 +3381,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if trace is not None:
                 trace.append({"text": narration, "reason": thinking, "tools": step_tools})
             yield from _report()
-            yield {"type": "done"}
+            yield {"type": "done", "status": "budget_exceeded"}
             return
 
         # Compact rather than elide. The window cap is a backstop that throws
@@ -3432,7 +3433,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             yield from _report(unfinished=[n for n in pending
                                            if n.rsplit("/", 1)[-1] not in written])
             yield {"type": "notify", "message": f"stopped after {i + 1} steps", "level": "warn"}
-            yield {"type": "done"}
+            yield {"type": "done", "status": "blocked"}
             return
 
     # The step budget ran out while work was still open, so report where it stands.
@@ -3441,4 +3442,4 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                                        if n.rsplit("/", 1)[-1] not in written])
 
     yield {"type": "notify", "message": f"stopped after {steps} steps", "level": "warn"}
-    yield {"type": "done"}
+    yield {"type": "done", "status": "budget_exceeded"}

@@ -115,7 +115,7 @@ to die, and returns an error rather than claiming success if it is still running
 handle first proves the persisted pid is still the process the record registered, by its birth
 identity; a reused pid or a record with no identity is refused, not killed
 (`backend/extras.py:168-196`). The Stop control stops every persisted job belonging to
-that session, without touching another session's jobs (`backend/session_runtime.py:1248-1292`). A
+that session, without touching another session's jobs (`backend/session_runtime.py:1284-1328`). A
 normal server exit stops all remaining jobs (`backend/extras.py:351-375`). Stopped and exited rows
 and logs remain available for later `bg_output` calls; stopping a job which has already exited does
 not claim to have killed it. Finished records and logs are kept for a week and capped at 200, pruned
@@ -125,7 +125,7 @@ on the next start; running jobs are never pruned (`backend/extras.py:281-318`).
 
 `MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:840-844`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:937-963`, `:3107-3112`). `run_shell` is in that set because a command can rewrite
+(`backend/agent.py:937-963`, `:3108-3113`). `run_shell` is in that set because a command can rewrite
 the tree, and the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to
@@ -136,7 +136,7 @@ the person using Tacit (`backend/agent.py:669-692`).
 The same call with the same arguments runs three times in a turn, and after that it is answered from
 cache instead (`backend/agent.py:859-888`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:3362-3372`).
+(`backend/agent.py:3363-3373`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the

@@ -92,7 +92,7 @@ writer, and a session switch, a reconnect or any idle report clears it, so it ca
 turn is using; `openCard` is the record that does (`static/app.js:53`). Adopting "the last assistant bubble"
 instead put a new turn's deltas inside the previous answer, and only a reload drew it correctly, because
 the stored rows were never the problem. The ordering that makes it happen is in the runtime: the session is
-marked busy (`backend/session_runtime.py:982-995`) before the prompt is published (`:1030-1047`), so a view that arms
+marked busy (`backend/session_runtime.py:1014-1031`) before the prompt is published (`:1066-1083`), so a view that arms
 itself on the busy signal is holding the turn that just ended. `tests/test_transcript_card_flow.py` pins
 the structure, for the same reason the listener rule does.
 

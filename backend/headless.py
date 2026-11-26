@@ -179,6 +179,7 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
 
     totals = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0,
               "fresh": 0}
+    done_status = ""
     trace: list[dict] = []
     steps_seen = 0
     tool_calls = 0
@@ -212,6 +213,8 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
                 compactions += 1
             elif kind == "error":
                 error = ev.get("message") or "agent error"
+            elif kind == "done":
+                done_status = ev.get("status") or done_status
             if on_event:
                 on_event(ev)
             if deadline and time.time() > deadline:
@@ -222,7 +225,8 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
     finally:
         store_save(rec)
         man_summary = man.finish(ok=error is None and not timed_out, error=error,
-                                 wall_s=time.time() - started)
+                                 wall_s=time.time() - started,
+                                 status=done_status or None)
         if prev_manifest is None:
             os.environ.pop("TACIT_MANIFEST", None)
         else:

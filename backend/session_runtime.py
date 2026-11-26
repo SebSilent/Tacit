@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import uuid
 
 from . import (agent, assistant, audit, config, extras, manifest, mcp_registry,
                memory_modes, memory_store, metrics, plugin_manager, project_context,
@@ -691,6 +692,22 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     worker = run.get("worker")
     started = time.time()
     terminal = None
+    # P2.1: every event this turn publishes carries the turn id and a
+    # monotonic sequence number, and the run row tracks the machine state.
+    # Exactly one terminal outcome is published, after the transcript and
+    # evidence are persisted - a stream that dies without one gets a
+    # synthetic terminal so a viewer can always tell the turn ended and how.
+    turn_id = run.get("turn_id") or ""
+    seq = [0]
+
+    def pub(ev: dict) -> None:
+        seq[0] += 1
+        bus.publish({**ev, "sid": sid, "turn_id": turn_id, "seq": seq[0]})
+
+    def set_state(name: str) -> None:
+        if run.get("state") != name:
+            run.setdefault("states", []).append(name)
+        run["state"] = name
     # Opt-in evidence: the same event stream this driver already consumes feeds
     # one manifest per run, in both worker modes. Off unless TACIT_MANIFEST says
     # on; a benchmark (headless) records through its own path regardless.
@@ -722,7 +739,7 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
             # person can see what it is doing is a dedicated event.
             if kind in ("text", "reason", "tool_start", "tool_end", "notify") and \
                     (ev.get("subagent") or ev.get("research")):
-                bus.publish({**ev, "type": "delegation_activity", "sid": sid})
+                pub({**ev, "type": "delegation_activity"})
             if kind == "usage":
                 ev = _usage_event(rec, ev.get("usage") or {},
                                   subagent=bool(ev.get("subagent")))
@@ -735,6 +752,7 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                                   f"{token_mod.label(ev.get('saved') or 0)} kept out of "
                                   "this one")}
             elif kind == "compaction_start":
+                set_state("compacting")
                 # The summariser call is in flight inside the worker. The bar
                 # pulses and the composer shuts for this session while it does, so
                 # a person cannot start a second turn against a transcript that is
@@ -768,6 +786,9 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                                   f"chars), written by {summariser_name(ref)}")}
             elif kind == "tool_start":
                 rec["tool_calls"] = int(rec.get("tool_calls") or 0) + 1
+                set_state("tools_running")
+            elif kind in ("text", "reason", "usage"):
+                set_state("model_streaming")
             if kind in ("text", "reason", "usage", "tool_start", "tool_end"):
                 session_state.running(sid)
             # One publish, once. The bus is the single fan-out point: every
@@ -778,12 +799,14 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                 # is what tells a viewer the transcript is complete, and a
                 # viewer that reloads on it reads the store, so the event
                 # must never outrun the write it announces.
-                terminal = {**ev, "sid": sid}
+                status = ev.get("status") or "completed"
+                set_state(status)
+                terminal = {**ev, "sid": sid, "status": status}
                 continue
-            bus.publish({**ev, "sid": sid})
+            pub(ev)
     except Exception as e:  # noqa: BLE001
         last_error = str(e)
-        bus.publish({"type": "error", "message": str(e), "sid": sid})
+        pub({"type": "error", "message": str(e)})
     finally:
         # An orphan is never left behind: a worker still alive after the
         # stream ended abnormally is stopped through the same two-stage path
@@ -837,9 +860,17 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
                 if reclaimed:
                     _lower_context(rec, reclaimed)
         store.save(rec)
-        # Only now may the transcript be called complete.
-        if terminal is not None:
-            bus.publish(terminal)
+        # Only now may the transcript be called complete. A stream that ended
+        # without a terminal event (a killed worker, an EOF that never said
+        # done) gets exactly one synthetic terminal here: P2.1's contract is
+        # that every turn ends in one outcome and one outcome only.
+        if terminal is None:
+            status = "cancelled" if stop.is_set() else "infrastructure_failed"
+            terminal = {"type": "done", "sid": sid, "status": status,
+                        "synthetic": True}
+            set_state(status)
+        seq[0] += 1
+        bus.publish({**terminal, "turn_id": turn_id, "seq": seq[0]})
         # The registry is the turn's own responsibility, not the socket's: a
         # browser that disconnects mid-turn must not mark the session idle
         # while its turn is still running in here.
@@ -856,7 +887,8 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
         if man is not None:
             try:
                 man.finish(ok=terminal is not None and last_error is None,
-                           error=last_error, wall_s=time.time() - started)
+                           error=last_error, wall_s=time.time() - started,
+                           status=(terminal or {}).get("status"))
             except Exception:  # noqa: BLE001
                 pass
         # The autonomous chain runs after the stream is closed, so a cycle that
@@ -986,7 +1018,11 @@ def start_turn(sid: str, rec: dict, text: str, images=None,
         # next worker from a driver thread: the bus needs the server's loop,
         # and a driver thread has no running loop of its own.
         run = {"stop": threading.Event(), "steer": [], "worker": None,
-               "thread": None, "loop": loop}
+               "thread": None, "loop": loop,
+               # P2.1: one id for the whole turn, and the state the machine is
+               # in. queued is implicit (the busy mark refuses a second turn);
+               # starting begins here, the driver advances the rest.
+               "turn_id": uuid.uuid4().hex[:8], "state": "starting"}
         _turns[sid] = run
     # The bus opens before the session is marked busy, so any viewer that can
     # observe busy can also subscribe to the turn behind it.
