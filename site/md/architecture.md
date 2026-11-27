@@ -126,14 +126,14 @@ frontend with no build step (`backend/main.py:183`).
 [tools](tools.md). Three things happen around every turn rather than inside the model call:
 
 - **Compaction.** `should_compact` decides whether the transcript is over budget, answering
-  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1235-1268`,
-  `stored_tokens` at `backend/agent.py:1245`): a mid-turn compaction shrinks the prompt on
+  to the larger of the last billed prompt and the stored record itself (`backend/agent.py:1283-1316`,
+  `stored_tokens` at `backend/agent.py:1293`): a mid-turn compaction shrinks the prompt on
   purpose, so the prompt alone cannot be the measure. `compact_history` writes the summary
-  between turns (`backend/agent.py:1632-1687`) and `compact_messages` does it inside a growing turn
-  (`backend/agent.py:1767-1814`), which is what `TACIT_COMPACT_MID_TURN` controls
+  between turns (`backend/agent.py:1680-1735`) and `compact_messages` does it inside a growing turn
+  (`backend/agent.py:1815-1862`), which is what `TACIT_COMPACT_MID_TURN` controls
   (`backend/config.py:232-235`). A turn runs in its own process while its parent writes the
   transcript, so a note written mid-turn has to cross that boundary or nothing was reclaimed:
-  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1684-1733`),
+  `apply_stored_summary` folds it into the record when the turn ends (`backend/agent.py:1732-1781`),
   keeping a tail at least as wide as the one the worker kept. `compact_now` owns the
   accounting for both the turn start and the forced command
   (`backend/session_runtime.py:568-610`), because a hand compaction that moves neither the meter
@@ -162,7 +162,7 @@ frontend with no build step (`backend/main.py:183`).
   gets its own bounded call count, and bills the caller's pool by reference;
   research shares the clock and can only ever shrink it. A turn whose slice is
   spent refuses the next fan-out with a reason the model can act on
-  (`backend/agent.py:1850-1864`, `:556-576`).
+  (`backend/agent.py:1898-1912`, `:604-624`).
 - **Project context.** `AGENTS.md` and friends are indexed by name and fetched on demand, and
   `backend/project_context.py:50` chooses between `off`, `index` and `inline`, with a 1200-token
   inline budget (`backend/project_context.py:52`).

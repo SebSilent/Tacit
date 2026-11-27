@@ -667,7 +667,9 @@ class ShellCardFacts(unittest.TestCase):
                          {"backend": "none"})
 
     def test_both_loops_carry_the_fields_to_record_and_event(self):
-        self.assertEqual(self.src.count('_card = _shell_card_fields(c["name"], result)'), 2)
+        # P2.4: the card reads the lifted side-channel, not a re-parse of
+        # the result text; the call carries the meta the reader produced.
+        self.assertEqual(self.src.count('_card = _shell_card_fields(c["name"], result, meta=meta)'), 2)
         # Four, not two: each site writes the field into the stored record AND the
         # live event, and the substring appears in both lines. Pinning it at two
         # would fail on a healthy tree.

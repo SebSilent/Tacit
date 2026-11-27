@@ -133,11 +133,18 @@ def _last_line_number(text: str, fallback: int) -> int:
     return fallback
 
 
-def t_list_files(path: str = ".", project: str | None = None, session: str = "") -> str:
+def t_list_files(path: str = ".", project: str | None = None, session: str = "",
+                 meta: dict | None = None) -> str:
     base = _safe(path, project, session=session)
     if base.is_file():
+        if meta is not None:
+            meta.update({"is_error": False, "status": "is_file",
+                         "path": _rel(base, project, session),
+                         "bytes": base.stat().st_size})
         return f"{_rel(base, project, session)} is a file ({base.stat().st_size} bytes)"
     if not base.exists():
+        if meta is not None:
+            meta.update({"is_error": True, "status": "missing", "path": path})
         return f"ERROR: {path} does not exist"
     rows = []
     for c in sorted(base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
@@ -147,25 +154,39 @@ def t_list_files(path: str = ".", project: str | None = None, session: str = "")
         if len(rows) >= MAX_LIST:
             rows.append(f"…(more than {MAX_LIST} entries)")
             break
+    if meta is not None:
+        meta.update({"is_error": False, "status": "listed",
+                     "path": _rel(base, project, session),
+                     "count": len(rows), "truncated": len(rows) > MAX_LIST})
     return "\n".join(rows) or "(empty)"
 
 
 def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | None = None,
-                session: str = "") -> str:
+                session: str = "", meta: dict | None = None) -> str:
     p = _safe(path, project, session=session)
     if not p.exists():
+        if meta is not None:
+            meta.update({"is_error": True, "status": "missing", "path": path})
         return f"ERROR: {path} does not exist"
     if p.is_dir():
+        if meta is not None:
+            meta.update({"is_error": False, "status": "is_dir", "path": path})
         return t_list_files(path, project, session)
     try:
         lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except Exception as e:
+        if meta is not None:
+            meta.update({"is_error": True, "status": "read_error", "path": path})
         return f"ERROR: {e}"
     start = max(0, int(offset or 0))
     if lines and start >= len(lines):
         return (f"ERROR: offset {start} is past the end of {_rel(p, project, session)} "
                 f"({len(lines)} lines)")
     chunk = lines[start:start + max(1, int(limit or 2000))]
+    if meta is not None:
+        meta.update({"is_error": False, "status": "read",
+                     "path": _rel(p, project, session), "offset": start,
+                     "lines_shown": len(chunk), "lines_total": len(lines)})
     body = "\n".join(f"{start + i + 1}\t{ln}" for i, ln in enumerate(chunk))
     clipped = _clip(body, max(200, config.READ_OUTPUT_LIMIT - 96))
     last = _last_line_number(clipped, start + len(chunk))
@@ -175,40 +196,64 @@ def t_read_file(path: str, offset: int = 0, limit: int = 2000, project: str | No
                 f"pass offset={last} for the next {remaining})")
     else:
         tail = f"\n…(lines {start + 1}-{last} of {len(lines)} shown; end of file)"
+    if meta is not None:
+        held = meta.setdefault("lines_shown", len(chunk))
+        meta["clipped"] = bool(len(clipped) < len(body))
+        meta["last_line"] = last
+        if held != len(chunk):
+            meta["lines_shown"] = held  # the clip bit further: say by what
     return clipped + tail
 
 
 def t_write_file(path: str, content: str, project: str | None = None,
-                 session: str = "") -> str:
+                 session: str = "", meta: dict | None = None) -> str:
     p = _safe(path, project, write=True, session=session)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
+    if meta is not None:
+        meta.update({"is_error": False, "status": "written",
+                     "path": _rel(p, project, session), "bytes": len(content)})
     return f"wrote {len(content)} chars to {_rel(p, project, session)}"
 
 
 def t_edit_file(path: str, find: str, replace: str, project: str | None = None,
-                session: str = "") -> str:
+                session: str = "", meta: dict | None = None) -> str:
     p = _safe(path, project, write=True, session=session)
     if not p.exists():
+        if meta is not None:
+            meta.update({"is_error": True, "status": "missing", "path": path})
         return f"ERROR: {path} does not exist"
     text = p.read_text(encoding="utf-8", errors="replace")
     n = text.count(find)
     if n == 0:
+        if meta is not None:
+            meta.update({"is_error": True, "status": "not_found", "path": path})
         return f"ERROR: search text not found in {path}"
     if n > 1:
+        if meta is not None:
+            meta.update({"is_error": True, "status": "ambiguous", "path": path,
+                         "matches": n})
         return f"ERROR: search text appears {n} times in {path}; make it unique"
     p.write_text(text.replace(find, replace), encoding="utf-8")
+    if meta is not None:
+        meta.update({"is_error": False, "status": "edited",
+                     "path": _rel(p, project, session), "replacements": 1})
     return f"edited {_rel(p, project, session)} (1 replacement)"
 
 
-def t_glob_files(pattern: str, project: str | None = None, session: str = "") -> str:
+def t_glob_files(pattern: str, project: str | None = None, session: str = "",
+                 meta: dict | None = None) -> str:
     base = _root(project, session)
     pat = str(pattern or "").strip()
     if not pat:
+        if meta is not None:
+            meta.update({"is_error": True, "status": "bad_pattern"})
         return "ERROR: pattern required"
     try:
         paths = base.glob(pat) if ("/" in pat or "\\" in pat) else base.rglob(pat)
     except (ValueError, OSError) as e:
+        if meta is not None:
+            meta.update({"is_error": True, "status": "bad_pattern"})
         return f"ERROR: bad pattern: {e}"
     hits = []
     try:
@@ -222,6 +267,9 @@ def t_glob_files(pattern: str, project: str | None = None, session: str = "") ->
                 break
     except OSError:
         pass
+    if meta is not None:
+        meta.update({"is_error": False, "status": "matched", "pattern": pat,
+                     "count": len(hits), "truncated": len(hits) >= MAX_LIST})
     if len(hits) >= MAX_LIST:
         return "\n".join(sorted(hits)) + f"\n…(more than {MAX_LIST} matches)"
     return "\n".join(sorted(hits)) or "(no matches)"
@@ -2135,6 +2183,14 @@ def call_tool(name: str, args: dict, ctx: dict, out: dict, call: dict | None = N
         out["result"] = f"ERROR: bad arguments for {name}: {e}"
     except Exception as e:
         out["result"] = f"ERROR: {e}"
+    finally:
+        # P2.4, the one reader at the boundary: facts a tool wrote through
+        # its injected `meta` sit one level up on out; lift them under the
+        # one key every consumer reads, so the loops, the cards and anything
+        # else that cares see the same shape - and a tool that wrote no
+        # facts keeps the text rule it always had.
+        if "meta" in params:
+            _tool_meta(name, out, str(out.get("result") or ""))
 
 
 def _run_parallel(specs: list[tuple], ctx: dict, results: dict):
@@ -2219,7 +2275,28 @@ def _audit_tool(name: str, args: dict, result, failed: bool, ctx: dict) -> None:
                  result_chars=len(str(result or "")))
 
 
-def _shell_card_fields(name: str, result) -> dict:
+def _tool_meta(name: str, out: dict, result: str) -> dict:
+    """The structured result, wherever the side-channel left it.
+
+    Tools that declare the `meta` parameter receive the caller's `out` dict
+    itself and write their facts on it; the streamed path (`run_shell`, run
+    in a worker thread) leaves them one level up. One reader, both shapes,
+    with the text rule as the last resort it already was - so a tool's
+    structured truth wins, and a tool without any keeps the behavior it had
+    before its migration (P2.4 is incremental by design).
+    """
+    m = out.get("meta")
+    if m is None:
+        # Tool-declared facts ride one level up on out; everything except
+        # the plumbing keys is the tool's own truth, whatever its schema.
+        lifted = {k: v for k, v in out.items()
+                  if k not in ("result", "mutation", "meta")}
+        m = lifted if lifted else {"is_error": str(result).startswith("ERROR:")}
+        out["meta"] = m
+    return m
+
+
+def _shell_card_fields(name: str, result, meta: dict | None = None) -> dict:
     """The two facts a run_shell card should show and did not: which sandbox ran the
     command, and how many files it changed on disk.
 
@@ -2234,10 +2311,15 @@ def _shell_card_fields(name: str, result) -> dict:
     """
     if name != "run_shell":
         return {}
-    try:
-        d = json.loads(result) if isinstance(result, str) else result
-    except Exception:  # noqa: BLE001
-        return {}
+    # The facts come from the structured side-channel when it ran; the old
+    # result-text parse stays as the fallback so a path that never lifted
+    # its keys behaves exactly as before.
+    d = meta if isinstance(meta, dict) and meta else None
+    if d is None:
+        try:
+            d = json.loads(result) if isinstance(result, str) else result
+        except Exception:  # noqa: BLE001
+            return {}
     if not isinstance(d, dict):
         return {}
     fields: dict = {}
@@ -2773,10 +2855,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 for p in call_tool(c["name"], args, ctx, out, c):
                     yield p
             result = out.get("result", "ERROR: the tool produced no result")
-            meta = out.get("meta")
-            if meta is None:
-                meta = {"is_error": str(result).startswith("ERROR:")}
-                out["meta"] = meta
+            meta = _tool_meta(c["name"], out, result)
             failed = bool(meta.get("is_error"))
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             # The same evidence rule the main loop applies: a real execution of
@@ -2811,7 +2890,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             _ms = int(round((time.monotonic() - _t0) * 1000))
             # `backend`/`changed` ride the same path as `elapsed_ms`: onto the stored
             # record (so a reload keeps them) and onto the live event.
-            _card = _shell_card_fields(c["name"], result)
+            _card = _shell_card_fields(c["name"], result, meta=meta)
             if out.get("mutation"):
                 _card["mutation"] = out["mutation"]
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
@@ -3307,12 +3386,10 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                 blocked_run = 0
                 _ms = int(round((time.monotonic() - _t0) * 1000))
             result = out.get("result", "ERROR: the tool produced no result")
-            meta = out.get("meta")
-            if meta is None:
-                # Tools without a structured side-channel keep the text rule
-                # until their migration (P2.4 is incremental by design).
-                meta = {"is_error": str(result).startswith("ERROR:")}
-                out["meta"] = meta
+            # Tools without a structured side-channel keep the text rule
+            # as the last resort (P2.4 is incremental by design); the lifted
+            # side-channel wins whenever a tool wrote its facts.
+            meta = _tool_meta(c["name"], out, result)
             failed = bool(meta.get("is_error"))
             call_cache[key] = {"result": result, "meta": meta}
             # A mutation invalidates the cache: no cached answer may outlive the
@@ -3381,7 +3458,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # backend/changed ride the same path as elapsed_ms: onto the stored
             # record, so a reload keeps them, and onto the live event, so the card
             # can say what ran the command while it is still running.
-            _card = _shell_card_fields(c["name"], result)
+            _card = _shell_card_fields(c["name"], result, meta=meta)
             if out.get("mutation"):
                 _card["mutation"] = out["mutation"]
             step_tools.append({"id": c["id"], "name": c["name"], "args": args,
