@@ -2650,9 +2650,16 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         schemas = [t for t in tools if t["function"]["name"] in SALVAGE_TOOLS]
         if not schemas or chat:
             return
-        ask = windowed(messages + [{"role": "user",
-                                    "content": (guidance.verify(names) if run_check
-                                                else guidance.salvage(names))}], budget)
+        extra = [{"role": "user",
+                  "content": (guidance.verify(names) if run_check
+                              else guidance.salvage(names))}]
+        if capsule_on:
+            ask = _capsule.view(caps.get("standing"), caps["goal"],
+                                caps.get("state") or "",
+                                messages[caps["tail_start"]:],
+                                int(budget * 0.65), extra_user=extra)
+        else:
+            ask = windowed(messages + extra, budget)
         got: list[str] = []
         why: list[str] = []
         calls: list = []
@@ -2854,8 +2861,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     break
             if not closing:
                 return
-        ask = windowed(messages + [{"role": "user", "content": guidance.closing()}],
-                       budget)
+        extra = [{"role": "user", "content": guidance.closing()}]
+        if capsule_on:
+            ask = _capsule.view(caps.get("standing"), caps["goal"],
+                                caps.get("state") or "",
+                                messages[caps["tail_start"]:],
+                                int(budget * 0.65), extra_user=extra)
+        else:
+            ask = windowed(messages + extra, budget)
         got: list[str] = []
         why: list[str] = []
         try:
@@ -2894,6 +2907,24 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         if trace is not None:
             trace.append({"text": body, "reason": clean_reason("".join(why)),
                           "tools": []})
+    # T1 (PLAN 21): small-context ("fresh call") mode. Chosen here, before
+    # the loop, from the model's real window; never for chat turns, sub-agents
+    # or nested runs, whose prompts are already small and whose callers own the
+    # rules. In this mode every request is a fresh briefing - standing prompt,
+    # harness-tracked capsule, the goal, the last step clipped, one action
+    # request - and the transcript itself is never sent.
+    capsule_on = (not chat and not nested and depth == 0
+                  and config.small_context_mode(window))
+    _capsule = None
+    caps: dict = {"tail_start": len(messages), "goal": "", "loaded": {}}
+    if capsule_on:
+        from . import context_capsule as capsule
+        _capsule = capsule
+        caps["goal"] = capsule.goal_of(messages)
+        caps["loaded"] = capsule.load(session) if session else {}
+        caps["standing"] = (messages[0]
+                            if messages and messages[0].get("role") == "system"
+                            else None)
     # The project context is read once at the start of a task, not on every
     # turn. Repeating it spends the window on advice the model already followed, so
     # discovery is only offered while the transcript holds no assistant work.
@@ -2939,16 +2970,41 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         step_reason: list[str] = []
         step_errors: list = []
         try:
-            ctx_msgs = windowed(messages, budget)
+            if capsule_on:
+                # The fresh briefing: tail is whatever this loop appended since
+                # the last briefing, so steers land as user turns and complete
+                # assistant/tool pairs ride along. The capsule file is saved on
+                # every briefing: a turn that dies mid-task leaves its state
+                # behind instead of a shrug.
+                tail = messages[caps["tail_start"]:]
+                caps["tail_start"] = len(messages)
+                _state = _capsule.state_text(
+                    written=sorted(written), pending=sorted(pending),
+                    verified=bool(evidence["verified"]),
+                    last_error=(last_errors[-1][1] if last_errors else ""),
+                    calls_left=work.calls_left, steps_left=steps - i,
+                    seconds_left=(max(0, int(deadline - time.time()))
+                                  if deadline else None),
+                    loaded=caps["loaded"])
+                caps["state"] = _state
+                _capsule.save(session, written=written, pending=pending,
+                              verified=bool(evidence["verified"]))
+                ctx_msgs = _capsule.view(
+                    caps.get("standing"), caps["goal"], _state, tail,
+                    budget_chars=int(budget * 0.65))
+            else:
+                ctx_msgs = windowed(messages, budget)
             # Only in the last few steps, and only on something the harness can see: this turn has
             # put nothing on disk. It does not claim a file is owed, because it cannot know that,
             # and it says so in the block itself. A turn that already wrote something is not told
             # to write one.
             nothing_written = steps - i <= 3 and not written
-            block = guidance.for_step(step=i, steps=steps, errors=last_errors,
-                                      repeated=repeats, nothing_written=nothing_written,
-                                      first=(i == 0 and not has_prior_work),
-                                      project=bool(project) and not has_instructions, previous=last_block)
+            block = ("" if capsule_on else guidance.for_step(
+                step=i, steps=steps, errors=last_errors,
+                repeated=repeats, nothing_written=nothing_written,
+                first=(i == 0 and not has_prior_work),
+                project=bool(project) and not has_instructions,
+                previous=last_block))
             if block:
                 # Appended at the point of use instead of folded into the standing
                 # prompt, so the cached prefix stays intact and the block is only
@@ -2960,7 +3016,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # plan_like tells a no-call step to act. Unstored, point-of-use, and
             # gated on the same guidance switch as every other block.
             if (narration_over and not narration_nudged and guidance.enabled()
-                    and not chat and not nested and depth == 0):
+                    and not chat and not nested and depth == 0
+                    and not capsule_on):
                 ctx_msgs = ctx_msgs + [{"role": "system", "content": guidance.narrating()}]
                 narration_nudged = True
             # The task list is the one standing block that changes *during* a turn.
@@ -2972,7 +3029,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # appended at the point of use, like the project block: the cached
             # prefix stays intact, an empty list costs nothing, and a turn that
             # never uses the plugin pays for nothing at all.
-            if not chat and session:
+            if not chat and session and not capsule_on:
                 live_tasks = _live_task_block(session)
                 if live_tasks:
                     ctx_msgs = ctx_msgs + [{"role": "system", "content": live_tasks}]
@@ -2980,7 +3037,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # checked the deadline between events and simply abandoned the turn, so a cell with
             # twelve turns of real work in it ended with nothing on disk and no credit at all.
             left = (deadline - time.time()) if deadline else None
-            if guarantee and left is not None and left <= guidance.LATE_S:
+            if (guarantee and not capsule_on and left is not None
+                    and left <= guidance.LATE_S):
                 ctx_msgs = ctx_msgs + [{"role": "system",
                                        "content": guidance.time_left(left)}]
             # Late enough that another probe is not affordable, early enough that a file can still
@@ -3045,6 +3103,14 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             yield {"type": "done", "status": "cancelled"}
             return
 
+        if capsule_on and len(calls) > 1:
+            # Micro-steps: one action per call. A tiny model that batches five
+            # calls usually means five half-thoughts; the first is the one it
+            # committed to, and the transcript keeps the protocol valid.
+            yield {"type": "notify", "level": "info",
+                   "message": (f"small-context mode: kept the first of "
+                               f"{len(calls)} tool calls")}
+            calls = calls[:1]
         if model_used and not nested:
             yield {"type": "state_delta", "model": model_used["ref"]}
 
@@ -3093,7 +3159,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             # A step that announces intent and runs nothing is deliberation, not
             # progress. It gets one directive to act and another chance, which is
             # how the loop stops describing work it was supposed to be doing.
-            if (not chat and tools and not nested and depth == 0
+            if (not chat and tools and not nested and depth == 0 and not capsule_on
                     and guidance.plan_like(narration)
                     and forced < 2 and i + 1 < steps):
                 forced += 1
@@ -3358,7 +3424,8 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # The trigger is the absence of evidence rather than the presence of a guessed name: this
         # turn has put nothing on disk. That is the whole of what the harness knows, the message
         # says as much, and it invites the agent to discard it when the task owed no file.
-        if guarantee and not written and not chat and not nested and depth == 0:
+        if (guarantee and not written and not chat and not nested
+                and depth == 0 and not capsule_on):
             # Two triggers, because a turn can run out on either clock. 40% of the steps is the
             # earliest the nudge pays for itself (a real feal run wrote attack.py only after the
             # nudge at 15/30 and then had to be cut short), and half the wall budget left catches
@@ -3408,7 +3475,7 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
         # information away; a summary keeps it. Doing this mid-turn is what stops
         # a long investigation from growing until the backstop is all that is left.
         if (not chat and config.COMPACT_MID_TURN and compactions < 3
-                and wire_chars(messages) > budget):
+                and not capsule_on and wire_chars(messages) > budget):
             # Announced before the summariser is called, not after. A mid-turn
             # compaction is a model call that can take seconds, and "compacting"
             # is only worth showing while it is still true.

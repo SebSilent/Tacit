@@ -181,7 +181,7 @@ actually supports.
 
 The last row matters most: a server that has never seen `cache_control` may reject the body outright, so
 nothing is added there. A rejection is retried once without the markers before any event streams
-(`backend/config.py:1098-1103`). One measured run on an OpenAI-compatible endpoint reported **71.1%** of
+(`backend/config.py:1122-1127`). One measured run on an OpenAI-compatible endpoint reported **71.1%** of
 prompt tokens served from cache.
 
 ---
@@ -232,7 +232,7 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:634-649`, `backend/agent.py:896-2639`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:658-673`, `backend/agent.py:896-2639`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four

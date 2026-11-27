@@ -7,7 +7,7 @@ Nine tabs, four of them visible until you ask for the rest. Every one of them wr
 | **General** | Profile selector, project roots, permissions, the fallback model, the Interface section with both sound switches, their audition button and transcript density, server, updater, Restart server | `prefs.json`, `.env`, and this browser's `localStorage` for density (`static/app.js:115-122`) |
 | **Providers** | Endpoints, keys, per-model capabilities | `models.json`, `.env` |
 | **Skills & Tools** | Skills, knowledge, the tool list with a cost figure per tool | `~/.tacit/skills/`, `~/.tacit/knowledge/`, `prefs.json` |
-| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones; Report mode, with the view control beside it | theme in this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`); Report mode in `prefs.json` (`backend/config.py:577`), because it changes what the agent is told |
+| **Appearance** | Theme, grouped by tone so a light theme can be picked without reading the dark ones; Report mode, with the view control beside it | theme in this browser's `localStorage` (`tacit.theme`), not the server (`static/harness.js:104-111`); Report mode in `prefs.json` (`backend/config.py:601`), because it changes what the agent is told |
 | **Capabilities** | Sandbox backend, container image, PID ceiling, turn timeout | `capabilities.json` |
 | **Learning** | The mode selector, the proposal queue, the analyzer | `learning.json` (`backend/config.py:117`) |
 | **MCP** | Servers, allow and deny lists, Direct MCP, the audit log | `~/.tacit/mcp.json`, `mcp_audit.jsonl` |
@@ -22,7 +22,7 @@ Five of the optional systems default to off, and the code is the source of truth
 
 | System | Default off | In |
 |---|---|---|
-| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:573` |
+| Version control tools | `allowVersionControl` absent from `prefs.json` | `backend/config.py:597` |
 | Sudo elevation | `sudoEnabled` absent from `prefs.json`, and no password stored | `backend/sudo.py:341` |
 | Plugins | empty `enabled` list | `backend/plugin_manager.py:55` |
 | Learning | `mode = "learn-off"` | `backend/providers.py:30` |
@@ -60,7 +60,7 @@ something else, at that model's cost, quality and context window, and the transc
 about it. That substitution is gone. Now a session whose model is missing runs on the model you
 chose here, and with no choice it stops and names what it could not find
 (`backend/ai/engine.py:42-57`). The value is saved as `fallbackModel` in `prefs.json`
-(`backend/routers/api.py:898-912`) and read by `backend/config.py:437-450`, where
+(`backend/routers/api.py:898-912`) and read by `backend/config.py:461-474`, where
 `TACIT_FALLBACK_MODEL` outranks it. A ref that is stored but no longer in the registry is still shown,
 labelled `not in the registry`, because a picker that reports only what would resolve keeps the broken
 value invisible (`static/platform.js:248-254`). The compaction summariser is not nominatable and has

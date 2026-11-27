@@ -79,7 +79,7 @@ worker subprocess and cancellation is cooperative before it is forced
 subprocess and will tell you.
 
 **State paths are re-read, not cached at import.** `backend/store.py:9-17` and
-`backend/config.py:849-854` both exist because a cached path made a redirected test write into the real
+`backend/config.py:873-878` both exist because a cached path made a redirected test write into the real
 `~/.tacit` (`tests/helpers.py:9-13`).
 
 **The transcript renderer uses one delegated listener per surface.** Tool cards and message rows must not
@@ -92,7 +92,7 @@ writer, and a session switch, a reconnect or any idle report clears it, so it ca
 turn is using; `openCard` is the record that does (`static/app.js:53`). Adopting "the last assistant bubble"
 instead put a new turn's deltas inside the previous answer, and only a reload drew it correctly, because
 the stored rows were never the problem. The ordering that makes it happen is in the runtime: the session is
-marked busy (`backend/session_runtime.py:1083-1104`) before the prompt is published (`:1139-1156`), so a view that arms
+marked busy (`backend/session_runtime.py:1086-1107`) before the prompt is published (`:1142-1159`), so a view that arms
 itself on the busy signal is holding the turn that just ended. `tests/test_transcript_card_flow.py` pins
 the structure, for the same reason the listener rule does.
 

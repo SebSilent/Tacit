@@ -324,6 +324,30 @@ SNAPSHOT_MAX_FILES = int(os.environ.get("TACIT_SNAPSHOT_MAX_FILES", "3000"))
 
 
 
+SMALL_CONTEXT_THRESHOLD = int(os.environ.get("TACIT_SMALL_CONTEXT_THRESHOLD")
+                             or 16384)
+
+
+def small_context_mode(window: int = 0, *, chat: bool = False) -> bool:
+    """T1 (PLAN 21): should this turn run in small-context ("fresh call") mode.
+
+    `auto` is the default and turns the mode on for models the window is at or
+    under SMALL_CONTEXT_THRESHOLD; TACIT_SMALL_CONTEXT=on/off overrides for
+    headless runs and sessions alike. Chat turns are exempt: a conversation is
+    already its own fresh session, and the mode exists for executor work.
+    """
+    if chat:
+        return False
+    raw = str(os.environ.get("TACIT_SMALL_CONTEXT") or "").strip().lower()
+    if raw in ("on", "1", "true", "yes"):
+        return True
+    if raw in ("off", "0", "false", "no"):
+        return False
+    return bool(window and window <= SMALL_CONTEXT_THRESHOLD)
+
+
+
+
 def context_fill_target(window: int) -> int:
     """How many tokens of conversation to allow before compacting.
 

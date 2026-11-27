@@ -74,7 +74,7 @@ a dead parent from leaving a live worker behind.
 
 `TACIT_TURN_WORKER=thread` restores the in-process path. It exists for the tests that fake the model
 engine by patching it into this process, which a worker subprocess cannot see
-(`backend/turn_worker.py:29-31`, `backend/config.py:547-562`).
+(`backend/turn_worker.py:29-31`, `backend/config.py:571-586`).
 
 ## What the server does at startup
 
@@ -140,6 +140,21 @@ frontend with no build step (`backend/main.py:183`).
   nor the ledger leaves the bar disagreeing with the record it describes.
 - **The repeat guard and the delivery guarantee**, described in [tools](tools.md) and
   [testing and benchmarks](testing-and-benchmarks.md).
+- **Small-context mode.** A tiny window is treated as a throughput limit rather than a
+  memory limit, so a mode exists that stops using the transcript as the state: chosen for
+  models at or under
+  `SMALL_CONTEXT_THRESHOLD` (16384 tokens by default, `TACIT_SMALL_CONTEXT` overrides),
+  every request becomes a fresh briefing - the standing prompt, a harness-tracked capsule
+  whose state is written and updated deterministically from writes, failed attempts,
+  verified runs and the budget (`backend/context_capsule.py:60-90`), the goal as the user
+  stated it, at most the previous step clipped, and one action request that asks for exactly
+  one tool call or `DONE`. The view fits the per-call ceiling of 65% of the window by
+  dropping the oldest tail rows first and tightening the goal, never the capsule
+  (`backend/context_capsule.py:116-152`); mid-turn compaction, plan-detection forcing and
+  delivery nagging are all switched off because the capsule replaces them, and a task-capsule
+  file under the session's workspace carries artifacts and verification across turns
+  (`backend/context_capsule.py:157-195`), so a second turn resumes from the file instead of
+  the dead turn's transcript. The manifest records which mode ran.
 - **One shared work budget** (`backend/budget.py`) is what stops a fan-out from
   minting money: a turn's `WorkBudget` carries a model-call allowance, a token
   pool, a children slice, the shared deadline and the cancellation event, and
@@ -155,10 +170,10 @@ frontend with no build step (`backend/main.py:183`).
 ## Reasoning levels
 
 Levels are passed through under the provider's own names where it has them, and the table that maps
-them is `REASONING_EFFORT` (`backend/config.py:1092-1095`). One translation belongs to Tacit and it is
+them is `REASONING_EFFORT` (`backend/config.py:1116-1119`). One translation belongs to Tacit and it is
 the one that was wrong: `off` must send a value that actually turns thinking off, because sending
 nothing leaves thinking on. That was measured on a live endpoint, where every named effort produced
 1.5k to 1.8k characters of reasoning while `none` and `off` produced zero
-(`backend/config.py:1090-1091`).
+(`backend/config.py:1114-1115`).
 
 Next: [cost and profiles](cost-and-profiles.md).

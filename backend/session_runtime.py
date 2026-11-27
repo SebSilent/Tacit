@@ -723,7 +723,10 @@ def _drive_turn(sid: str, rec: dict, messages: list[dict], *, project, ref, chat
     if config.manifest_mode() == "on":
         man = manifest.RunManifest(
             session=sid, model=ref or "", project=project or "", kind="interactive",
-            prompt_text=str((messages[0].get("content") if messages else "") or ""))
+            prompt_text=str((messages[0].get("content") if messages else "") or ""),
+            context_mode=("small" if config.small_context_mode(
+                int((config.resolve_model(ref) or {}).get("contextWindow") or 0))
+            else "standard"))
         run["manifest"] = man
     last_error = None
     # A compaction that ran inside the worker, held for the epilogue: the stored

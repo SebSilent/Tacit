@@ -174,7 +174,11 @@ def run(instruction: str, workdir: str, ref: str, *, max_steps: int | None = Non
     os.environ["TACIT_MANIFEST"] = "on"
     man = manifest.RunManifest(session=rec["id"], model=ref, project=workdir,
                                kind="benchmark", profile=profile or "", reasoning=level,
-                               prompt_text=messages[0]["content"], max_steps=max_steps)
+                               prompt_text=messages[0]["content"], max_steps=max_steps,
+                               context_mode=("small" if config.small_context_mode(
+                                   int((config.resolve_model(ref) or {})
+                                       .get("contextWindow") or 0))
+                               else "standard"))
     man_summary: dict = {}
 
     totals = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0,

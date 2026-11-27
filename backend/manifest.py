@@ -146,7 +146,7 @@ class RunManifest:
 
     def __init__(self, *, session: str, model: str, project: str = "",
                  kind: str = "interactive", profile: str = "", reasoning: str = "",
-                 prompt_text: str = "", max_steps=None):
+                 prompt_text: str = "", max_steps=None, context_mode: str = ""):
         self.id = uuid.uuid4().hex[:12]
         self._pending: dict = {}
         self._totals = {"input": 0, "output": 0, "total": 0,
@@ -167,6 +167,7 @@ class RunManifest:
             "schema_version": SCHEMA_VERSION,
             "id": self.id,
             "kind": kind,
+            "context_mode": str(context_mode or ""),
             "session": str(session or ""),
             "started": round(time.time(), 3),
             "tacit_version": version,
