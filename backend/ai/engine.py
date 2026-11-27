@@ -39,6 +39,68 @@ class EngineError(RuntimeError):
         self.body = body
 
 
+# The message-array invariant, enforced here at the transport boundary. A
+# llama.cpp server running a `{%- if not loop.first %}{{- raise_exception(
+# 'System message must be at the beginning.') }}` template answers HTTP 500 on
+# POSITION alone: any system message at index > 0, or a second one anywhere,
+# kills the whole request before the model is consulted, and the native
+# Messages API takes system content only as a top-level parameter. The harness
+# legitimately appends system rows mid-conversation (step guidance, task
+# strips, compaction digests), so the payload is normalized here where every
+# caller - turn loop, summariser, Assistant, evaluator - gets it for free,
+# rather than each sender remembering.
+MISPLACED_SYSTEM = "System message must be at the beginning."
+_ALLOWED_ROLES = frozenset({"system", "user", "assistant", "tool"})
+
+
+def normalize_messages(messages) -> list[dict]:
+    """At most one system message, at index 0, every role one of the four.
+
+    All system content is collapsed into one row at position 0: fragments keep
+    their arrival order, joined with blank lines, identical fragments deduped.
+    Non-system rows keep their relative order after it, tool rows included -
+    the pairing between an assistant tool_calls row and its tool answers is
+    untouched, because the invariant is about position, not shape. A `developer`
+    row maps to `system` (the server rejects that role outright); any other
+    unknown role is carried as a user turn instead of being dropped and instead
+    of costing a round trip that dies at the renderer.
+    """
+    frags: list[str] = []
+    seen: set[str] = set()
+    rest: list[dict] = []
+    for m in (messages or []):
+        if not isinstance(m, dict):
+            m = {"role": "user", "content": str(m or "")}
+        role = str(m.get("role") or "").strip().lower()
+        if role == "developer":
+            role = "system"
+        if role not in _ALLOWED_ROLES:
+            role = "user"
+        if role == "system":
+            text = m.get("content")
+            if not isinstance(text, str):
+                text = str(text or "")
+            text = text.strip()
+            if text and text not in seen:
+                seen.add(text)
+                frags.append(text)
+            continue
+        rest.append({**m, "role": role})
+    out: list[dict] = []
+    if frags:
+        out.append({"role": "system", "content": "\n\n".join(frags)})
+    out.extend(rest)
+    return out
+
+
+def _pre(messages) -> list[dict]:
+    """Normalize and refuse an empty array before any socket is opened."""
+    out = normalize_messages(messages)
+    if not out:
+        raise EngineError("No messages provided.", 0, "")
+    return out
+
+
 def _target(ref: str | None):
     m = config.resolve_model(ref)
     if not m:
@@ -117,6 +179,7 @@ def chat(messages: list[dict], *, ref: str | None = None, tools=None,
     A turn's own calls leave both unset and get the model's default and TIMEOUT.
     """
     model = _target(ref)
+    messages = _pre(messages)
     if anthropic.flavour(model) == "anthropic":
         return _chat_anthropic(model, messages, tools, temperature, max_tokens,
                                reasoning_effort, timeout)
@@ -129,8 +192,28 @@ def chat(messages: list[dict], *, ref: str | None = None, tools=None,
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPStatusError as e:
-        raise EngineError(f"HTTP {e.response.status_code}: {e.response.text[:400]}",
-                          e.response.status_code, e.response.text[:400]) from e
+        # Do not blindly retry a 500: the same payload fails identically and a
+        # loop only burns tokens. This one marker is different in one way: the
+        # payload is at fault and the normalizer exists. Resend once, then
+        # surface - the EngineError carries the server's answer either way.
+        if e.response.status_code == 500 and MISPLACED_SYSTEM in str(e.response.text or ""):
+            try:
+                with httpx.Client(timeout=timeout or TIMEOUT) as client:
+                    r = client.post(url, headers=_headers(model), json=_payload(
+                        model, normalize_messages(messages), False, tools,
+                        temperature, max_tokens, reasoning_effort))
+                    r.raise_for_status()
+                    data = r.json()
+            except httpx.HTTPStatusError as e2:
+                raise EngineError(
+                    f"HTTP {e2.response.status_code} after normalization: "
+                    f"{e2.response.text[:400]}", e2.response.status_code,
+                    e2.response.text[:400]) from e2
+            except httpx.HTTPError as e2:
+                raise EngineError(f"connection error: {e2}") from e2
+        else:
+            raise EngineError(f"HTTP {e.response.status_code}: {e.response.text[:400]}",
+                              e.response.status_code, e.response.text[:400]) from e
     except httpx.HTTPError as e:
         raise EngineError(f"connection error: {e}") from e
 
@@ -333,6 +416,7 @@ def _stream_anthropic(model: dict, messages: list[dict], tools, temperature,
 def stream_chat(messages: list[dict], *, ref: str | None = None, tools=None,
                 temperature=None, max_tokens=None, reasoning_effort=None) -> Iterator[dict]:
     model = _target(ref)
+    messages = _pre(messages)
     if anthropic.flavour(model) == "anthropic":
         yield from _stream_anthropic(model, messages, tools, temperature,
                                      max_tokens, reasoning_effort)
@@ -355,6 +439,17 @@ def stream_chat(messages: list[dict], *, ref: str | None = None, tools=None,
                         # and it must never be the reason a turn fails.
                         plain = _payload(model, messages, True, tools, temperature,
                                          max_tokens, reasoning_effort)
+                        yield from _stream_openai(model, url, plain)
+                        return
+                    if r.status_code == 500 and MISPLACED_SYSTEM in text:
+                        # The template invariant again, one send too late (a
+                        # payload that slipped past the pre-send pass). The
+                        # normalizer runs, the same request goes out exactly
+                        # once more, and a second failure is surfaced with the
+                        # server's answer - never looped.
+                        plain = _payload(model, normalize_messages(messages), True,
+                                         tools, temperature, max_tokens,
+                                         reasoning_effort)
                         yield from _stream_openai(model, url, plain)
                         return
                     raise EngineError(f"HTTP {r.status_code}: {text[:400]}", r.status_code, text[:400])
