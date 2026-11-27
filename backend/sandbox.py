@@ -178,6 +178,90 @@ _SANDBOX_PROFILE = """(version 1)
 """
 
 
+def active_backend() -> str:
+    """The backend a run would choose right now, same defaults as run()."""
+    cfg = providers.load() or {}
+    return str((cfg.get("sandbox") or {}).get("backend") or "none")
+
+
+_SANDBOX_NOTE_BWRAP = (
+    "Commands you run execute inside a bubblewrap sandbox: system directories are "
+    "read-only, the sandbox has its own PID namespace and can neither see nor signal "
+    "processes outside it, only the working folder is writable and /tmp is private.")
+
+_SANDBOX_NOTE_MAC = (
+    "Commands you run execute under macOS sandbox-exec: writes are limited to the "
+    "working folder and /tmp; there is no process isolation, so commands keep this "
+    "user's reach over processes.")
+
+_SANDBOX_NOTE_NONE_POSIX = (
+    "Commands you run execute directly on this machine with this user's full reach: "
+    "no isolation primitive Tacit can use is installed, and the timeout is the only "
+    "bound on a command.")
+
+_SANDBOX_NOTE_WINDOWS = (
+    "Commands you run execute directly on this machine with this user's full reach: "
+    "Windows offers no isolation primitive, and the timeout is the only bound on a "
+    "command.")
+
+_SANDBOX_NOTE_CONTAINER = (
+    "Commands you run execute inside a container: a separate filesystem and process "
+    "space, with the working folder mounted in. Host processes are unreachable, and "
+    "host sudo is not supplied inside the container.")
+
+_SANDBOX_NOTE_ROUTE = (
+    "A command that carries sudo runs on the host outside the sandbox, because the "
+    "wrapper strips setuid and cannot feed a password; commands without sudo stay "
+    "contained.")
+
+
+def prompt_note() -> str:
+    """The standing-prompt paragraph on what the sandbox actually is.
+
+    T0 (PLAN 20.2): the model forgot it was sandboxed because nothing in its
+    prompt said so, and the person had to remind it every session. Derived
+    here, from the same primitives run() uses, so the text can claim only
+    what the chosen backend enforces: never isolation under `none`, never
+    host reach under a wrapper, the sudo host-route only when the switch is
+    armed. Returns "" only when there is nothing honest to say (never, in
+    practice).
+    """
+    chosen = active_backend()
+    mech = mechanism()
+    # Branch on config.OS, not os.name: TACIT_OS pins the published figures
+    # (the same reason config.PLATFORM and the sudo line branch this way), so
+    # a measurement must reproduce them from any host.
+    windows = str(config.OS) == "Windows"
+    if chosen == "container" and _container_runtime():
+        text = _SANDBOX_NOTE_CONTAINER
+    elif chosen == "container":
+        text = ("The container backend is selected but no container runtime is "
+                "available, so runs will be refused until one is installed.")
+    elif chosen == "tacit-micro":
+        if windows:
+            text = _SANDBOX_NOTE_WINDOWS
+        elif mech == "bubblewrap":
+            text = _SANDBOX_NOTE_BWRAP
+        elif mech == "sandbox-exec":
+            text = _SANDBOX_NOTE_MAC
+        else:
+            text = _SANDBOX_NOTE_NONE_POSIX
+    elif chosen != "none":
+        text = (f"The selected sandbox backend '{chosen}' is not available, so runs "
+                "will be refused until Settings chooses a backend that is.")
+    elif windows:
+        text = _SANDBOX_NOTE_WINDOWS
+    else:
+        text = _SANDBOX_NOTE_NONE_POSIX
+    try:
+        from . import sudo as _sudo_mod
+        if _sudo_mod.armed() and chosen in ("tacit-micro", "container"):
+            text += " " + _SANDBOX_NOTE_ROUTE
+    except Exception:  # noqa: BLE001
+        pass
+    return text
+
+
 def _wrap(argv: list[str], cwd: str, network: bool, readonly: bool) -> list[str]:
     """Put the strongest available primitive in front of the command.
 

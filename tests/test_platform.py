@@ -1077,7 +1077,7 @@ class TestVersionControlPermission(Isolated):
         for allowed in (False, True):
             config.save_prefs({"allowVersionControl": allowed})
             size = len(prompts.system_prompt(None, False, chat=False))
-            self.assertLess(size, 1200, f"prompt grew to {size} chars with allow={allowed}")
+            self.assertLess(size, 1250, f"prompt grew to {size} chars with allow={allowed}")
 
 
 class TestDeliverGuaranteeSetting(Isolated):
@@ -2034,21 +2034,22 @@ class TestGuidance(Isolated):
             self.assertLessEqual(len(c), guidance.MAX_BLOCK)
 
     def test_the_standing_prompt_never_carries_guidance(self):
-        """The whole point: the cached prompt stays tiny, 974 chars on Windows.
+        """The whole point: the cached prompt stays tiny, 1141 chars on Windows.
 
-        The number is Windows-only because the platform line changes per OS, and the Windows
-        wording is the longest of the three. So Windows pins the exact size and every other lane
-        asserts it is under that, which is what actually matters: no lane may grow the standing
-        prompt past the size we measured and shipped.
+        The number is Windows-only because the platform line changes per OS, and the
+        sandbox note does too (T0): each OS names its own walls. Windows pins the exact
+        size and every other lane stays within what its note variant allows, which is
+        what actually matters: no lane may grow the standing prompt past the sizes we
+        measured and shipped.
         """
         from backend import config, guidance
         from backend.ai import prompts
         p = prompts.system_prompt("", False, chat=False)
         if config.OS == "Windows":
-            self.assertEqual(len(p), 974)
+            self.assertEqual(len(p), 1141)
         else:
-            self.assertLess(len(p), 974,
-                            f"{config.OS} prompt is {len(p)} chars, no shorter than Windows")
+            self.assertLessEqual(len(p), 1250,
+                                 f"{config.OS} prompt is {len(p)} chars")
         for frag in ("Do it now", "project's own instructions", "step(s) left",
                      "Out of steps"):
             self.assertNotIn(frag, p)

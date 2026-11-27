@@ -22,7 +22,7 @@ schemas. `cost_of` returns those five numbers separately rather than one total, 
 which part of the bill moved (`backend/profiles.py:204-208`).
 
 The published figures are in the README: 974 characters of standing instructions, about 768 tokens on
-Minimal and 2,039 on Default (`README.md:19-21`). A test reads the table back out of the README and
+Minimal and 2,081 on Default (`README.md:19-21`). A test reads the table back out of the README and
 re-measures it against `cost_of`, because 1,889 stayed published for a while after the schemas grew
 past it and nothing noticed.
 

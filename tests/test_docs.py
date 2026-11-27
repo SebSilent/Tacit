@@ -450,7 +450,10 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
                 target.mkdir(parents=True, exist_ok=True)
         # The live-platform measurement for the drift guard: this process, this
         # empty home, no pinned platform.
-        self.live_prompt_chars = len(prompts.system_prompt(None, False, chat=False))
+        self.live_prompt_text = prompts.system_prompt(None, False, chat=False)
+        self.live_prompt_chars = len(self.live_prompt_text)
+        from backend import sandbox as _sandbox_mod  # noqa: PLC0415
+        self.live_note_text = _sandbox_mod.prompt_note()
         self.live_schemas = {name: profiles._tool_set(cfg)
                              for name, cfg in profiles.BUILTIN.items()}
         script = (
@@ -566,7 +569,16 @@ class TestPublishedCostFiguresAreMeasured(unittest.TestCase):
         if config.OS == self.PUBLISHED_OS:
             self.assertEqual(self.prompt_chars, self.live_prompt_chars)
             return
-        self.assertEqual(self.prompt_chars - self.live_prompt_chars,
+        # The sandbox note (T0) is deliberately platform-aware: a POSIX box
+        # that can wrap commands names the walls, a Windows box says there
+        # are none. It is the one paragraph allowed to differ beyond the
+        # platform line, so it is removed from both counts before the
+        # comparison (+2 for its "\n\n" seam).
+        from backend import sandbox  # noqa: PLC0415
+        live_note = len(self.live_note_text) + 2
+        pinned_note = len(sandbox._SANDBOX_NOTE_WINDOWS) + 2
+        self.assertEqual(self.prompt_chars - pinned_note
+                         - (self.live_prompt_chars - live_note),
                          len(self.PUBLISHED_PLATFORM) - len(config.PLATFORM),
                          "the standing prompt differs by more than the platform line")
         for name, pinned in self.schemas.items():

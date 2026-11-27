@@ -17,8 +17,8 @@ database. A coding harness is the part of the stack you are supposed to be able 
 inside it is the part you cannot. Tacit is the readable kind.
 
 > **The number to remember.** One turn costs a fixed amount before your question is read:
-> 974 characters of standing instructions plus every tool description the session is offered. The pair
-> to remember is 768 tokens on Minimal and 2,039 on Default, and a test re-derives both from the code on
+> 1141 characters of standing instructions plus every tool description the session is offered. The pair
+> to remember is 810 tokens on Minimal and 2,081 on Default, and a test re-derives both from the code on
 > every run.
 
 ![A turn streaming in the Tacit interface](assets/demo.gif)
@@ -36,7 +36,7 @@ decision with the line of code behind it. Do not treat the demo as evidence.
 | **Runs** | on your machine, in your browser; Python 3.10+ is the only requirement |
 | **Stores** | plain files under `~/.tacit`, no database |
 | **Sends** | requests to the provider you configured, and nothing else |
-| **Costs** | ~768 to ~2,264 tokens of preamble per turn, measured and published |
+| **Costs** | ~810 to ~2,306 tokens of preamble per turn, measured and published |
 | **Hides** | nothing; every decision lands in a file you can read |
 
 ---
@@ -86,7 +86,7 @@ Full instructions, including relocating and removing an install:
 
 **The fixed cost of a turn is measured, shown, and yours to set.** Most harnesses never say what the
 standing instructions and tool schemas cost. Tacit quotes it per turn and per profile, computed from the
-live configuration rather than a typed table. On an 8K model, 2,039 tokens of preamble is a quarter of the
+live configuration rather than a typed table. On an 8K model, 2,081 tokens of preamble is a quarter of the
 window before work starts; the remedy is a smaller profile.
 
 **A turn is a process, so stop means stop.** A thread cannot be killed in Python; a turn can. Each turn
@@ -128,22 +128,22 @@ no exact tokenizer is installed. Every figure counts what the harness sends, not
 
 | System | System prompt | Tools | Tool schemas | Fixed cost per turn |
 |---|---|---|---|---|
-| **Tacit, Minimal** | **974 chars** | **7** | **2.0 KB** | **~768 tokens** |
+| **Tacit, Minimal** | **1141 chars** | **7** | **2.0 KB** | **~810 tokens** |
 | Pi | 1,352 chars | 7 | 4.5 KB | ~1,600 |
-| **Tacit, default profile** | **974 chars** | **21** | **7.0 KB** | **~2,039** |
+| **Tacit, default profile** | **1141 chars** | **21** | **7.0 KB** | **~2,081** |
 | little-coder | 7,747 chars | ~29 | 10.4 KB | ~4,600 |
 | DSH | 6,195 chars | 25 | 26.7 KB | ~8,390 |
 | Hermes Agent | 23,370 chars | 32 | 51.3 KB | ~18,970 |
 
 Tacit appears twice because the profile is the variable; the two rows are the same program:
-768 tokens on Minimal and 2,039 on Default. The Minimal row compares the same seven capabilities on both
+810 tokens on Minimal and 2,081 on Default. The Minimal row compares the same seven capabilities on both
 sides: read, write, edit, shell, grep, list and glob.
 
 | Same seven capabilities | Tacit | Pi |
 |---|---|---|
 | Tool schemas | **2,001 chars** | 4,626 chars |
-| System prompt | **974 chars** | 1,352 chars |
-| **Fixed cost per turn** | **~768 tokens** | ~1,600 |
+| System prompt | **1141 chars** | 1,352 chars |
+| **Fixed cost per turn** | **~810 tokens** | ~1,600 |
 
 > **What this does not prove.** A smaller fixed cost is not a lower API bill and not a higher solve rate.
 > Total spend is the preamble times the number of steps plus the transcript; a harness that sends less per
@@ -154,8 +154,8 @@ sides: read, write, edit, shell, grep, list and glob.
 
 | Profile | Tools | Sandbox | Memory | Learning | Fixed cost |
 |---|---|---|---|---|---|
-| **minimal** | 7 | none | off | off | ~768 tokens |
-| **default** | 21 | none | off | off | ~2,039 tokens |
+| **minimal** | 7 | none | off | off | ~810 tokens |
+| **default** | 21 | none | off | off | ~2,081 tokens |
 | **safe** | 22 | tacit-micro | explicit | off | `default` + the memory tools + budget |
 | **power-isolation** | 22 | tacit-micro | explicit | off | `default` + the memory tools + budget |
 | **power-memory** | 23 | none | full, budgeted | off | `default` + the memory tools + budget |

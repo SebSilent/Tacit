@@ -16,9 +16,9 @@ not run. It is never silently downgraded to something weaker (`backend/sandbox.p
 | `tacit-micro` | the strongest primitive this OS offers, plus a timeout, limits where the platform allows them, and a report of every file that changed | `backend/providers.py:75-81` |
 | `container` | Docker or Podman, opt-in | `backend/providers.py:82-90` |
 
-Selection happens at `backend/sandbox.py:243-306`. An unknown backend, one with no adapter, and one
+Selection happens at `backend/sandbox.py:327-386`. An unknown backend, one with no adapter, and one
 that is unavailable each return an error rather than falling back
-(`backend/sandbox.py:264-275`).
+(`backend/sandbox.py:348-355`).
 
 ## What the platform can actually enforce
 
@@ -27,7 +27,7 @@ that is unavailable each return an error rather than falling back
 `sandbox-exec` or `posix-limits` on macOS, and `none` on Windows.
 
 Under bubblewrap the command also gets a private PID namespace
-(`backend/sandbox.py:188-199`): it cannot see, name or signal any other process of
+(`backend/sandbox.py:272-279`): it cannot see, name or signal any other process of
 the person's account - least of all the shell that launched the server or the
 server itself. Without it a wrapped command could still `kill` anything the user
 owns, which is filesystem containment with the front door open; `ps` and
@@ -37,6 +37,14 @@ command carries a feedable sudo, it runs on the host path instead of the
 sandbox, because a wrapper that strips setuid can never gain root; the switch is
 the standing yes for exactly that command, and the result says so; every
 non-sudo command of the same turn stays contained.
+
+The walls are also told to the model. The standing prompt carries a sandbox
+note derived at build time from the same primitives `run()` uses
+(`backend/sandbox.py` `prompt_note`): a wrapped run says what its walls are
+(read-only system directories, its own PID namespace, the private `/tmp`), a
+`none` backend says plainly that commands have the full reach of the user, and
+a selected-but-broken backend is named as refusing runs. Nothing in the prompt
+claims isolation the code would not enforce.
 
 `platform_capabilities()` turns that into a flag set (`backend/sandbox.py:74-95`). On Windows the
 answer is a timeout and nothing else: `cpu_limit`, `memory_limit`, `file_size_limit`, `network`,
@@ -48,58 +56,58 @@ including Windows, which is the reason it is offered at all (`backend/sandbox.py
 Nothing is faked to fill that gap. The isolation ladder is stated plainly in the module header
 (`backend/sandbox.py:21-27`), and a run on Windows carries a note saying that this system offers no
 isolation primitive Tacit can use, that the timeout and the change report still apply, and that
-nothing here is pretending otherwise (`backend/sandbox.py:648-651`).
+nothing here is pretending otherwise (`backend/sandbox.py:732-731`).
 
 ## What a run reports back
 
-Every result has the same shape (`backend/sandbox.py:309-320`): `ok`, `backend`, `code`, `stdout`,
+Every result has the same shape (`backend/sandbox.py:393-400`): `ok`, `backend`, `code`, `stdout`,
 `stderr`, `blocked`, `notes`, `changed` with added, modified, removed and a count, `enforced`,
 `requested`, and `duration_ms`.
 
 `enforced` is computed per run, not per platform: a limit counts as enforced only when the platform
-can apply it and the box asked for it (`backend/sandbox.py:629-639`). `requested` records what the
-settings asked for (`backend/sandbox.py:664-670`), so a reader can compare the two. Where they disagree,
+can apply it and the box asked for it (`backend/sandbox.py:713-719`). `requested` records what the
+settings asked for (`backend/sandbox.py:748-750`), so a reader can compare the two. Where they disagree,
 a note says which guarantee is missing: network not cut off and proxy variables advisory only, the
-project not mountable read-only (`backend/sandbox.py:640-644`), or CPU and memory limits not enforced
-(`:652-655`).
+project not mountable read-only (`backend/sandbox.py:724-724`), or CPU and memory limits not enforced
+(`:732-735`).
 
 `changed` comes from scanning the project root before and after and diffing the two
-(`backend/sandbox.py:654`, `:632-637`). That report is produced whatever the backend, which is why a
+(`backend/sandbox.py:738`, `:716-717`). That report is produced whatever the backend, which is why a
 command that rewrote the tree on Windows still tells you what it rewrote.
 
 ## Timeout and cancellation are enforced, not reported
 
-`GRACE_SECONDS` is 10 (`backend/sandbox.py:323`). A timeout returns exit code 124 and a cancellation
-returns 130, both with the output collected before the stop (`backend/sandbox.py:395-447`).
+`GRACE_SECONDS` is 10 (`backend/sandbox.py:407`). A timeout returns exit code 124 and a cancellation
+returns 130, both with the output collected before the stop (`backend/sandbox.py:479-527`).
 
 Captured and streamed calls share `_run_streamed`, which supervises the root and both pipes against
-one deadline (`backend/sandbox.py:374-453`, `:456-485`). Windows containment uses a per-command Job
+one deadline (`backend/sandbox.py:458-533`, `:540-565`). Windows containment uses a per-command Job
 Object through `proctools.spawn`; POSIX uses a per-command process group through `start_new_session`
-(`backend/proctools.py:118-173`, `backend/sandbox.py:476-481`). Cancellation follows the same path as
+(`backend/proctools.py:118-173`, `backend/sandbox.py:560-561`). Cancellation follows the same path as
 a timeout rather than abandoning a command that still owns a pipe.
 
 Killing only the direct child is not enough. On Windows a `.bat` or `cmd /c` wrapper can leave
 grandchildren running with the captured pipe open. Root exit therefore does not skip cleanup: the
 supervisor keeps waiting while descendants hold a pipe, and timeout or cancellation terminates the
-durable Job Object or POSIX group even after the root is gone (`backend/sandbox.py:326-333`,
-`backend/sandbox.py:400-434`, `backend/proctools.py:192-225`). Windows uses `TerminateJobObject` first and falls back to
+durable Job Object or POSIX group even after the root is gone (`backend/sandbox.py:410-413`,
+`backend/sandbox.py:484-514`, `backend/proctools.py:192-225`). Windows uses `TerminateJobObject` first and falls back to
 `taskkill /T /F` only for a live root without a usable job.
 
 Output is drained in 8192-byte binary chunks by a reader thread per stream, then incrementally decoded
-with replacement for invalid input, not split into lines (`backend/sandbox.py:336-371`). This keeps a
+with replacement for invalid input, not split into lines (`backend/sandbox.py:420-451`). This keeps a
 chatty stderr from deadlocking a quiet stdout, and a viewer callback cannot stop drainage. All three
-backends use this supervisor (`backend/sandbox.py:277-306`). A container image inspect or pull happens
+backends use this supervisor (`backend/sandbox.py:361-386`). A container image inspect or pull happens
 before the command and does not stream, but both run under a deadline and the turn's stop flag, so a
-cancel during a pull returns promptly instead of waiting it out (`backend/sandbox.py:750-801`,
-`:875-891`).
+cancel during a pull returns promptly instead of waiting it out (`backend/sandbox.py:834-881`,
+`:955-971`).
 
 A container timeout or cancellation also kills the daemon-side container. The kill is verified by an
 inspect afterwards, not by the kill command's own exit code, and the result says it was killed only
 when the runtime confirms the container is down; otherwise the note reports that the runtime did not
-confirm it (`backend/sandbox.py:829-849`, `:930-935`). The container's name is registered with the
+confirm it (`backend/sandbox.py:913-929`, `:1014-1015`). The container's name is registered with the
 long-lived parent before the client starts, so a hard worker death leaves a row the parent (or the
 next boot's sweep) can settle by name; an unconfirmed cleanup keeps the row for a retry
-(`backend/sandbox.py:901-926`, `backend/proctools.py:673-743`).
+(`backend/sandbox.py:985-1006`, `backend/proctools.py:673-743`).
 
 ## Limits, where they exist
 
@@ -112,11 +120,11 @@ because that probe is the only portable way to cut the network off (`backend/san
 
 The image, the pull policy and the PID ceiling are read from the capability registry rather than the
 environment: `container_image` defaulting to `python:3.12-slim`, `container_auto_pull` defaulting to
-false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:712-724`). A missing image is
+false, and `container_pids_limit` defaulting to 256 (`backend/sandbox.py:805-820`). A missing image is
 not fetched unless you allowed it, and the refusal names the runtime and the command to run by hand
-(`backend/sandbox.py:886-897`). `--pids-limit` is passed on the command line
-(`backend/sandbox.py:727-735`). Docker is tried before Podman and both are accepted, because which one
-a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:679-687`).
+(`backend/sandbox.py:970-977`). `--pids-limit` is passed on the command line
+(`backend/sandbox.py:811-815`). Docker is tried before Podman and both are accepted, because which one
+a person has is a matter of platform and taste, not trustworthiness (`backend/sandbox.py:763-767`).
 
 ## The container backend, checked against a real daemon
 
@@ -143,9 +151,9 @@ is honoured where the binary exists (`backend/sudo.py:329`), which means Linux a
 
 | Backend | Supplies the saved password | What happens to a `sudo` command there |
 |---|---|---|
-| `none` | yes (`backend/sandbox.py:507-545`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:586-589`) |
-| `tacit-micro` | no (`backend/sandbox.py:608-617`) | fails at once, with a note saying this backend does not supply it |
-| `container` | no (`backend/sandbox.py:936-942`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
+| `none` | yes (`backend/sandbox.py:591-625`) | runs as root, and the audit line records how many commands it fed (`backend/sandbox.py:670-669`) |
+| `tacit-micro` | no (`backend/sandbox.py:692-697`) | fails at once, with a note saying this backend does not supply it |
+| `container` | no (`backend/sandbox.py:1020-1022`) | fails at once, and the note says why: `no_new_privileges` drops sudo's setuid bit before any password matters |
 
 Both sandboxed backends leave stdin at `DEVNULL`, so an unanswered `sudo` fails immediately instead of
 hanging until the turn timeout. Failing fast is not the same as being explained, which is why the note

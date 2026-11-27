@@ -518,9 +518,12 @@ class TestGuidanceCards(unittest.TestCase):
 class TestPublishedFigures(Isolated):
     """The comparison table is measured from this code, so it must still match."""
 
-    def test_base_prompt_is_about_980_characters(self):
+    def test_base_prompt_keeps_its_published_bound(self):
+        # 1,141 published: the 974 base plus the derived sandbox note (T0,
+        # PLAN 20.2). The bound exists so a future block cannot creep in
+        # unpriced; raise it only with a README update in the same change.
         from backend.ai import prompts
-        self.assertLessEqual(len(prompts.system_prompt(None, False, chat=False)), 1050)
+        self.assertLessEqual(len(prompts.system_prompt(None, False, chat=False)), 1250)
 
     def test_minimal_profile_is_seven_core_tools(self):
         from backend import profiles

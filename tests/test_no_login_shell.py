@@ -62,19 +62,23 @@ class TestNoLoginShellSpawn(unittest.TestCase):
     def test_shell_true_paths_are_exactly_the_two_known_ones(self):
         """A new shell=True site has to route through _run_captured's argv
         form; the audit counts the known call sites so a fourth executor
-        cannot appear silently."""
+        cannot appear silently. Matched by content, not by line number: the
+        number moves with every sandbox change, the shape does not."""
         sites = []
         for path in sorted(RUNTIME.rglob("*.py")):
             for i, line in code_lines(path):
                 s = line.strip()
                 if re.search(r"\bshell\s*=\s*True\b", s):
                     rel = path.relative_to(ROOT).as_posix()
-                    sites.append(f"{rel}:{i}: {s[:110]}")
+                    sites.append(f"{rel}: {s[:110]}")
         self.assertEqual(
-            sites,
-            ["backend/sandbox.py:527: shell=True, on_output=on_output,"],
-            "a new shell=True call site appeared; route it through the "
-            "resolved shell")
+            len(sites), 1,
+            f"a new shell=True call site appeared; route it through the "
+            f"resolved shell; found: {sites}")
+        self.assertEqual(sites[0].split(": ")[-1][:40],
+                         "shell=True, on_output=on_output,",
+                         "the one shell=True site must be _run_captured's argv "
+                         f"form; found: {sites}")
 
 
 import os  # noqa: E402

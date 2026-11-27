@@ -64,7 +64,7 @@ a schema attached (`backend/agent.py:989-1003`).
 
 **Never silently downgrade.** A command either runs under the backend that was chosen or it does not run
 (`backend/sandbox.py:9-10`). Anything the platform cannot enforce is reported as not enforced
-(`backend/sandbox.py:640-655`). Windows has no isolation primitive in the base OS, and the correct fix for
+(`backend/sandbox.py:720-735`). Windows has no isolation primitive in the base OS, and the correct fix for
 that is the honest note plus the opt-in container backend, not a fake
 (`backend/sandbox.py:25-27`, `backend/providers.py:82-90`).
 

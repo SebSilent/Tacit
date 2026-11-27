@@ -212,6 +212,15 @@ def system_prompt(project: str | None = None, readonly: bool = False,
     from .. import sudo as _sudo
     if not chat and not readonly and _sudo.armed():
         parts.append(SUDO)
+    # The sandbox note, derived the same way the version-control and sudo
+    # lines are: from what this machine can actually enforce right now, not
+    # from a sentence anyone wrote once. The model forgot it was wrapped and
+    # the person had to remind it; the facts now travel with the prompt.
+    if not chat and not readonly:
+        from .. import sandbox as _sandbox
+        note = _sandbox.prompt_note()
+        if note:
+            parts.append(note)
     if not chat:
         from .. import skills as _skills
         listing = _skills.index()
