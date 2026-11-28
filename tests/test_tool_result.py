@@ -141,6 +141,45 @@ class ToolResult(unittest.TestCase):
         self.assertEqual(bad["meta"].get("status"), "bad_pattern")
         self.assertIs(bad["meta"].get("is_error"), True)
 
+    # ── bg jobs: the id is a key, not a string to be re-parsed ────────────
+    def test_bg_start_reports_its_job_and_command_out_of_band(self):
+        out = self._call("bg_start", {"command": "sleep 30"})
+        text = str(out["result"])
+        self.assertTrue(text.startswith("started ["), text)
+        try:
+            from backend import extras
+            bid = text.split("[")[1].split("]")[0]
+            self.assertEqual(out["meta"].get("job"), bid, text)
+        finally:
+            bid = text.split("[")[1].split("]")[0]
+            extras.bg_stop(bid)
+        self.assertIs(out["meta"].get("is_error"), False)
+        self.assertEqual(out["meta"].get("status"), "started")
+        self.assertIn("sleep 30", out.get("result") or "")
+
+    def test_bg_stop_and_output_name_the_job(self):
+        from backend import extras
+        start = self._call("bg_start", {"command": "sleep 30"})
+        bid = str(start["result"]).split("[")[1].split("]")[0]
+        try:
+            self.addCleanup(lambda: extras.bg_stop(bid))
+            out = self._call("bg_output", {"id": bid, "tail": 100})
+            self.assertEqual(out["meta"].get("job"), bid)
+            self.assertEqual(out["meta"].get("status"), "output")
+            stop = self._call("bg_stop", {"id": bid})
+            self.assertEqual(stop["meta"].get("job"), bid)
+            self.assertEqual(stop["meta"].get("status"), "stopped")
+            self.assertIs(stop["meta"].get("is_error"), False,
+                          "asking for the state it got is not a failure")
+        finally:
+            extras.bg_stop(bid)
+
+    def test_fetch_carries_its_url_and_shape(self):
+        out = self._call("fetch", {"url": "http://127.0.0.1:1/x"})
+        self.assertIs(out["meta"].get("is_error"), True)
+        self.assertEqual(out["meta"].get("url"), "http://127.0.0.1:1/x")
+        self.assertTrue(str(out["result"]).startswith("ERROR:"))
+
     # ── the reader: both side-channel shapes, and the last resort ─────────
     def test_the_streamed_shape_is_lifted_from_the_top_level(self):
         m = agent._tool_meta("run_shell",

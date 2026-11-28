@@ -473,20 +473,59 @@ def t_run_shell(command: str, project: str | None = None, timeout: int | None = 
 
 
 def t_bg_start(command: str, project: str | None = None, cwd: str | None = None,
-               session: str = "") -> str:
-    return extras.bg_start(command, project=project, cwd=cwd, session=session)
+               session: str = "", meta: dict | None = None) -> str:
+    if meta is not None:
+        meta.clear()
+    text = extras.bg_start(command, project=project, cwd=cwd, session=session)
+    _set_bg_meta(text, meta, start=True)
+    return text
 
 
-def t_bg_output(id: str, tail: int = 4000) -> str:
-    return extras.bg_output(id, tail)
+def t_bg_output(id: str, tail: int = 4000, meta: dict | None = None) -> str:
+    text = extras.bg_output(id, tail)
+    _set_bg_meta(text, meta)
+    return text
 
 
-def t_bg_stop(id: str) -> str:
-    return extras.bg_stop(id)
+def t_bg_stop(id: str, meta: dict | None = None) -> str:
+    text = extras.bg_stop(id)
+    _set_bg_meta(text, meta, stop=True)
+    return text
 
 
-def t_fetch(url: str, max_chars: int | None = None) -> str:
-    return extras.fetch(url, max_chars)
+def t_fetch(url: str, max_chars: int | None = None,
+            meta: dict | None = None) -> str:
+    text = extras.fetch(url, max_chars)
+    if meta is not None:
+        meta.clear()
+        failed = text.startswith("ERROR:")
+        meta.update({"is_error": failed, "status": "fetched",
+                     "url": str(url or ""), "chars": len(str(text or ""))})
+    return text
+
+
+def _set_bg_meta(text: str, meta: dict | None, *, start: bool = False,
+                 stop: bool = False) -> None:
+    """The job's facts, out of band: an id quoted in the text is not a key.
+
+    `bg_start` replies "started [b7c3] in <cwd>: <cmd>", and reading that
+    string back for the id is exactly the ERROR-prefix guess P2.4 exists to
+    retire - so the three bg tools parse their one line once, HERE, and the
+    loop and the ledger read structured values. is_error stays False even
+    for "already stopped", because the model asked for the state it got.
+    """
+    if meta is None:
+        return
+    meta.clear()
+    text = str(text or "")
+    failed = text.startswith("ERROR:")
+    import re as _re
+    m = _re.search(r"\[([0-9a-f]+)\]", text)
+    meta.update({"is_error": failed, "url": "",
+                 "status": ("started" if start else
+                            "stopped" if stop else "output"),
+                 "job": m.group(1) if m else "",
+                 "chars": len(text)})
 
 
 def t_browser(action: str, url: str = "", selector: str = "", text: str = "",

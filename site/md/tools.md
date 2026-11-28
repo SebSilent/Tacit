@@ -1,76 +1,76 @@
 # Tools
 
-The registry is one list: `backend/agent.py:805-890`. It holds 23 tools, and each entry is a name, a
+The registry is one list: `backend/agent.py:844-929`. It holds 23 tools, and each entry is a name, a
 description the model reads, and a JSON schema. The handler that runs is looked up by name in `EXECS`
-(`backend/agent.py:717-740`).
+(`backend/agent.py:756-779`).
 
 Nothing else in the product adds a tool to that list silently. Plugin tools and activated MCP schemas
-are appended at the end of the same function (`backend/agent.py:1064-1080`), and both are off until
+are appended at the end of the same function (`backend/agent.py:1103-1119`), and both are off until
 you turn them on.
 
 ## The 23
 
 | Tool | What it does | Defined at |
 |---|---|---|
-| `list_files` | list files and folders, relative to the working project | `backend/agent.py:819` |
-| `read_file` | read a file as numbered lines, with a range footer | `backend/agent.py:821` |
-| `write_file` | create or overwrite a file | `backend/agent.py:824` |
-| `edit_file` | replace a snippet that appears exactly once | `backend/agent.py:825` |
-| `glob_files` | find files by name pattern | `backend/agent.py:827` |
-| `grep_files` | search file contents with a regular expression | `backend/agent.py:828` |
-| `run_shell` | run a command in the project directory | `backend/agent.py:831` |
-| `skill` | read one skill's full instructions | `backend/agent.py:834` |
-| `bg_start` | start a long-running command in the background | `backend/agent.py:836` |
-| `bg_output` | read a background job's output | `backend/agent.py:838` |
-| `bg_stop` | stop a background job | `backend/agent.py:840` |
-| `fetch` | fetch a URL as readable text | `backend/agent.py:841` |
-| `browser` | drive a real browser | `backend/agent.py:843` |
-| `research` | a bounded multi-source check | `backend/agent.py:853` |
-| `evidence` | record or read a citable fact | `backend/agent.py:859` |
-| `task` | delegate to a sub-agent with its own context | `backend/agent.py:862` |
-| `mcp_list_servers` | list MCP servers and what their tools would cost | `backend/agent.py:866` |
-| `mcp_search_tools` | search the MCP catalogue by intent | `backend/agent.py:868` |
-| `mcp_activate_tools` | inject MCP schemas for a few turns | `backend/agent.py:871` |
-| `mcp_call` | call one MCP tool without paying its schema | `backend/agent.py:874` |
-| `memory_recall` | search durable memory | `backend/agent.py:884` |
-| `memory_add` | propose a durable memory, pending review | `backend/agent.py:887` |
-| `session_archive` | read the frozen archive of rows a compaction folded away | `backend/agent.py:898` |
+| `list_files` | list files and folders, relative to the working project | `backend/agent.py:858` |
+| `read_file` | read a file as numbered lines, with a range footer | `backend/agent.py:860` |
+| `write_file` | create or overwrite a file | `backend/agent.py:863` |
+| `edit_file` | replace a snippet that appears exactly once | `backend/agent.py:864` |
+| `glob_files` | find files by name pattern | `backend/agent.py:866` |
+| `grep_files` | search file contents with a regular expression | `backend/agent.py:867` |
+| `run_shell` | run a command in the project directory | `backend/agent.py:870` |
+| `skill` | read one skill's full instructions | `backend/agent.py:873` |
+| `bg_start` | start a long-running command in the background | `backend/agent.py:875` |
+| `bg_output` | read a background job's output | `backend/agent.py:877` |
+| `bg_stop` | stop a background job | `backend/agent.py:879` |
+| `fetch` | fetch a URL as readable text | `backend/agent.py:880` |
+| `browser` | drive a real browser | `backend/agent.py:882` |
+| `research` | a bounded multi-source check | `backend/agent.py:892` |
+| `evidence` | record or read a citable fact | `backend/agent.py:898` |
+| `task` | delegate to a sub-agent with its own context | `backend/agent.py:901` |
+| `mcp_list_servers` | list MCP servers and what their tools would cost | `backend/agent.py:905` |
+| `mcp_search_tools` | search the MCP catalogue by intent | `backend/agent.py:907` |
+| `mcp_activate_tools` | inject MCP schemas for a few turns | `backend/agent.py:910` |
+| `mcp_call` | call one MCP tool without paying its schema | `backend/agent.py:913` |
+| `memory_recall` | search durable memory | `backend/agent.py:923` |
+| `memory_add` | propose a durable memory, pending review | `backend/agent.py:926` |
+| `session_archive` | read the frozen archive of rows a compaction folded away | `backend/agent.py:937` |
 
 Two different numbers describe how many tools you are paying for, and the difference is the gating
 above. The profile table publishes 20 for a default install, which is the registry minus the two
 memory schemas and the archive reader, each priced in its own bucket instead
 (`backend/profiles.py:124-141`, `:201-205`). A fresh install with no MCP server configured actually
-sees 16, because the four helpers are also removed at request time (`backend/agent.py:1042-1080`). The
+sees 16, because the four helpers are also removed at request time (`backend/agent.py:1081-1119`). The
 published figure counts what the profile owns; the runtime figure counts what the model is offered.
 
 ## Five rules decide whether a tool is offered
 
 **1. A disabled tool is gone.** `disabledTools` in `~/.tacit/prefs.json` removes entries by name
-(`backend/agent.py:1021-1025`). The same list is what **Skills & Tools** edits.
+(`backend/agent.py:1060-1064`). The same list is what **Skills & Tools** edits.
 
 **2. A read-only caller loses the tools that can change things.** `READONLY_BLOCKED` holds
 `write_file`, `edit_file`, `run_shell`, `bg_start` and `bg_stop`, and adds `task`, `mcp_call`,
-`mcp_activate_tools` and `memory_add` (`backend/agent.py:742-750`). `evidence` keeps its read actions
+`mcp_activate_tools` and `memory_add` (`backend/agent.py:781-789`). `evidence` keeps its read actions
 but refuses `add`; `browser` keeps `open`, `text` and `links`, but refuses the mutating `click`,
-`type`, `screenshot` and `close` actions (`backend/agent.py:755-781`). Hiding a schema does not stop a
-call, so `readonly_guard` runs again at dispatch (`backend/agent.py:858-2108`). Every caller also
+`type`, `screenshot` and `close` actions (`backend/agent.py:794-820`). Hiding a schema does not stop a
+call, so `readonly_guard` runs again at dispatch (`backend/agent.py:897-2147`). Every caller also
 gets an `allowed_tools` set built from the exact schemas offered for that turn, and dispatch refuses
-any other name, including every tool in chat (`backend/agent.py:2618-2637`, `:2104-2132`).
+any other name, including every tool in chat (`backend/agent.py:2657-2676`, `:2143-2171`).
 
 **3. The MCP helpers appear only when a server is configured.** With nothing in `mcp.json` the four
 helpers are four dead ends that cost tokens and invite calls that can only fail
-(`backend/agent.py:1042-1080`). Presence is the gate, not connectivity: a configured but stopped server
+(`backend/agent.py:1081-1119`). Presence is the gate, not connectivity: a configured but stopped server
 still gets them, because listing and searching are how the model learns what it could start.
 
 **4. Memory tools follow the memory mode.** Both are removed when the mode is off
-(`backend/agent.py:1047-1051`). `memory_recall` is removed again in `explicit` mode, because that mode
+(`backend/agent.py:1086-1090`). `memory_recall` is removed again in `explicit` mode, because that mode
 injects what you approved and retrieves nothing, so the tool could only ever answer "not enabled"
-(`backend/agent.py:1042-1080-1001`, `backend/memory_modes.py:26-29`).
+(`backend/agent.py:1081-1119-1001`, `backend/memory_modes.py:26-29`).
 
 **5. The archive reader follows its own switch.** `session_archive` is removed when the archive
-switch is off (`backend/agent.py:1048-1052`), and the same gate is enforced again at dispatch, because
+switch is off (`backend/agent.py:1087-1091`), and the same gate is enforced again at dispatch, because
 a model that remembers the name from an earlier turn can still emit it and a refusal it can read is
-the honest answer (`backend/agent.py:2101-2105`). The switch lives in Settings > Tools and its
+the honest answer (`backend/agent.py:2140-2144`). The switch lives in Settings > Tools and its
 default is on: a fold the model cannot read back is the loss the person feels, and the reader is
 what makes a fold a reorganisation instead of a deletion (`backend/config.py:615-632`). It shipped
 off and paid nothing for it, which was the problem: the fold still happened. `TACIT_ARCHIVE_TOOL=0`
@@ -82,12 +82,12 @@ The description is the only documentation the model gets, so three of them carry
 live only in the code.
 
 `run_shell` states the shell and the operating system it is running on, read from config at the
-moment the registry is built (`backend/agent.py:835-844`). `research` quotes
+moment the registry is built (`backend/agent.py:874-883`). `research` quotes
 its own budget, `RESEARCH_ASPECTS`, `RESEARCH_STEPS` and `RESEARCH_TIMEOUT`, taken from
 `backend/config.py:297`, `:307` and `:311` rather than written into the sentence, so the description
-cannot drift away from the caps (`backend/agent.py:834-839`). `memory_add` says plainly that a
+cannot drift away from the caps (`backend/agent.py:873-878`). `memory_add` says plainly that a
 proposal lands pending review and is injected nowhere until you approve it
-(`backend/agent.py:868-874`).
+(`backend/agent.py:907-913`).
 
 ## Results have to say where they stopped
 
@@ -145,24 +145,24 @@ on the next start; running jobs are never pruned (`backend/extras.py:303-340`).
 
 ## Which tools can change your files
 
-`MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:888-892`). The first use
+`MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:927-931`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:985-1011`, `:3320-3325`). `run_shell` is in that set because a command can rewrite
+(`backend/agent.py:1024-1050`, `:3359-3364`). `run_shell` is in that set because a command can rewrite
 the tree, and the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to
-the person using Tacit (`backend/agent.py:717-740`).
+the person using Tacit (`backend/agent.py:756-779`).
 
 ## The repeat guard
 
 The same call with the same arguments runs three times in a turn, and after that it is answered from
-cache instead (`backend/agent.py:907-936`). Four blocked repeats in a row ends the turn early and
+cache instead (`backend/agent.py:946-975`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:3589-3599`).
+(`backend/agent.py:3628-3638`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the
-project (`backend/agent.py:905-931`). `run_shell` is deliberately not exempt: the guard exists because
+project (`backend/agent.py:944-970`). `run_shell` is deliberately not exempt: the guard exists because
 one benchmark cell spent 26 of its 29 shell calls on refused repeats.
 
 ## Tools that exist but are not in the registry
