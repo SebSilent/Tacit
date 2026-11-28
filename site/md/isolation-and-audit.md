@@ -218,7 +218,7 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:888-892`, `:985-1011`, `:3273-3278`), one
+the server checkpoints the workspace (`backend/agent.py:888-892`, `:985-1011`, `:3320-3325`), one
 capture per turn rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:425-450`,

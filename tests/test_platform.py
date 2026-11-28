@@ -2964,7 +2964,7 @@ class TestStuckTurnExit(Isolated):
                     {"type": "done", "model": None}])
             return iter([{"type": "tool_calls", "calls": [
                 {"id": "p", "name": "run_shell",
-                 "arguments": '{"command": "python3 probe.py"}'}]},
+                 "arguments": '{"command": "python3 attack.py"}'}]},
                 {"type": "done", "model": None}])
 
         def fake_tool(n, a, ctx, out, call=None):

@@ -53,9 +53,9 @@ published figure counts what the profile owns; the runtime figure counts what th
 `mcp_activate_tools` and `memory_add` (`backend/agent.py:742-750`). `evidence` keeps its read actions
 but refuses `add`; `browser` keeps `open`, `text` and `links`, but refuses the mutating `click`,
 `type`, `screenshot` and `close` actions (`backend/agent.py:755-781`). Hiding a schema does not stop a
-call, so `readonly_guard` runs again at dispatch (`backend/agent.py:858-2074`). Every caller also
+call, so `readonly_guard` runs again at dispatch (`backend/agent.py:858-2108`). Every caller also
 gets an `allowed_tools` set built from the exact schemas offered for that turn, and dispatch refuses
-any other name, including every tool in chat (`backend/agent.py:2584-2603`, `:2070-2098`).
+any other name, including every tool in chat (`backend/agent.py:2618-2637`, `:2104-2132`).
 
 **3. The MCP helpers appear only when a server is configured.** With nothing in `mcp.json` the four
 helpers are four dead ends that cost tokens and invite calls that can only fail
@@ -70,7 +70,7 @@ injects what you approved and retrieves nothing, so the tool could only ever ans
 **5. The archive reader follows its own switch.** `session_archive` is removed when the archive
 switch is off (`backend/agent.py:1048-1052`), and the same gate is enforced again at dispatch, because
 a model that remembers the name from an earlier turn can still emit it and a refusal it can read is
-the honest answer (`backend/agent.py:2067-2071`). The switch lives in Settings > Tools and its
+the honest answer (`backend/agent.py:2101-2105`). The switch lives in Settings > Tools and its
 default is on: a fold the model cannot read back is the loss the person feels, and the reader is
 what makes a fold a reorganisation instead of a deletion (`backend/config.py:615-632`). It shipped
 off and paid nothing for it, which was the problem: the fold still happened. `TACIT_ARCHIVE_TOOL=0`
@@ -111,6 +111,16 @@ already wrote them. The text the model reads is unchanged by all of it: a write 
 `wrote N chars`, an ambiguous edit is refused with its match count, and the text rule
 (`ERROR:` means failure) now only matters for the tools that have not been migrated yet.
 
+Completion is evidence with a shape: the command, the count, the write it followed. "Verified"
+means a run whose command actually
+exercises, or runs the checker for, the artifacts this turn wrote, happened after the most
+recent write, and exited clean (`backend/agent.py`, `_relevant_check`): `pwd`, an unrelated
+probe, a pre-edit run and a failing test all verify nothing. Every check record carries the
+command, what it exercised, whether the model saw the result, and which earlier failure of
+the same call it repaired. Documentation-only turns owe no run at all - a paragraph is
+delivered without a forced salvage round - while code files get their verify phase exactly
+as before.
+
 ## Background jobs outlive their turn
 
 `bg_start` deliberately releases the command from the per-turn worker's process containment
@@ -137,7 +147,7 @@ on the next start; running jobs are never pruned (`backend/extras.py:303-340`).
 
 `MUTATING` is `write_file`, `edit_file` and `run_shell` (`backend/agent.py:888-892`). The first use
 of any of them in a turn takes a snapshot of the workspace before it runs, and the result says so
-(`backend/agent.py:985-1011`, `:3273-3278`). `run_shell` is in that set because a command can rewrite
+(`backend/agent.py:985-1011`, `:3320-3325`). `run_shell` is in that set because a command can rewrite
 the tree, and the sandbox layer reports every file a command changed regardless of which tool ran it.
 
 Snapshots are not agent tools. The agent cannot save its own work or rewind it; the undo belongs to
@@ -148,7 +158,7 @@ the person using Tacit (`backend/agent.py:717-740`).
 The same call with the same arguments runs three times in a turn, and after that it is answered from
 cache instead (`backend/agent.py:907-936`). Four blocked repeats in a row ends the turn early and
 spends the last round on the deliverable rather than counting down to the step cap
-(`backend/agent.py:3527-3537`).
+(`backend/agent.py:3589-3599`).
 
 `write_file` and `edit_file` are exempt from caching, because a repeated write may be a recovery and
 silently skipping a mutation the model asked for would make the harness lie about what it did to the

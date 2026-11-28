@@ -1254,6 +1254,40 @@ def _call_identity(args: dict) -> str:
     ).hexdigest()[:24]
 
 
+# Documentation does not need a run to prove anything: a turn whose only
+# writes are prose files gets no verify phase and no forced salvage round,
+# because "run it" means nothing for a paragraph. Everything else does.
+_DOC_SUFFIXES = (".md", ".markdown", ".rst", ".txt", ".adoc", ".cff")
+
+# A check is relevant when its command names one of this turn's artifacts or
+# is a checker invocation the harness can recognize: `pwd`, `ls` and an
+# unrelated probe answer nothing about a file the turn just changed.
+_CHECKER_WORDS = ("pytest", "cargo build", "cargo test", "cargo check",
+                  "make ", "ninja", "npm ", "npx ", "yarn ", "pnpm ",
+                  "gradle", "mvn", "go test", "tox ", "ruff check",
+                  "mypy", "tsc ", "php -l", "rubocop", "eslint")
+
+
+def _artifact_basenames(artifacts) -> set:
+    return {str(a).replace("\\", "/").rsplit("/", 1)[-1].lower()
+            for a in (artifacts or []) if str(a or "").strip()}
+
+
+def _doc_only(name: str) -> bool:
+    return str(name or "").lower().endswith(_DOC_SUFFIXES)
+
+
+def _relevant_check(command: str, artifacts) -> tuple[bool, list]:
+    """(relevant, exercised) for one run against this turn's written set."""
+    cmd = str(command or "").lower()
+    base = {b for b in _artifact_basenames(artifacts) if b and b in cmd}
+    if base:
+        return True, sorted(base)
+    if any(w in cmd for w in _CHECKER_WORDS):
+        return True, []     # a checker run exercises the tree, not one name
+    return False, []
+
+
 def _severed(calls: list) -> set:
     """ids of calls whose argument JSON cannot be parsed - they never arrived complete."""
     bad = set()
@@ -2702,12 +2736,15 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
     seq = [0]
 
     def _reverify() -> None:
-        """Verified means: a successful shell run happened after this turn's
-        most recent successful write - and there was a write at all. ``ts >
-        last_write`` alone made any early probe prove a write it preceded,
-        which is how a turn that never wrote could read as verified."""
+        """Verified means: a RELEVANT check - a run whose command exercises,
+        or runs the checker for, the artifacts this turn wrote - happened
+        after the most recent successful write and passed. `pwd`, an
+        unrelated probe, a run from before the write and a failing test all
+        verify nothing; a documentation-only turn has nothing to verify, and
+        ``verified`` stays False without costing its deliverable phase."""
         evidence["verified"] = bool(evidence["last_write"]) and any(
-            chk["seq"] > evidence["last_write_seq"] and not chk["is_error"]
+            chk["seq"] > evidence["last_write_seq"]
+            and chk.get("relevant") and not chk["is_error"]
             for chk in evidence["checks"])
     demanded = [0]
     forced = 0
@@ -2864,12 +2901,22 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if c["name"] == "run_shell" and meta.get("status") not in ("blocked_repeat",
                                                                        "severed"):
                 seq[0] += 1
+                _cmd = str(args.get("command") or "")
+                _ident = _call_identity(args)
+                _relevant, _hit = _relevant_check(_cmd, written)
+                _failed_before = [c["seq"] for c in evidence["checks"]
+                                  if c["identity"] == _ident and c["is_error"]]
                 evidence["checks"].append({
                     "ts": time.time(),
                     "seq": seq[0],
-                    "identity": _call_identity(args),
+                    "identity": _ident,
                     "exit": meta.get("exit_code"),
                     "is_error": bool(meta.get("is_error")),
+                    "command": _cmd[:240],
+                    "relevant": _relevant,
+                    "exercised": _hit,
+                    "seen_by_model": True,
+                    "repair_of": _failed_before[-1] if _failed_before else None,
                 })
                 _reverify()
             _audit_tool(c["name"], args, result, failed, ctx)
@@ -3283,8 +3330,13 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
                     and (not deadline or time.time() < deadline - 60)):
                 # The files this turn wrote are on disk and nothing was ever executed. Ship it to
                 # the checker anyway and the cell dies on a syntax error the model could have seen
-                # for one `python3 interp.py`.
-                yield from _report(verify=tuple(sorted(written)), closing=bool(narration))
+                # for one `python3 interp.py`. Documentation-only turns are the
+                # exception: a paragraph needs no run, and forcing one spends a
+                # model call to teach the model nothing (P2.5).
+                code_written = {b for b in written if not _doc_only(b)}
+                if code_written:
+                    yield from _report(verify=tuple(sorted(code_written)),
+                                       closing=bool(narration))
             elif not narration and not stopped:
                 # It stopped calling tools and said nothing on the way out. Left as
                 # is, the user got a transcript of results with no answer at all.
@@ -3435,12 +3487,22 @@ def run_turn(messages: list[dict], *, project: str | None, readonly: bool = Fals
             if c["name"] == "run_shell" and meta.get("status") not in ("blocked_repeat",
                                                                        "severed"):
                 seq[0] += 1
+                _cmd = str(args.get("command") or "")
+                _ident = _call_identity(args)
+                _relevant, _hit = _relevant_check(_cmd, written)
+                _failed_before = [c["seq"] for c in evidence["checks"]
+                                  if c["identity"] == _ident and c["is_error"]]
                 evidence["checks"].append({
                     "ts": time.time(),
                     "seq": seq[0],
-                    "identity": _call_identity(args),
+                    "identity": _ident,
                     "exit": meta.get("exit_code"),
                     "is_error": bool(meta.get("is_error")),
+                    "command": _cmd[:240],
+                    "relevant": _relevant,
+                    "exercised": _hit,
+                    "seen_by_model": True,
+                    "repair_of": _failed_before[-1] if _failed_before else None,
                 })
                 # A run verifies only the state it follows: one recorded after
                 # the most recent successful write, and one that did not fail.

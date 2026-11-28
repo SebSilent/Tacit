@@ -232,7 +232,7 @@ That column is what a token table cannot show.
 
 - **The delivery guarantee,** on by default, finishes a write the turn started and missed when it is about
   to end with nothing on disk, gives the salvage phase three rounds rather than one, and spends the last
-  minutes of wall budget landing it (`backend/config.py:658-673`, `backend/agent.py:944-2721`): on, a failed
+  minutes of wall budget landing it (`backend/config.py:658-673`, `backend/agent.py:944-2758`): on, a failed
   cell is still a graded artifact, and `TACIT_DELIVER_GUARANTEE=0` is the raw mode where the turn ends when
   the agent ends it.
 - **The repeat guard** answers an identical call from cache after three runs and ends a turn after four
