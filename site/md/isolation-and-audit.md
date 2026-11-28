@@ -218,7 +218,7 @@ append-only, and nothing in it is ever edited or removed (`backend/audit.py:116-
 ## Snapshots
 
 The undo half of the same promise. Before the first `write_file`, `edit_file` or `run_shell` of a turn,
-the server checkpoints the workspace (`backend/agent.py:927-931`, `:1024-1050`, `:3359-3364`), one
+the server checkpoints the workspace (`backend/agent.py:964-968`, `:1061-1087`, `:3396-3401`), one
 capture per turn rather than per step, and the result says a snapshot was taken.
 
 A snapshot copies the project tree into `~/.tacit/checkpoints/<stamp>-<id>` (`backend/extras.py:425-450`,
@@ -229,6 +229,6 @@ project, because testing absolute parts would skip everything whenever the proje
 folder named `build/` or `checkpoints/` (`backend/extras.py:433-444`).
 
 The agent has no snapshot tools. It cannot save its own work or rewind it; restore belongs to the
-person (`backend/agent.py:756-779`).
+person (`backend/agent.py:793-816`).
 
 Next: [data and privacy](data-and-privacy.md).

@@ -238,30 +238,30 @@ order, and only the sentence says which; a turn that wrote nothing and attempted
 nudge and the closing summary, and the nudge names no file. The salvage phase gets three rounds rather than
 one, because writing the file is step one and the model then needs to run it and fix what the run shows; it
 is bounded, because an unbounded "one more chance" is how a turn becomes two turns
-(`backend/agent.py:983-2797`).
+(`backend/agent.py:1020-2834`).
 
 **The repeat guard** runs an identical call three times and answers from cache afterwards, and four
-blocked repeats in a row ends the turn early (`backend/agent.py:952-961`, `:3587-3638`). It exists
+blocked repeats in a row ends the turn early (`backend/agent.py:989-998`, `:3624-3675`). It exists
 because one cell spent 26 of its 29 shell calls on refused repeats and ended with nothing written
-(`backend/agent.py:939-970`, `:952-970`).
+(`backend/agent.py:976-1007`, `:989-1007`).
 
 **Identity, invalidation, and evidence tighten the same guard.** A call's identity is a full
 canonical argument hash covering every character, so two long calls that differ only in their tail stay
-distinct (`backend/agent.py:1263-1272`). A mutation clears the repeat cache while keeping the
+distinct (`backend/agent.py:1300-1309`). A mutation clears the repeat cache while keeping the
 mutating call's own entry, so an identical read after a write executes again instead of quoting the
-bytes it replaced (`backend/agent.py:3426-3455`). What counts as verification is structural: a run
+bytes it replaced (`backend/agent.py:3463-3492`). What counts as verification is structural: a run
 verifies only when it followed this turn's most recent successful write,
 its exit comes from the structured result rather than the text, and it did not fail
-(`backend/agent.py:2716-2739`), and the run and write are ordered by a logical sequence because a
+(`backend/agent.py:2753-2776`), and the run and write are ordered by a logical sequence because a
 fast turn's write and run can land on the same clock tick. A failing check earns the bounded verify
 rounds; a pass ends the phase the moment it lands.
 
 **Recovery is bounded.** The uncapped retry rescues at most four rounds per turn and skips the
-deadline's last minute (`backend/agent.py:962-971`, the severed-call check in the main loop), and a
+deadline's last minute (`backend/agent.py:999-1008`, the severed-call check in the main loop), and a
 wall of consecutive failures warns once after six and stops the turn past twelve
-(`backend/agent.py:955-961`). Salvage extraction refuses to pair fenced blocks with files when the
-counts disagree (`backend/agent.py:1262-1266`), and an extracted write is recorded as a synthetic
-tool call so the replayed history stays provider-valid (`backend/agent.py:2769-2833`): a bare tool
+(`backend/agent.py:992-998`). Salvage extraction refuses to pair fenced blocks with files when the
+counts disagree (`backend/agent.py:1299-1303`), and an extracted write is recorded as a synthetic
+tool call so the replayed history stays provider-valid (`backend/agent.py:2806-2870`): a bare tool
 message after a plain assistant used to be rejected by the provider's own shape check.
 
 **The uncapped retry** re-asks a round that our own output ceiling destroyed, so the model's thinking is

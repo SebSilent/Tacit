@@ -180,6 +180,36 @@ class ToolResult(unittest.TestCase):
         self.assertEqual(out["meta"].get("url"), "http://127.0.0.1:1/x")
         self.assertTrue(str(out["result"]).startswith("ERROR:"))
 
+    # ── browser + memory: the last of the migrations ──────────────────────
+    def test_the_browser_names_its_action_and_refusals(self):
+        bad = self._call("browser", {"action": "teleport"})
+        self.assertTrue(str(bad["result"]).startswith("ERROR: action"))
+        self.assertEqual(bad["meta"].get("status"), "bad_action")
+        self.assertIs(bad["meta"].get("is_error"), True)
+        self.assertEqual(bad["meta"].get("action"), "teleport")
+        ok = self._call("browser", {"action": "close"})
+        self.assertEqual(ok["meta"].get("status"), "close")
+        self.assertIs(ok["meta"].get("is_error"), False)
+
+    def test_memory_recall_says_why_it_is_empty(self):
+        out = self._call("memory_recall", {"query": "anything", "session": "tr-1"})
+        self.assertIn("not enabled", str(out["result"]))
+        self.assertIs(out["meta"].get("is_error"), False,
+                      "a mode refusal is an answer, not a failure")
+        self.assertEqual(out["meta"].get("status"), "mode-off")
+
+    def test_memory_add_reports_its_pending_fate(self):
+        out = self._call("memory_add",
+                         {"content": "the vend server is at 10.0.0.9",
+                          "type": "fact", "scope": "project",
+                          "session": "tr-1"})
+        self.assertIn("pending review", str(out["result"]))
+        meta = out["meta"]
+        self.assertEqual(meta.get("status"), "proposed")
+        self.assertIs(meta.get("is_error"), False)
+        self.assertIs(meta.get("pending"), True)
+        self.assertTrue(meta.get("memory_id"))
+
     # ── the reader: both side-channel shapes, and the last resort ─────────
     def test_the_streamed_shape_is_lifted_from_the_top_level(self):
         m = agent._tool_meta("run_shell",

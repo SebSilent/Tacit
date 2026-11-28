@@ -529,23 +529,40 @@ def _set_bg_meta(text: str, meta: dict | None, *, start: bool = False,
 
 
 def t_browser(action: str, url: str = "", selector: str = "", text: str = "",
-              path: str = "", full: bool = False, project: str | None = None) -> str:
+              path: str = "", full: bool = False, project: str | None = None,
+              meta: dict | None = None) -> str:
     from . import browser as B
+
+    def _browser_meta(status: str, is_error: bool) -> None:
+        if meta is not None:
+            meta.clear()
+            meta.update({"is_error": is_error, "status": status,
+                         "action": act, "url": str(url or ""),
+                         "selector": str(selector or "")})
+
     act = str(action or "").strip().lower()
     if act == "open":
+        _browser_meta("open", False)
         return B.open_page(url)
     if act == "text":
+        _browser_meta("text", False)
         return B.page_text(selector)
     if act == "links":
+        _browser_meta("links", False)
         return B.page_links()
     if act == "click":
+        _browser_meta("click", False)
         return B.click(selector)
     if act == "type":
+        _browser_meta("type", False)
         return B.type_into(selector, text)
     if act == "screenshot":
+        _browser_meta("screenshot", False)
         return B.screenshot(path, full)
     if act == "close":
+        _browser_meta("close", False)
         return B.close()
+    _browser_meta("bad_action", True)
     return "ERROR: action must be open|text|links|click|type|screenshot|close"
 
 
@@ -563,7 +580,7 @@ def t_evidence(action: str, source: str = "", note: str = "", snippet: str = "",
 
 
 def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
-                    session: str = "") -> str:
+                    session: str = "", meta: dict | None = None) -> str:
     """Search durable memory on request; the retrieval half of jit and full.
 
     ``memory_modes.recall_for`` is what the mode was designed to route this
@@ -576,13 +593,25 @@ def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
     res = memory_modes.recall_for(query, project=project or "",
                                   limit=max(1, min(int(limit or 5), 20)))
     items = res.get("items") or []
+    if meta is not None:
+        meta.clear()
     if not items:
         # explicit and off retrieve nothing by design; say which rule applied
         # rather than reporting an empty search the model reads as "no memory".
         if memory_modes.mode() in ("explicit", "off"):
+            if meta is not None:
+                meta.update({"is_error": False, "status": "mode-off",
+                             "mode": memory_modes.mode(), "count": 0})
             return ("memory retrieval is not enabled for this mode, only the notes "
                     "injected at startup are available")
+        if meta is not None:
+            meta.update({"is_error": False, "status": "no-match",
+                         "mode": res.get("mode"), "count": 0})
         return "No matching memories."
+    if meta is not None:
+        meta.update({"is_error": False, "status": "hits",
+                     "mode": res.get("mode"), "count": len(items),
+                     "tokens": int(res.get("tokens") or 0)})
     audit.record("memory_retrieval", session=session, backend="memory", status="ok",
                  mode=res.get("mode"), count=len(items),
                  tokens=int(res.get("tokens") or 0), query=str(query)[:120])
@@ -592,7 +621,7 @@ def t_memory_recall(query: str, limit: int = 5, project: str | None = None,
 
 def t_memory_add(content: str, type: str = "other", scope: str = "global",
                  confidence: str = "medium", project: str | None = None,
-                 session: str = "") -> str:
+                 session: str = "", meta: dict | None = None) -> str:
     """Propose a durable memory. It lands pending review, never enabled.
 
     This is the same rule the learning system applies to a rule worth keeping:
@@ -605,8 +634,16 @@ def t_memory_add(content: str, type: str = "other", scope: str = "global",
                            project=project or "", source="agent_suggestion",
                            source_session=session or "", enabled=False)
     if not res.get("ok"):
+        if meta is not None:
+            meta.clear()
+            meta.update({"is_error": True, "status": "refused"})
         return f"ERROR: {res.get('error')}"
     m = res["memory"]
+    if meta is not None:
+        meta.clear()
+        meta.update({"is_error": False, "status": "proposed",
+                     "memory_id": m["id"], "pending": True,
+                     "tokens": int(m.get("token_estimate") or 0)})
     audit.record("memory_proposed", session=session, backend="memory", status="ok",
                  memory_id=m["id"], tokens=int(m.get("token_estimate") or 0),
                  type=m.get("type"), scope=m.get("scope"))

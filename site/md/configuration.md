@@ -134,7 +134,7 @@ Use it when a terminal reports a shell crash and the question is whose signal it
 | `TACIT_RESEARCH_TIMEOUT` | `240` | `backend/config.py:290` |
 
 These three are quoted inside the `research` tool's own description, read from the config rather
-than written out, so the sentence cannot drift away from the caps (`backend/agent.py:873-878`).
+than written out, so the sentence cannot drift away from the caps (`backend/agent.py:910-915`).
 
 ### Context and compaction
 
@@ -201,7 +201,7 @@ outright (`backend/config.py:1065-1070`).
 
 `TACIT_OS` and `TACIT_PLATFORM` let a test report a different operating system to the harness
 (`backend/config.py:11`, `:71`). They exist because the shell tool's description states the platform
-it runs on (`backend/agent.py:870-871`), and that sentence has to be testable.
+it runs on (`backend/agent.py:907-908`), and that sentence has to be testable.
 
 ## prefs.json
 
@@ -221,7 +221,7 @@ Plain JSON at `~/.tacit/prefs.json` (`backend/config.py:86`), written through
 | `reportMode` | `backend/config.py:601` | off by default. On, the standing prompt gains 317 characters, asked last, for the answer under a `## Report` heading, and the transcript folds everything above it away; a reply with no such heading is shown as working with the card stating that no report was written. Off, those characters are not in the prompt at all and the heading, if a model writes one anyway, is just a heading |
 | `allowVersionControl` | `backend/config.py:659` | absent means the agent may not run git |
 | `sudoEnabled` | `backend/sudo.py:341` | absent means no elevation; honoured only where `sudo` exists |
-| `disabledTools` | `backend/agent.py:1054-1064`, `backend/profiles.py:236` | tool names removed from the registry |
+| `disabledTools` | `backend/agent.py:1091-1101`, `backend/profiles.py:236` | tool names removed from the registry |
 | `archiveTool` | `backend/config.py:553` | the archive reader's switch; absent means on |
 | `projectRoots` | `backend/config.py:873` | folders the workspace picker offers |
 | `noContextFiles` | `backend/routers/api.py:825`, `:831` | stop reading `AGENTS.md` and friends |
